@@ -1,0 +1,125 @@
+# Albion Reforged repository ignores
+
+# Operating systems, IDEs, and local configuration
+.DS_Store
+Thumbs.db
+.idea/
+.vs/
+.vscode/
+*.user
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+
+# Build and generated output, anywhere in the workspace
+**/build/
+**/out/
+**/bin/
+**/obj/
+**/CMakeFiles/
+**/CMakeCache.txt
+*.ninja
+*.ninja_deps
+*.ninja_log
+compile_commands.json
+
+# Python and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# User-local native packages and installs
+cooked/
+Fable2Native/install/
+Fable2Native/game/
+Fable2Native/native_data/
+
+# Copyrighted/user-supplied game data and disc images
+*.iso
+*.xex
+*.xexp
+*.bnk
+*.bik
+*.mp4
+*.usm
+*.mdl
+*.tex
+*.dds
+*.xma
+*.wad
+*.gdb
+*.bmp
+*.pdb
+*.lib
+*.obj
+*.wav
+Fable2Recomp/assets/
+716F0A0D/
+$SystemUpdate/
+AUDIO_TS/
+VIDEO_TS/
+
+# Dumps, captures, logs, and temporary reverse-engineering output
+captures/
+crash_dumps/
+ghidra_proj/
+ghidra_out/
+scratch_gui_extract/
+*_dump/
+*_dumps/
+*.dmp
+*.log
+*.sqlite
+*.sqlite3
+*.pid
+*.tmp
+*.bak
+*.old
+
+# Large local archives and research artifacts
+*.zip
+*.7z
+*.rar
+*.pdf
+
+# Root-level workbench files and private session instructions
+/*.bmp
+/*.html
+/*.ini
+/*.cmd
+/*.jpg
+/*.json
+/*.obj
+/*.png
+/*.ps1
+/*.txt
+/*.wav
+/*.xml
+/.analysis/
+/CLAUDE.md
+/Fable_TLC Map Editing Creation Tutorial_files/
+/tools/
+/xexgui/
+/xextractor/
+/*_dump/
+/*_dumps/
+/*_stream_run/
+/*_current.lua/
+/compositor_shader_dump_*/
+/_stage_backup_*/
+
+# Nested research/vendor checkouts. Their own repositories remain local
+# dependencies; Albion Reforged tracks the native runtime and project docs.
+/auto-re-agent/
+/Fable2AssetBrowser/
+/Fable2Recomp/
+/REPlugins/
+/rexglue-src/
+/rexglue-sdk/
+/rexglue-sdk-nightly/
+/xenia/
+/XenonRecomp/
+/_research/
+/_research_skate3recomp/
+/third_party/

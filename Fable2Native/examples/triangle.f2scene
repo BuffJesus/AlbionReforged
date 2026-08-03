@@ -1,0 +1,10 @@
+F2SCENE 1
+material stone 0.7 0.7 0.7 1
+mesh floor 3 3 0
+vertex 0 0 0 0 1 0 0 0
+vertex 1 0 0 0 1 0 1 0
+vertex 0 0 1 0 1 0 0 1
+index 0
+index 1
+index 2
+instance floor 0 0 0 0 0 0 1

@@ -1,0 +1,21 @@
+name: Native runtime
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S Fable2Native -B Fable2Native/build -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build Fable2Native/build --config RelWithDebInfo
+
+      - name: Test
+        run: ctest --test-dir Fable2Native/build -C RelWithDebInfo --output-on-failure

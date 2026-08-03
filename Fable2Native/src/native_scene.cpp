@@ -1,0 +1,153 @@
+#include "f2/native_scene.h"
+
+#include <fstream>
+#include <sstream>
+
+namespace f2 {
+namespace {
+
+bool fail(std::string* error, std::string message) {
+    if (error) *error = std::move(message);
+    return false;
+}
+
+template <typename T>
+bool read_value(std::istringstream& line, T& value) {
+    return static_cast<bool>(line >> value);
+}
+
+bool read_vec3(std::istringstream& line, std::array<float, 3>& value) {
+    return read_value(line, value[0]) && read_value(line, value[1]) &&
+           read_value(line, value[2]);
+}
+
+}  // namespace
+
+bool NativeScene::validate(std::string* error) const {
+    for (std::size_t i = 0; i < meshes.size(); ++i) {
+        const NativeMesh& mesh = meshes[i];
+        if (mesh.vertices.empty()) {
+            return fail(error, "mesh " + std::to_string(i) + " has no vertices");
+        }
+        if (mesh.indices.empty() || mesh.indices.size() % 3 != 0) {
+            return fail(error, "mesh " + std::to_string(i) + " has invalid triangle indices");
+        }
+        if (mesh.material >= materials.size()) {
+            return fail(error, "mesh " + std::to_string(i) + " references an invalid material");
+        }
+        for (std::uint32_t index : mesh.indices) {
+            if (index >= mesh.vertices.size()) {
+                return fail(error, "mesh " + std::to_string(i) + " has an out-of-range index");
+            }
+        }
+    }
+    for (std::size_t i = 0; i < instances.size(); ++i) {
+        if (instances[i].mesh >= meshes.size()) {
+            return fail(error, "instance " + std::to_string(i) + " references an invalid mesh");
+        }
+        if (instances[i].scale <= 0.0f) {
+            return fail(error, "instance " + std::to_string(i) + " has a non-positive scale");
+        }
+    }
+    return true;
+}
+
+bool load_native_scene(const std::filesystem::path& path,
+                       NativeScene& scene,
+                       std::string& error) {
+    std::ifstream input(path);
+    if (!input) return fail(&error, "unable to open scene: " + path.string());
+
+    NativeScene parsed;
+    std::string raw;
+    std::size_t line_number = 0;
+    while (std::getline(input, raw)) {
+        ++line_number;
+        if (raw.empty() || raw[0] == '#') continue;
+        std::istringstream line(raw);
+        std::string opcode;
+        line >> opcode;
+        if (opcode == "F2SCENE") {
+            int version = 0;
+            if (!read_value(line, version) || version != 1) {
+                return fail(&error, "unsupported F2SCENE version at line " +
+                                      std::to_string(line_number));
+            }
+        } else if (opcode == "material") {
+            NativeMaterial material;
+            if (!read_value(line, material.name) ||
+                !read_value(line, material.base_color[0]) ||
+                !read_value(line, material.base_color[1]) ||
+                !read_value(line, material.base_color[2]) ||
+                !read_value(line, material.base_color[3])) {
+                return fail(&error, "invalid material at line " + std::to_string(line_number));
+            }
+            parsed.materials.push_back(std::move(material));
+        } else if (opcode == "mesh") {
+            NativeMesh mesh;
+            std::size_t vertex_count = 0;
+            std::size_t index_count = 0;
+            if (!read_value(line, mesh.name) || !read_value(line, vertex_count) ||
+                !read_value(line, index_count) || !read_value(line, mesh.material)) {
+                return fail(&error, "invalid mesh at line " + std::to_string(line_number));
+            }
+            mesh.vertices.reserve(vertex_count);
+            mesh.indices.reserve(index_count);
+            parsed.meshes.push_back(std::move(mesh));
+        } else if (opcode == "vertex") {
+            if (parsed.meshes.empty()) return fail(&error, "vertex before mesh");
+            NativeVertex vertex;
+            auto& position = vertex.position;
+            auto& normal = vertex.normal;
+            if (!read_vec3(line, position) || !read_vec3(line, normal) ||
+                !read_value(line, vertex.uv[0]) || !read_value(line, vertex.uv[1])) {
+                return fail(&error, "invalid vertex at line " + std::to_string(line_number));
+            }
+            parsed.meshes.back().vertices.push_back(vertex);
+        } else if (opcode == "index") {
+            if (parsed.meshes.empty()) return fail(&error, "index before mesh");
+            std::uint32_t index = 0;
+            if (!read_value(line, index)) {
+                return fail(&error, "invalid index at line " + std::to_string(line_number));
+            }
+            parsed.meshes.back().indices.push_back(index);
+        } else if (opcode == "instance") {
+            NativeInstance instance;
+            std::string mesh_name;
+            if (!read_value(line, mesh_name) || !read_vec3(line, instance.position) ||
+                !read_vec3(line, instance.rotation) || !read_value(line, instance.scale)) {
+                return fail(&error, "invalid instance at line " + std::to_string(line_number));
+            }
+            bool found = false;
+            for (std::size_t i = 0; i < parsed.meshes.size(); ++i) {
+                if (parsed.meshes[i].name == mesh_name) {
+                    instance.mesh = static_cast<std::uint32_t>(i);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return fail(&error, "instance references unknown mesh: " + mesh_name);
+            parsed.instances.push_back(instance);
+        } else if (opcode == "sun") {
+            if (!read_vec3(line, parsed.sun_direction)) {
+                return fail(&error, "invalid sun at line " + std::to_string(line_number));
+            }
+        } else if (opcode == "sky") {
+            if (!read_value(line, parsed.sky_color[0]) ||
+                !read_value(line, parsed.sky_color[1]) ||
+                !read_value(line, parsed.sky_color[2]) ||
+                !read_value(line, parsed.sky_color[3])) {
+                return fail(&error, "invalid sky at line " + std::to_string(line_number));
+            }
+        } else {
+            return fail(&error, "unknown opcode '" + opcode + "' at line " +
+                                  std::to_string(line_number));
+        }
+    }
+
+    if (!parsed.validate(&error)) return false;
+    scene = std::move(parsed);
+    return true;
+}
+
+}  // namespace f2
