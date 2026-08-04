@@ -66,6 +66,11 @@ crash_dumps/
 ghidra_proj/
 ghidra_out/
 scratch_gui_extract/
+*.f2pm4
+*.mkv
+*.webm
+*.avi
+*.mov
 *_dump/
 *_dumps/
 *.dmp

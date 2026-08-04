@@ -27,6 +27,12 @@ follows the last input device and the user's local keyboard bindings.
 Frontend and gameplay state advances on a fixed 60 Hz simulation clock, independent of render FPS;
 video presentation is paced from each decoded movie's frame rate.
 
+Title-screen fidelity is currently an evidence gate. The extracted BGF scene identifies the authored
+logo components, and the PM4 title capture identifies the source-alpha sprite block used by the
+reveal. The native effect remains an explicitly marked approximation until its captured vertex/index
+geometry and shader constants are recovered. See [the title-screen fidelity gate](docs/TITLE_SCREEN_FIDELITY.md)
+and the [next-session research handoff](docs/TITLE_SCREEN_HANDOFF_2026-08-03.md).
+
 The frontends can also consume a user-local `ui_manifest.ini` containing cooked exports of the real
 Fable II front-end textures. DDS, PNG, and BMP inputs are accepted on Windows. The manifest is
 deliberately outside source control; the runtime loads it through `--ui-root` and falls back to the
@@ -132,6 +138,9 @@ skip=Space
 
 Large research checkouts and local oracle builds are intentionally kept outside the public source
 boundary. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/NATIVE_PORT_PLAN.md](docs/NATIVE_PORT_PLAN.md).
+
+Research captures, extracted textures, PM4 streams, and user-cooked packages remain local by design;
+the repository contains source code, documentation, and asset-free examples only.
 
 ## Project direction
 
