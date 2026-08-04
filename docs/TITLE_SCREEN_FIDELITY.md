@@ -39,6 +39,11 @@ shipped in the repository.
 2. Decode the captured title effect resources through the Xenos texture path
    and confirm whether they are additional ambient animation or transient
    particle data before adding them.
+   The first PM4 candidate tested was rejected: `1A93D000` decodes to the
+   Maiandra/prompt glyph atlas, not the blue reveal. A separate frontend atlas
+   contains a radial sphere-shaped element, but rendering that crop through
+   the current normal-alpha UI path produces a hard dark disk; its original
+   material/blend path is not yet identified, so it remains research-only.
 3. Keep the verified title-state timing: the startup reference holds the
    black/grey title card for about 5.9 seconds after title entry before the
    panorama fades in over about 1.1 seconds. Re-measure if the video/startup
