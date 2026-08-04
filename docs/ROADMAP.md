@@ -94,3 +94,8 @@ install directory and validates the result before launch; it never adds source a
 Vertical-slice status: source validation, startup state machine, title/main-menu input, loading,
 and a real native D3D12 world draw are now connected. `--scene` supplies a user-cooked package;
 the asset-free procedural world is only a bring-up fallback.
+
+Title-screen fidelity is an explicit evidence gate before the slice advances: the source BGF scene,
+Maiandra font, title timing, PM4 sprite block, and D3D12/Vulkan captures must agree. See
+[TITLE_SCREEN_HANDOFF_2026-08-03.md](TITLE_SCREEN_HANDOFF_2026-08-03.md) for the verified draw
+sequences and the next capture required to replace the native approximation.

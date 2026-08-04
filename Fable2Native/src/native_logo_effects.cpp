@@ -34,10 +34,10 @@ void NativeLogoSparkles::draw_ambient(ImDrawList* draw_list,
         return;
     }
 
-    // The startup capture shows the blue ambient component beginning before
-    // the white logo and settling into a low halo after the reveal. Keep the
-    // two timelines independent: this is the authored mask's presentation,
-    // while draw() below remains the sparkle pass.
+    // Keep the approximation's timelines independent: this is the temporary
+    // mask presentation, while draw() below remains the sparkle pass. The
+    // source PM4 pass is source-alpha blended, but its exact geometry and
+    // constants are not represented by these procedural passes.
     const float reveal = std::clamp((time - 0.18f) / 0.58f, 0.0f, 1.0f);
     const float burst_in = std::clamp((time - 0.16f) / 0.30f, 0.0f, 1.0f);
     const float burst_out = 1.0f - std::clamp((time - 0.44f) / 0.92f, 0.0f, 1.0f);
@@ -57,9 +57,8 @@ void NativeLogoSparkles::draw_ambient(ImDrawList* draw_list,
                                      std::clamp(static_cast<int>(alpha * opacity), 0, 255)));
     };
 
-    // The concentric passes are a resolution-independent approximation of
-    // the material's soft ambient falloff; the source shape remains the
-    // game's actual logo mask, so its silhouette and counters stay exact.
+    // These concentric passes are a resolution-independent approximation only;
+    // the source shape remains the selected user's logo mask.
     add_mask(1.24f, static_cast<int>(34.0f * burst));
     add_mask(1.14f, static_cast<int>(52.0f * burst));
     add_mask(1.06f, static_cast<int>(74.0f * burst));
@@ -92,8 +91,8 @@ void NativeLogoSparkles::rebuild(const NativeTexture& logo) {
 
         Particle particle;
         particle.x = std::clamp(sample_x + (random_unit(seed_) - 0.5f) * 0.08f, 0.0f, 1.0f);
-        // This vertical offset is present in the reference sparkle authoring
-        // and keeps the particles sitting just above the letter mask.
+        // Keep the temporary particles slightly above the sampled mask. Exact
+        // sprite placement remains pending the captured vertex-memory trace.
         particle.y = std::clamp(sample_y - 0.08f + (random_unit(seed_) - 0.5f) * 0.06f,
                                 0.0f, 1.0f);
         particle.delay = random_unit(seed_) * 0.8f;
@@ -121,8 +120,8 @@ void NativeLogoSparkles::draw(ImDrawList* draw_list,
     if (particles_.empty()) return;
 
     for (const auto& particle : particles_) {
-        // The reference implementation respawns a particle immediately when
-        // its life ends; there is no inactive gap between cycles.
+        // The approximation respawns a particle immediately when its life ends;
+        // this is not yet a claim about the original sprite scheduler.
         const float phase = std::fmod(time + particle.delay, particle.life);
         if (phase < 0.0f) continue;
         const float life_alpha = triangle_wave(phase / particle.life);

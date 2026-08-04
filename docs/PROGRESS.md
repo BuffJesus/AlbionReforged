@@ -85,3 +85,12 @@
 ## Next
 See [ROADMAP.md](ROADMAP.md). Immediate: drive RE on the analyzed `Fable2_TU1` project (launch
 Ghidra GUI + GhidraMCP, or headless export scripts); finish the AssetBrowser build.
+
+### 2026-08-03 — title reveal evidence handoff
+- Confirmed PM4 title draws `95346..95395` are the indexed sprite/effect block using
+  `0x0FBE7000`, VS `6D15306961102F7D`, PS `4B61E208208F3F5B`, and source-alpha/inverse-source-alpha
+  blending (`0x07060706`).
+- Confirmed `95396..95399` use the `0x1A93D000` glyph atlas; it is not the blue reveal effect.
+- Documented the remaining capture requirement—vertex/index memory dependencies and shader constants—
+  in [TITLE_SCREEN_HANDOFF_2026-08-03.md](TITLE_SCREEN_HANDOFF_2026-08-03.md). The native visual
+  approximation remains intentionally unchanged until that evidence is available.

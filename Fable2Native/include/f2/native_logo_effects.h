@@ -10,14 +10,14 @@
 
 namespace f2 {
 
-// The title logo's ambient sparkles are driven from the opaque pixels of the
-// logo instead of from a second, guessed set of coordinates.  This keeps the
-// effect attached to whichever logo the selected game data provides.
+// Temporary native approximation for the title ambient layer. The exact
+// FXGUI_Logomain_Ambient sprite material is still gated on PM4 geometry and
+// constants; keeping this isolated makes the eventual replacement shared by
+// D3D12 and Vulkan.
 class NativeLogoSparkles {
 public:
-    // FXGUI_Logomain_Ambient uses the same authored Fable II mask as the
-    // white logo, but renders it behind the logo with a blue additive-looking
-    // falloff. The mask is supplied by the selected user's UI asset root.
+    // The selected user's logo mask is used only as a temporary visual stand-in
+    // until the captured FXGUI_Logomain_Ambient material is decoded.
     void draw_ambient(ImDrawList* draw_list,
                       ImTextureID logo_texture,
                       float x,

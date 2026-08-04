@@ -24,21 +24,39 @@ come from these sources rather than hand-tuned substitutes.
 - PM4 capture records identify the title's 512x256 format-59 (`DXT5A`) texture
   at `0x1A93D000`, tiled with Xenos endian mode 1. Raw memory must be Xenos
   detiled and endian-corrected before it is accepted as a title asset.
+- In the `pm4_press_a_2026-07-26.f2pm4` title frame, draw sequences
+  `95346..95395` are indexed sprite quads using vertex shader
+  `6D15306961102F7D`, pixel shader `4B61E208208F3F5B`, and the 512x512
+  format-20 atlas at `0x0FBE7000`. Their RT0 blend word is `0x07060706`;
+  the Xenos register layout decodes that as source-alpha / inverse-source-alpha
+  color and alpha blending. This is the strongest confirmed lead for the
+  particle/cloud and sparkle portion of the reveal.
+- The sprite vertex declaration is also known: 18 dwords per vertex, with
+  position at offsets `0..2`, UVs at `12..13` and `14..15`, a float at `16`,
+  and an RGBA8 value at `17`. The capture records the guest fetch addresses,
+  but this capture does not contain the corresponding memory dependency
+  records, so the exact UV rectangles, positions, and per-sprite constants
+  are not yet recoverable from this file alone.
+- Draw sequences `95396..95399` are four text draws using `0x1A93D000`; this
+  confirms the earlier rejection of that texture as the blue reveal effect.
 
 ## Current native implementation
 
 The D3D12 and Vulkan frontends load only user-selected/cooked UI assets. The
-title ambient layer now reuses the extracted logo mask behind the white logo,
-with independent pre-reveal burst and settled-halo timing. No game art is
-shipped in the repository.
+title ambient layer currently reuses the extracted logo mask behind the white
+logo, with independent pre-reveal burst and settled-halo timing. That is a
+temporary PC-native approximation; it is not being treated as the original
+`FXGUI_Logomain_Ambient` material. No game art is shipped in the repository.
 
 ## Remaining gate items
 
 1. Convert or render the `Maiandra GD Fable` SWF font and use its measured
    glyph bounds for prompt and legal wrapping.
-2. Decode the captured title effect resources through the Xenos texture path
-   and confirm whether they are additional ambient animation or transient
-   particle data before adding them.
+2. Recover the `95346..95395` sprite geometry and constants from a capture that
+   includes the guest memory dependencies (or add a one-frame live capture at
+   the title reveal). Then map each UV rectangle in `0x0FBE7000` to its atlas
+   element and reproduce the source-alpha blend in the shared D3D12/Vulkan
+   effect path.
    The first PM4 candidate tested was rejected: `1A93D000` decodes to the
    Maiandra/prompt glyph atlas, not the blue reveal. A separate frontend atlas
    contains a radial sphere-shaped element, but rendering that crop through
@@ -49,3 +67,19 @@ shipped in the repository.
    panorama fades in over about 1.1 seconds. Re-measure if the video/startup
    boundary changes.
 4. Validate D3D12 and Vulkan with frame captures at the same reference times.
+
+## Evidence commands
+
+The reproducible research inputs are:
+
+```powershell
+& ghidra_out/title_ui_re/pm4_texture_probe_new.exe `
+  Fable2Recomp/out/build/win-amd64-nightly/pm4_captures/pm4_press_a_2026-07-26.f2pm4
+```
+
+Use `ghidra_out/title_ui_re/pm4_press_a_probe11.txt` for the full draw block,
+`frame95445_draws_summary.txt` for the compact sequence summary, and
+`live_0FBE7000_0000000100000000_100000000.bin` plus its decoded PNG for the
+user-owned atlas preview. Do not promote an atlas crop into runtime until its
+draw sequence, UVs, material constants, and blend behavior are all tied to the
+same capture.

@@ -121,8 +121,12 @@ through the standalone D3D12 pipeline. A procedural fallback keeps the handoff t
 first real level cooker is complete. The UI composition is now based on the captured title and menu
 frames plus decompilation evidence for `frontendstartupscreen.bgf`, `CAN_PRESS_A`, and the `abyx`
 prompt atlas: centered title branding, a left-side leather/bronze menu stack, and a selected-row
-prompt. The next fidelity step is the offline BGF/layout cooker that supplies the exact panorama,
-Fable II logo, fonts, and decorative layers.
+prompt. Title-effect fidelity is explicitly gated by the PM4 evidence in
+[TITLE_SCREEN_FIDELITY.md](TITLE_SCREEN_FIDELITY.md): draws `95346..95395` identify the
+source-alpha sprite block and `95396..95399` identify text, but the capture still needs
+vertex/index memory dependencies before exact effect geometry can be cooked. The next fidelity
+step is the offline BGF/layout cooker that supplies the exact panorama, Fable II logo, Maiandra
+font, and verified decorative layers.
 
 ## Frontend fidelity
 
