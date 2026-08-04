@@ -19,7 +19,7 @@ add_library(f2native_core STATIC
 target_include_directories(f2native_core PUBLIC include)
 
 if(WIN32)
-    target_link_libraries(f2native_core PUBLIC xinput9_1_0)
+    target_link_libraries(f2native_core PUBLIC xinput9_1_0 windowscodecs)
 endif()
 
 if(WIN32)

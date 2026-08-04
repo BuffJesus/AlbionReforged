@@ -147,8 +147,10 @@ The frontends use D3D12 or Vulkan and Dear ImGui for the native UI bring-up. The
 PM4, EDRAM, guest address space, or ReXGlue dependency. The final art/UI renderer will consume
 cooked Fable assets through the same backend-neutral native scene layer.
 
-The title and main-menu layer accepts keyboard, mouse, and XInput controller input. Prompt labels
-follow the last device used, and keyboard labels follow `%LOCALAPPDATA%\Fable2Native\bindings.ini`:
+The title and main-menu layer accepts keyboard, mouse, and XInput controller input. Its default
+command set follows the captured Fable II front-end: New Game, Continue, Language, and Subtitles.
+Prompt labels follow the last device used, and keyboard labels follow
+`%LOCALAPPDATA%\Fable2Native\bindings.ini`:
 
 ```ini
 accept=Enter
@@ -158,8 +160,9 @@ down=Down
 skip=Space
 ```
 
-Real front-end art is a user-local runtime input. Export/cook the desired Fable II DDS textures
-into a directory with this `ui_manifest.ini` (the repository ships no art):
+Real front-end art is a user-local runtime input. Export/cook the desired Fable II textures into a
+directory with this `ui_manifest.ini` (the repository ships no art). Windows accepts DDS, PNG,
+and BMP files:
 
 ```ini
 title_background=title_background.dds

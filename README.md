@@ -21,13 +21,16 @@ The native executables currently connect:
 `source validation -> boot -> intro sequence contract -> title -> main menu -> loading -> native world`
 
 The title and main menu are now full-screen native UI with keyboard, mouse, and XInput controller
-selection. Prompt text follows the last input device and the user's local keyboard bindings.
+selection. The default menu follows the captured Fable II command shape — New Game, Continue,
+Language, and Subtitles — while stable IDs allow a mod to add or remove entries. Prompt text
+follows the last input device and the user's local keyboard bindings.
 Frontend and gameplay state advances on a fixed 60 Hz simulation clock, independent of render FPS;
 video presentation is paced from each decoded movie's frame rate.
 
-The frontends can also consume a user-local `ui_manifest.ini` containing DDS exports of the real
-Fable II front-end textures. The manifest is deliberately outside source control; the runtime
-loads it through `--ui-root` and falls back to the asset-free layout when it is absent:
+The frontends can also consume a user-local `ui_manifest.ini` containing cooked exports of the real
+Fable II front-end textures. DDS, PNG, and BMP inputs are accepted on Windows. The manifest is
+deliberately outside source control; the runtime loads it through `--ui-root` and falls back to the
+asset-free layout when it is absent:
 
 ```ini
 title_background=title_background.dds

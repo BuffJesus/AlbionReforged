@@ -49,9 +49,10 @@ public:
     [[nodiscard]] const std::vector<MenuItem>& menu_items() const noexcept { return menu_items_; }
     [[nodiscard]] const NativeVideoPlayer& intro_videos() const noexcept { return intro_videos_; }
 
-    // Stable IDs are the modding surface. Mods may append or replace entries
+    // Stable IDs are the modding surface. Mods may append or remove entries
     // without depending on a visual index or an implementation address.
     bool add_menu_item(MenuItem item, std::size_t position = static_cast<std::size_t>(-1));
+    bool remove_menu_item(std::string_view id);
     bool select_menu_item(std::string_view id);
 
 private:

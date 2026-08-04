@@ -20,5 +20,8 @@ bool decode_dds_rgba8(std::span<const std::uint8_t> bytes,
 bool load_dds_rgba8(const std::filesystem::path& path,
                     NativeTexture& texture,
                     std::string& error);
+bool load_image_rgba8(const std::filesystem::path& path,
+                      NativeTexture& texture,
+                      std::string& error);
 
 }  // namespace f2

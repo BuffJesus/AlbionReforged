@@ -70,9 +70,11 @@ int main() {
     assert(game.frontend.state() == f2::FrontendState::Title);
     game.frontend.dispatch(f2::FrontendAction::Accept);
     assert(game.frontend.state() == f2::FrontendState::MainMenu);
+    assert(game.frontend.add_menu_item({"options", "Options"}));
     assert(game.frontend.select_menu_item("options"));
     game.frontend.dispatch(f2::FrontendAction::Accept);
     assert(game.frontend.state() == f2::FrontendState::Options);
+    assert(game.frontend.remove_menu_item("options"));
 
     const auto source_root = std::filesystem::temp_directory_path() / "f2native_source_test";
     const auto data_root = source_root / "data";

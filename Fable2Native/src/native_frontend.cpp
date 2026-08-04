@@ -7,10 +7,9 @@ namespace f2 {
 FrontendController::FrontendController() {
     menu_items_ = {
         {"new_game", "New Game"},
-        {"load_game", "Load Game"},
-        {"options", "Options"},
-        {"mod_manager", "Mods"},
-        {"exit", "Exit to Desktop"},
+        {"continue", "Continue"},
+        {"language", "Language"},
+        {"subtitles", "Subtitles"},
     };
     intro_videos_.set_sequence({
         {"microsoft_logo", "videos/microsoft_logo.mp4", 8.808809, true},
@@ -73,8 +72,10 @@ void FrontendController::dispatch(FrontendAction action) {
                 enter(FrontendState::MainMenu);
             } else if (state_ == FrontendState::MainMenu && !menu_items_.empty()) {
                 const auto& id = menu_items_[selected_item_].id;
-                if (id == "new_game" || id == "load_game") enter(FrontendState::Loading);
-                else if (id == "options") enter(FrontendState::Options);
+                if (id == "new_game" || id == "continue") enter(FrontendState::Loading);
+                else if (id == "language" || id == "subtitles" || id == "options") {
+                    enter(FrontendState::Options);
+                }
                 else if (id == "exit") quit_requested_ = true;
             }
             break;
@@ -95,6 +96,21 @@ bool FrontendController::add_menu_item(MenuItem item, std::size_t position) {
     } else {
         menu_items_.insert(menu_items_.begin() + static_cast<std::ptrdiff_t>(position),
                            std::move(item));
+    }
+    return true;
+}
+
+bool FrontendController::remove_menu_item(std::string_view id) {
+    const auto it = std::ranges::find(menu_items_, id, &MenuItem::id);
+    if (it == menu_items_.end()) return false;
+    const auto removed_index = static_cast<std::size_t>(std::distance(menu_items_.begin(), it));
+    menu_items_.erase(it);
+    if (menu_items_.empty()) {
+        selected_item_ = 0;
+    } else if (selected_item_ > removed_index) {
+        --selected_item_;
+    } else if (selected_item_ >= menu_items_.size()) {
+        selected_item_ = menu_items_.size() - 1;
     }
     return true;
 }

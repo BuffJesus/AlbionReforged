@@ -79,7 +79,7 @@ bool NativeUiAssets::load(const std::filesystem::path& root, std::string& error)
         const auto path = paths[index].is_absolute() ? paths[index] : root_ / paths[index];
         if (!std::filesystem::is_regular_file(path)) continue;
         std::string asset_error;
-        if (load_dds_rgba8(path, textures_[index], asset_error)) {
+        if (load_image_rgba8(path, textures_[index], asset_error)) {
             loaded_[index] = true;
         } else if (first_error.empty()) {
             first_error = std::move(asset_error);

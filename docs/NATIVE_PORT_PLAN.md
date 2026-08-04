@@ -38,7 +38,7 @@ proves the product shell before gameplay reconstruction begins:
 1. Boot the native runtime and show the correct startup state.
 2. Play the intro-video sequence through a replaceable native video-player interface.
 3. Show the title screen and accept input to open the main menu.
-4. Navigate New Game, Load Game, Options, Mods, and Exit using stable command IDs.
+4. Navigate New Game, Continue, Language, and Subtitles using stable command IDs.
 5. Load a cooked level package.
 6. Create a PC-native world and player-camera object.
 7. Render terrain, static props, materials, and sky through the D3D12 renderer.
@@ -118,8 +118,11 @@ The native executable now traverses the shell through a real world-rendering bou
 
 `--scene` loads a user-cooked `F2SCENE` package into the native scene model and submits its meshes
 through the standalone D3D12 pipeline. A procedural fallback keeps the handoff testable before the
-first real level cooker is complete. The next fidelity step is replacing the fallback UI/media
-surfaces with cooked Fable presentation assets, then adding native camera input and save state.
+first real level cooker is complete. The UI composition is now based on the captured title and menu
+frames plus decompilation evidence for `frontendstartupscreen.bgf`, `CAN_PRESS_A`, and the `abyx`
+prompt atlas: centered title branding, a left-side leather/bronze menu stack, and a selected-row
+prompt. The next fidelity step is the offline BGF/layout cooker that supplies the exact panorama,
+Fable II logo, fonts, and decorative layers.
 
 ## Frontend fidelity
 
@@ -127,6 +130,14 @@ The native frontend is a first-class subsystem, not a placeholder. Its state mac
 stable command IDs cover boot, replaceable intro videos, title, main menu, save-card/load
 flow, options, mod manager, and exit. Oracle captures and menu input traces provide the
 behavioral reference; native UI assets are cooked into the same package system as world data.
+
+The current composition is intentionally data-driven. The stock command IDs are `new_game`,
+`continue`, `language`, and `subtitles`; the native controller also exposes stable-ID add/remove
+operations so a PC port mod can add entries or omit console-only ones without changing renderer
+code. The exact source presentation remains an offline-cooker task: the research capture shows a
+seasonal panoramic title scene with a centered logo and prompt, while the settled main menu shows
+four dark leather/bronze rows with the accept marker attached to the selected row. Those details
+are the acceptance target for the BGF cooker, not shipped copyrighted assets.
 
 The extracted startup sequence is `microsoft_logo -> lionhead_logo -> middlewarelogos -> intro`.
 `Fable2Native/tools/cook_videos.py` converts those Bink inputs to a versioned MP4 manifest. The

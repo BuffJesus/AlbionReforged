@@ -697,26 +697,26 @@ private:
             }
             if (ui_logo_descriptor_set_ != VK_NULL_HANDLE) {
                 const auto* logo = ui_assets_.texture(f2::NativeUiAsset::Logo);
-                const auto logo_height = height_ * 0.18f;
-                ImGui::SetCursorPos(ImVec2(width_ * 0.09f, height_ * 0.12f));
+                const auto logo_height = height_ * 0.25f;
+                ImGui::SetCursorPos(ImVec2((width_ - logo_height * logo->width / logo->height) * 0.5f,
+                                           height_ * 0.27f));
                 ImGui::Image(reinterpret_cast<ImTextureID>(ui_logo_descriptor_set_),
                              ImVec2(logo_height * logo->width / logo->height, logo_height));
-            }
-            ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.25f));
-            if (ui_logo_descriptor_set_ == VK_NULL_HANDLE) ImGui::TextUnformatted("FABLE II");
-            ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.25f + 46.0f));
-            ImGui::TextUnformatted("ALBION REFORGED  /  NATIVE PC EDITION");
-            ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.62f));
-            if (ImGui::Button("ENTER ALBION", ImVec2(260, 56))) {
-                game_.frontend.dispatch(f2::FrontendAction::Accept);
-            }
-            ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.62f + 68.0f));
-            if (input_.using_controller_prompts() && ui_accept_descriptor_set_ != VK_NULL_HANDLE) {
-                ImGui::Image(reinterpret_cast<ImTextureID>(ui_accept_descriptor_set_), ImVec2(28, 28));
-                ImGui::SameLine();
-                ImGui::TextUnformatted("A  /  START");
             } else {
-                ImGui::Text("%s  /  START", input_.prompt(f2::NativeInputAction::Accept).c_str());
+                draw_list->AddText(ImGui::GetFont(), 92.0f,
+                                   ImVec2(width_ * 0.24f, height_ * 0.32f),
+                                   IM_COL32(255, 255, 255, 245), "FABLE II");
+            }
+            const auto prompt = input_.prompt(f2::NativeInputAction::Accept);
+            const std::string prompt_text = "Press " + prompt + " to start";
+            const auto prompt_size = ImGui::CalcTextSize(prompt_text.c_str());
+            draw_list->AddText(ImGui::GetFont(), 26.0f,
+                               ImVec2((width_ - prompt_size.x) * 0.5f, height_ * 0.66f),
+                               IM_COL32(235, 235, 235, 235), prompt_text.c_str());
+            ImGui::SetCursorPos(ImVec2(0, 0));
+            if (ImGui::InvisibleButton("##title_accept", ImVec2(static_cast<float>(width_),
+                                                                  static_cast<float>(height_)))) {
+                game_.frontend.dispatch(f2::FrontendAction::Accept);
             }
             ImGui::End();
         } else if (state == f2::FrontendState::MainMenu || state == f2::FrontendState::Options) {
@@ -738,32 +738,56 @@ private:
                                          IM_COL32(14, 24, 39, 255));
             }
             if (state == f2::FrontendState::MainMenu) {
-                ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.10f));
-                if (ui_logo_descriptor_set_ == VK_NULL_HANDLE) ImGui::TextUnformatted("FABLE II");
-                ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.10f + 34.0f));
-                ImGui::TextUnformatted("MAIN MENU");
-                ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.24f));
+                const float row_x = width_ * 0.16f;
+                const float row_y = height_ * 0.23f;
+                const float row_width = width_ * 0.32f;
+                const float row_height = 52.0f;
+                const float row_gap = 10.0f;
                 for (std::size_t index = 0; index < game_.frontend.menu_items().size(); ++index) {
                     const auto& item = game_.frontend.menu_items()[index];
                     const bool selected = index == game_.frontend.selected_item();
-                    if (ImGui::Selectable(item.label.c_str(), selected,
-                                         ImGuiSelectableFlags_SpanAllColumns, ImVec2(360, 48))) {
+                    const ImVec2 row_position(row_x, row_y + index * (row_height + row_gap));
+                    const auto window_position = ImGui::GetWindowPos();
+                    const ImVec2 row_min(window_position.x + row_position.x,
+                                        window_position.y + row_position.y);
+                    const ImVec2 row_max(row_min.x + row_width, row_min.y + row_height);
+                    draw_list->AddRectFilled(row_min, row_max,
+                                             selected ? IM_COL32(60, 43, 27, 245)
+                                                       : IM_COL32(19, 16, 15, 225),
+                                             24.0f);
+                    draw_list->AddRect(row_min, row_max,
+                                       selected ? IM_COL32(223, 166, 91, 255)
+                                                : IM_COL32(139, 91, 48, 235),
+                                       24.0f, 0, selected ? 3.0f : 2.0f);
+                    ImGui::SetCursorPos(row_position);
+                    if (ImGui::InvisibleButton(("##menu_" + item.id).c_str(),
+                                               ImVec2(row_width, row_height))) {
                         game_.frontend.select_menu_item(item.id);
                         game_.frontend.dispatch(f2::FrontendAction::Accept);
                     }
-                    ImGui::Spacing();
+                    if (ImGui::IsItemHovered()) game_.frontend.select_menu_item(item.id);
+                    draw_list->AddText(ImGui::GetFont(), 24.0f,
+                                       ImVec2(row_min.x + 42.0f, row_min.y + 13.0f),
+                                       selected ? IM_COL32(255, 226, 143, 255)
+                                                : IM_COL32(226, 195, 125, 245),
+                                       item.label.c_str());
+                    if (selected && input_.using_controller_prompts() && ui_accept_descriptor_set_ != VK_NULL_HANDLE) {
+                        ImGui::SetCursorPos(ImVec2(row_x - 47.0f, row_y + index *
+                                                   (row_height + row_gap) + 6.0f));
+                        ImGui::Image(reinterpret_cast<ImTextureID>(ui_accept_descriptor_set_),
+                                     ImVec2(40.0f, 40.0f));
+                    } else if (selected) {
+                        draw_list->AddText(ImGui::GetFont(), 16.0f,
+                                           ImVec2(row_min.x - 70.0f, row_min.y + 18.0f),
+                                           IM_COL32(240, 220, 160, 255),
+                                           input_.prompt(f2::NativeInputAction::Accept).c_str());
+                    }
                 }
-                ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ - 54.0f));
-                ImGui::Text("%s/%s  MOVE     %s  SELECT     %s  BACK",
-                            input_.prompt(f2::NativeInputAction::Up).c_str(),
-                            input_.prompt(f2::NativeInputAction::Down).c_str(),
-                            input_.prompt(f2::NativeInputAction::Accept).c_str(),
-                            input_.prompt(f2::NativeInputAction::Back).c_str());
             } else {
                 ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.10f));
-                ImGui::TextUnformatted("Native PC options");
-                ImGui::TextUnformatted("Resolution, audio, input, mods, and accessibility will live here.");
-                ImGui::TextUnformatted("Press Escape to return.");
+                ImGui::TextUnformatted("Options");
+                ImGui::TextUnformatted("Language and subtitle settings will use the native PC configuration.");
+                ImGui::Text("%s  BACK", input_.prompt(f2::NativeInputAction::Back).c_str());
             }
             ImGui::End();
         } else if (state == f2::FrontendState::Loading) {

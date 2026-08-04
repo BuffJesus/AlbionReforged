@@ -2,8 +2,16 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstring>
 #include <fstream>
+#include <ranges>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <wincodec.h>
+#include <wrl/client.h>
+#endif
 
 namespace f2 {
 namespace {
@@ -184,6 +192,57 @@ bool load_dds_rgba8(const std::filesystem::path& path,
         return false;
     }
     return true;
+}
+
+bool load_image_rgba8(const std::filesystem::path& path,
+                      NativeTexture& texture,
+                      std::string& error) {
+    auto extension = path.extension().string();
+    std::ranges::transform(extension, extension.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    if (extension == ".dds") return load_dds_rgba8(path, texture, error);
+#ifdef _WIN32
+    using Microsoft::WRL::ComPtr;
+    ComPtr<IWICImagingFactory> factory;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&factory)))) {
+        return fail(error, "WIC imaging factory could not be created");
+    }
+    ComPtr<IWICBitmapDecoder> decoder;
+    if (FAILED(factory->CreateDecoderFromFilename(path.c_str(), nullptr,
+                                                   GENERIC_READ, WICDecodeMetadataCacheOnLoad,
+                                                   &decoder))) {
+        return fail(error, "unable to open image: " + path.string());
+    }
+    ComPtr<IWICBitmapFrameDecode> frame;
+    if (FAILED(decoder->GetFrame(0, &frame))) return fail(error, "image has no frame");
+    UINT width = 0;
+    UINT height = 0;
+    if (FAILED(frame->GetSize(&width, &height)) || width == 0 || height == 0) {
+        return fail(error, "image dimensions are invalid: " + path.string());
+    }
+    ComPtr<IWICFormatConverter> converter;
+    if (FAILED(factory->CreateFormatConverter(&converter)) ||
+        FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA,
+                                     WICBitmapDitherTypeNone, nullptr, 0.0,
+                                     WICBitmapPaletteTypeCustom))) {
+        return fail(error, "image is not convertible to RGBA8: " + path.string());
+    }
+    NativeTexture decoded;
+    decoded.width = width;
+    decoded.height = height;
+    decoded.rgba8.resize(static_cast<std::size_t>(width) * height * 4);
+    if (FAILED(converter->CopyPixels(nullptr, width * 4,
+                                     static_cast<UINT>(decoded.rgba8.size()),
+                                     decoded.rgba8.data()))) {
+        return fail(error, "unable to decode image pixels: " + path.string());
+    }
+    texture = std::move(decoded);
+    return true;
+#else
+    return fail(error, "PNG/BMP loading is only available on Windows: " + path.string());
+#endif
 }
 
 }  // namespace f2
