@@ -737,7 +737,7 @@ private:
                 const float scale = height_ / static_cast<float>(background->height);
                 const float image_width = background->width * scale;
                 const float offset = std::fmod(title_time * 29.0f, image_width);
-                const int image_alpha = alpha((title_time - 0.72f) / 1.10f);
+                const int image_alpha = alpha((title_time - 5.90f) / 1.10f);
                 for (float x = -offset; x < static_cast<float>(width_); x += image_width) {
                     draw_list->AddImage(reinterpret_cast<ImTextureID>(ui_background_descriptor_set_),
                                         ImVec2(x, 0), ImVec2(x + image_width, height_),

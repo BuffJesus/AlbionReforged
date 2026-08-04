@@ -39,7 +39,8 @@ shipped in the repository.
 2. Decode the captured title effect resources through the Xenos texture path
    and confirm whether they are additional ambient animation or transient
    particle data before adding them.
-3. Re-measure title-state time from the startup capture so the burst, logo,
-   prompt, legal text, and panorama transition share one verified timeline.
+3. Keep the verified title-state timing: the startup reference holds the
+   black/grey title card for about 5.9 seconds after title entry before the
+   panorama fades in over about 1.1 seconds. Re-measure if the video/startup
+   boundary changes.
 4. Validate D3D12 and Vulkan with frame captures at the same reference times.
-

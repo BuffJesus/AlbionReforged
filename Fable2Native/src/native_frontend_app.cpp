@@ -750,7 +750,10 @@ private:
             };
             draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(0, 0, 0, 255));
             if (background.texture) {
-                const float fade = std::clamp((title_time - 0.72f) / 1.10f, 0.0f, 1.0f);
+                // The independent startup reference keeps the title card
+                // black/grey for about six seconds after the logo reveal;
+                // the panorama then fades in over roughly one second.
+                const float fade = std::clamp((title_time - 5.90f) / 1.10f, 0.0f, 1.0f);
                 const float scale = height_ / static_cast<float>(background.height);
                 const float image_width = background.width * scale;
                 // Measured against the captured native title sequence: the
