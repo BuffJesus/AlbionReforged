@@ -27,6 +27,7 @@ public:
 
     [[nodiscard]] bool is_open() const noexcept { return reader_ != nullptr; }
     [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
+    [[nodiscard]] double frame_duration_seconds() const noexcept { return frame_duration_seconds_; }
 
 private:
     enum class PixelFormat : std::uint8_t {
@@ -41,6 +42,7 @@ private:
     std::uint32_t height_ = 0;
     std::int32_t stride_ = 0;
     PixelFormat pixel_format_ = PixelFormat::Argb32;
+    double frame_duration_seconds_ = 1.0 / 30.0;
     std::uint64_t serial_ = 0;
 };
 

@@ -66,6 +66,8 @@ build\RelWithDebInfo\f2native_frontend_vulkan.exe
 
 Both frontends use the same native scene package and user-selected game source. D3D12 and Vulkan
 are presentation backends for the native runtime; neither backend runs the Xbox 360 renderer.
+The frontend state and gameplay clock use fixed 60 Hz simulation steps, so uncapped rendering does
+not accelerate menus, loading, or future game logic.
 
 The frontend requires user-supplied game data. On first launch it opens a folder picker;
 choose the extracted Fable II game directory containing `data\dir.manifest`. The selected

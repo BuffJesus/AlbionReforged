@@ -368,6 +368,7 @@ private:
             video_decoder_.close();
             active_video_path_.clear();
             video_frame_ = {};
+            video_next_frame_time_ = 0.0;
             if (video_texture_) {
                 wait_for_gpu();
                 video_texture_.Reset();
@@ -385,10 +386,25 @@ private:
         if (path != active_video_path_) {
             active_video_path_ = path;
             video_frame_ = {};
+            video_next_frame_time_ = 0.0;
             if (!video_decoder_.open(path, video_error_)) return;
         }
-        f2::NativeVideoFrame frame;
-        if (video_decoder_.read_next_frame(frame, video_error_)) video_frame_ = std::move(frame);
+        const double target_time = game_.frontend.intro_videos().current_time();
+        const double frame_duration = video_decoder_.frame_duration_seconds();
+        if (video_frame_.serial == 0) {
+            if (video_decoder_.read_next_frame(video_frame_, video_error_)) {
+                video_next_frame_time_ = frame_duration;
+            }
+        }
+        for (int frame_count = 0;
+             video_frame_.serial != 0 && target_time + 0.000001 >= video_next_frame_time_ &&
+             frame_count < 8;
+             ++frame_count) {
+            f2::NativeVideoFrame next_frame;
+            if (!video_decoder_.read_next_frame(next_frame, video_error_)) break;
+            video_frame_ = std::move(next_frame);
+            video_next_frame_time_ += frame_duration;
+        }
     }
 
     bool ensure_video_texture(const f2::NativeVideoFrame& frame) {
@@ -493,6 +509,9 @@ private:
     }
 
     void draw() {
+        if (game_.frontend.state() == f2::FrontendState::IntroVideo && video_frame_.serial != 0) {
+            ensure_video_texture(video_frame_);
+        }
         ImGui_ImplDX12_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
@@ -508,44 +527,58 @@ private:
                 ImGui::SetCursorPos(ImVec2(0, 0));
                 ImGui::Image(static_cast<ImTextureID>(video_gpu_handle_.ptr),
                              ImVec2(static_cast<float>(width_), static_cast<float>(height_)));
-                ImGui::SetCursorPos(ImVec2(24, static_cast<float>(height_ - 42)));
-                ImGui::TextUnformatted("Press Space to skip");
-            } else {
-                ImGui::SetCursorPos(ImVec2(width_ * 0.5f - 180.0f, height_ * 0.45f));
-                if (state == f2::FrontendState::Boot) {
-                ImGui::TextUnformatted("FABLE II NATIVE");
-                } else if (const auto* clip = game_.frontend.intro_videos().current_clip()) {
-                    ImGui::Text("INTRO VIDEO: %s", clip->id.c_str());
-                    ImGui::Text("Asset: %s", clip->asset.string().c_str());
-                } else {
-                    ImGui::TextUnformatted("INTRO VIDEO PLAYER");
-                }
-                ImGui::SetCursorPos(ImVec2(width_ * 0.5f - 120.0f, height_ * 0.55f));
-                ImGui::TextUnformatted("Press Space to skip");
             }
             ImGui::End();
         } else if (state == f2::FrontendState::Title) {
-            ImGui::SetNextWindowPos(ImVec2(width_ * 0.5f, height_ * 0.5f),
-                                    ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::Begin("##title", nullptr, ImGuiWindowFlags_AlwaysAutoResize |
-                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(width_), static_cast<float>(height_)));
+            ImGui::Begin("##title", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoSavedSettings);
+            auto* draw_list = ImGui::GetWindowDrawList();
+            draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
+            draw_list->AddRectFilled(ImVec2(0, height_ * 0.68f), ImVec2(width_, height_),
+                                     IM_COL32(16, 28, 45, 255));
+            ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.25f));
             ImGui::TextUnformatted("FABLE II");
-            ImGui::TextUnformatted("Press Enter to start");
+            ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.25f + 46.0f));
+            ImGui::TextUnformatted("ALBION REFORGED  /  NATIVE PC EDITION");
+            ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.62f));
+            if (ImGui::Button("ENTER ALBION", ImVec2(260, 56))) {
+                game_.frontend.dispatch(f2::FrontendAction::Accept);
+            }
+            ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.62f + 68.0f));
+            ImGui::TextUnformatted("ENTER  /  START");
             ImGui::End();
         } else if (state == f2::FrontendState::MainMenu || state == f2::FrontendState::Options) {
-            ImGui::SetNextWindowPos(ImVec2(width_ * 0.5f, height_ * 0.5f),
-                                    ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::Begin(state == f2::FrontendState::MainMenu ? "Main Menu" : "Options",
-                         nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(width_), static_cast<float>(height_)));
+            ImGui::Begin(state == f2::FrontendState::MainMenu ? "##main_menu" : "##options", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoSavedSettings);
+            auto* draw_list = ImGui::GetWindowDrawList();
+            draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
+            draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_ * 0.46f, height_),
+                                     IM_COL32(14, 24, 39, 255));
             if (state == f2::FrontendState::MainMenu) {
+                ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.10f));
+                ImGui::TextUnformatted("FABLE II");
+                ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.10f + 34.0f));
+                ImGui::TextUnformatted("MAIN MENU");
+                ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.24f));
                 for (std::size_t index = 0; index < game_.frontend.menu_items().size(); ++index) {
                     const auto& item = game_.frontend.menu_items()[index];
                     const bool selected = index == game_.frontend.selected_item();
-                    if (selected) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.8f, 0.2f, 1));
-                    ImGui::Text("%s%s", selected ? "> " : "  ", item.label.c_str());
-                    if (selected) ImGui::PopStyleColor();
+                    if (ImGui::Selectable(item.label.c_str(), selected,
+                                         ImGuiSelectableFlags_SpanAllColumns, ImVec2(360, 48))) {
+                        game_.frontend.select_menu_item(item.id);
+                        game_.frontend.dispatch(f2::FrontendAction::Accept);
+                    }
+                    ImGui::Spacing();
                 }
+                ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ - 54.0f));
+                ImGui::TextUnformatted("ARROWS  MOVE     ENTER  SELECT     ESC  BACK");
             } else {
+                ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.10f));
                 ImGui::TextUnformatted("Native PC options");
                 ImGui::TextUnformatted("Resolution, audio, input, mods, and accessibility will live here.");
                 ImGui::TextUnformatted("Press Escape to return.");
@@ -572,7 +605,6 @@ private:
         }
 
         ImGui::Render();
-        if (video_frame_.serial != 0) ensure_video_texture(video_frame_);
         const UINT frame_index = swap_chain_->GetCurrentBackBufferIndex();
         auto& frame = frames_[frame_index];
         frame.allocator->Reset();
@@ -651,6 +683,7 @@ private:
     UINT video_width_ = 0;
     UINT video_height_ = 0;
     UINT64 uploaded_video_serial_ = 0;
+    double video_next_frame_time_ = 0.0;
     bool video_texture_shader_state_ = false;
     D3D12_GPU_DESCRIPTOR_HANDLE video_gpu_handle_{};
     f2::NativeWorldRenderer world_renderer_;

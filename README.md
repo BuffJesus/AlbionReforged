@@ -20,6 +20,10 @@ The native executables currently connect:
 
 `source validation -> boot -> intro sequence contract -> title -> main menu -> loading -> native world`
 
+The title and main menu are now full-screen native UI with keyboard and mouse selection. Frontend
+and gameplay state advances on a fixed 60 Hz simulation clock, independent of render FPS; video
+presentation is paced from each decoded movie's frame rate.
+
 The D3D12 and Vulkan world renderers accept the same user-cooked `F2SCENE` package through
 `--scene`, bind albedo textures per material, can consume a user-owned DXT1/DXT5 DDS through
 `--texture`, and have an asset-free procedural fallback for bring-up. Startup movies are now

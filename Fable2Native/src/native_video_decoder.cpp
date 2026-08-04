@@ -89,12 +89,23 @@ bool NativeVideoDecoder::open(const std::filesystem::path& path, std::string& er
         stride = static_cast<LONG>(pixel_format == PixelFormat::Yuy2 ? width * 2 : width * 4);
     }
 
+    double frame_duration_seconds = 1.0 / 30.0;
+    UINT32 frame_rate_numerator = 0;
+    UINT32 frame_rate_denominator = 0;
+    if (SUCCEEDED(MFGetAttributeRatio(current_type.Get(), MF_MT_FRAME_RATE,
+                                      &frame_rate_numerator, &frame_rate_denominator)) &&
+        frame_rate_numerator != 0 && frame_rate_denominator != 0) {
+        frame_duration_seconds = static_cast<double>(frame_rate_denominator) /
+                                 static_cast<double>(frame_rate_numerator);
+    }
+
     reader_ = reader.Detach();
     path_ = path;
     width_ = width;
     height_ = height;
     stride_ = stride;
     pixel_format_ = pixel_format;
+    frame_duration_seconds_ = frame_duration_seconds;
     serial_ = 0;
     return true;
 }
@@ -180,6 +191,7 @@ void NativeVideoDecoder::close() {
     height_ = 0;
     stride_ = 0;
     pixel_format_ = PixelFormat::Argb32;
+    frame_duration_seconds_ = 1.0 / 30.0;
     serial_ = 0;
 }
 

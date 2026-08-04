@@ -23,6 +23,9 @@ struct NativeGame {
 
     bool load_scene(const std::filesystem::path& path, std::string& error);
     void tick(double delta_seconds);
+
+private:
+    double simulation_accumulator_ = 0.0;
 };
 
 }  // namespace f2
