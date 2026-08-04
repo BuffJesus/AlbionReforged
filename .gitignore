@@ -84,6 +84,7 @@ scratch_gui_extract/
 *.pdf
 
 # Root-level workbench files and private session instructions
+**/imgui.ini
 /*.bmp
 /*.html
 /*.ini
