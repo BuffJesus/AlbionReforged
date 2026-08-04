@@ -30,6 +30,15 @@ std::optional<NativeUiAsset> asset_from_key(std::string_view key) {
     if (key == "logo") return NativeUiAsset::Logo;
     if (key == "accept" || key == "button_accept") return NativeUiAsset::Accept;
     if (key == "back" || key == "button_back") return NativeUiAsset::Back;
+    if (key == "menu_surface" || key == "menu_texture") return NativeUiAsset::MenuSurface;
+    if (key == "sparkle_1" || key == "sparkle1") return NativeUiAsset::Sparkle1;
+    if (key == "sparkle_2" || key == "sparkle2") return NativeUiAsset::Sparkle2;
+    if (key == "sparkle_3" || key == "sparkle3") return NativeUiAsset::Sparkle3;
+    if (key == "sparkle_4" || key == "sparkle4") return NativeUiAsset::Sparkle4;
+    if (key == "sparkle_5" || key == "sparkle5") return NativeUiAsset::Sparkle5;
+    if (key == "sparkle_6" || key == "sparkle6") return NativeUiAsset::Sparkle6;
+    if (key == "sparkle_7" || key == "sparkle7") return NativeUiAsset::Sparkle7;
+    if (key == "sparkle_8" || key == "sparkle8") return NativeUiAsset::Sparkle8;
     return std::nullopt;
 }
 
@@ -55,12 +64,21 @@ bool NativeUiAssets::load(const std::filesystem::path& root, std::string& error)
         if (const auto asset = asset_from_key(key)) paths[static_cast<std::size_t>(*asset)] = value;
     }
 
-    const std::array<std::pair<NativeUiAsset, std::string_view>, 5> defaults = {{
+    const std::array<std::pair<NativeUiAsset, std::string_view>, 14> defaults = {{
         {NativeUiAsset::TitleBackground, "title_background.dds"},
         {NativeUiAsset::MainBackground, "main_background.dds"},
         {NativeUiAsset::Logo, "logo.dds"},
         {NativeUiAsset::Accept, "button_accept.dds"},
         {NativeUiAsset::Back, "button_back.dds"},
+        {NativeUiAsset::MenuSurface, "menu_surface.dds"},
+        {NativeUiAsset::Sparkle1, "sparkle_1.png"},
+        {NativeUiAsset::Sparkle2, "sparkle_2.png"},
+        {NativeUiAsset::Sparkle3, "sparkle_3.png"},
+        {NativeUiAsset::Sparkle4, "sparkle_4.png"},
+        {NativeUiAsset::Sparkle5, "sparkle_5.png"},
+        {NativeUiAsset::Sparkle6, "sparkle_6.png"},
+        {NativeUiAsset::Sparkle7, "sparkle_7.png"},
+        {NativeUiAsset::Sparkle8, "sparkle_8.png"},
     }};
     for (const auto& [asset, filename] : defaults) {
         auto& path = paths[static_cast<std::size_t>(asset)];

@@ -14,6 +14,15 @@ enum class NativeUiAsset : std::uint8_t {
     Logo,
     Accept,
     Back,
+    MenuSurface,
+    Sparkle1,
+    Sparkle2,
+    Sparkle3,
+    Sparkle4,
+    Sparkle5,
+    Sparkle6,
+    Sparkle7,
+    Sparkle8,
     Count,
 };
 

@@ -1,8 +1,10 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 
 #include "f2/native_game.h"
+#include "f2/native_audio.h"
 #include "f2/native_install.h"
 #include "f2/native_input.h"
+#include "f2/native_logo_effects.h"
 #include "f2/native_ui.h"
 #include "f2/native_video_decoder.h"
 #include "f2/native_vulkan_video_texture.h"
@@ -22,6 +24,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -186,6 +189,8 @@ public:
             MessageBoxA(window_, ui_error.c_str(), "Fable II Native - UI asset warning",
                         MB_OK | MB_ICONWARNING);
         }
+        std::string audio_error;
+        audio_.initialise(command_line_path(L"--audio-root").value_or(ui_root_), audio_error);
         input_.load_bindings(source_config_path().parent_path() / "bindings.ini");
         if (command_line_flag(L"--skip-intro")) {
             game_.frontend.dispatch(f2::FrontendAction::Skip);
@@ -233,6 +238,10 @@ public:
             update_video();
             input_.poll();
             handle_input();
+            audio_.tick();
+            const auto state = game_.frontend.state();
+            audio_.set_music_enabled(state == f2::FrontendState::Title ||
+                                     state == f2::FrontendState::MainMenu);
             draw();
             if (game_.frontend.quit_requested()) PostMessageA(window_, WM_CLOSE, 0, 0);
         }
@@ -536,10 +545,22 @@ private:
 
     void handle_input() {
         using Action = f2::NativeInputAction;
-        if (input_.pressed(Action::Up)) game_.frontend.dispatch(f2::FrontendAction::Up);
-        if (input_.pressed(Action::Down)) game_.frontend.dispatch(f2::FrontendAction::Down);
-        if (input_.pressed(Action::Accept)) game_.frontend.dispatch(f2::FrontendAction::Accept);
-        if (input_.pressed(Action::Back)) game_.frontend.dispatch(f2::FrontendAction::Back);
+        if (input_.pressed(Action::Up)) {
+            game_.frontend.dispatch(f2::FrontendAction::Up);
+            audio_.play(f2::NativeFrontendSound::Navigate);
+        }
+        if (input_.pressed(Action::Down)) {
+            game_.frontend.dispatch(f2::FrontendAction::Down);
+            audio_.play(f2::NativeFrontendSound::Navigate);
+        }
+        if (input_.pressed(Action::Accept)) {
+            game_.frontend.dispatch(f2::FrontendAction::Accept);
+            audio_.play(f2::NativeFrontendSound::Accept);
+        }
+        if (input_.pressed(Action::Back)) {
+            game_.frontend.dispatch(f2::FrontendAction::Back);
+            audio_.play(f2::NativeFrontendSound::Back);
+        }
         if (input_.pressed(Action::Skip)) game_.frontend.dispatch(f2::FrontendAction::Skip);
     }
 
@@ -661,6 +682,24 @@ private:
         ensure_ui_texture(f2::NativeUiAsset::Accept, ui_accept_texture_,
                           ui_accept_descriptor_set_);
         ensure_ui_texture(f2::NativeUiAsset::Back, ui_back_texture_, ui_back_descriptor_set_);
+        ensure_ui_texture(f2::NativeUiAsset::MenuSurface, ui_menu_surface_texture_,
+                          ui_menu_surface_descriptor_set_);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle1, ui_sparkle_textures_[0],
+                          ui_sparkle_descriptor_sets_[0]);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle2, ui_sparkle_textures_[1],
+                          ui_sparkle_descriptor_sets_[1]);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle3, ui_sparkle_textures_[2],
+                          ui_sparkle_descriptor_sets_[2]);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle4, ui_sparkle_textures_[3],
+                          ui_sparkle_descriptor_sets_[3]);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle5, ui_sparkle_textures_[4],
+                          ui_sparkle_descriptor_sets_[4]);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle6, ui_sparkle_textures_[5],
+                          ui_sparkle_descriptor_sets_[5]);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle7, ui_sparkle_textures_[6],
+                          ui_sparkle_descriptor_sets_[6]);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle8, ui_sparkle_textures_[7],
+                          ui_sparkle_descriptor_sets_[7]);
     }
 
     void draw_ui() {
@@ -688,31 +727,68 @@ private:
             ImGui::Begin("##title", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings);
             auto* draw_list = ImGui::GetWindowDrawList();
+            const float title_time = static_cast<float>(game_.frontend.state_time());
+            const auto alpha = [](float value) {
+                return static_cast<int>(std::clamp(value, 0.0f, 1.0f) * 255.0f);
+            };
+            draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(0, 0, 0, 255));
             if (ui_background_descriptor_set_ != VK_NULL_HANDLE) {
-                ImGui::SetCursorPos(ImVec2(0, 0));
-                ImGui::Image(reinterpret_cast<ImTextureID>(ui_background_descriptor_set_),
-                             ImVec2(static_cast<float>(width_), static_cast<float>(height_)));
-            } else {
-                draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
+                const auto* background = ui_assets_.texture(f2::NativeUiAsset::TitleBackground);
+                const float scale = height_ / static_cast<float>(background->height);
+                const float image_width = background->width * scale;
+                const float offset = std::fmod(title_time * 29.0f, image_width);
+                const int image_alpha = alpha((title_time - 0.72f) / 1.10f);
+                for (float x = -offset; x < static_cast<float>(width_); x += image_width) {
+                    draw_list->AddImage(reinterpret_cast<ImTextureID>(ui_background_descriptor_set_),
+                                        ImVec2(x, 0), ImVec2(x + image_width, height_),
+                                        ImVec2(0, 0), ImVec2(1, 1),
+                                        IM_COL32(255, 255, 255, image_alpha));
+                }
             }
+            const int logo_alpha = alpha((title_time - 0.86f) / 0.75f);
             if (ui_logo_descriptor_set_ != VK_NULL_HANDLE) {
                 const auto* logo = ui_assets_.texture(f2::NativeUiAsset::Logo);
-                const auto logo_height = height_ * 0.25f;
-                ImGui::SetCursorPos(ImVec2((width_ - logo_height * logo->width / logo->height) * 0.5f,
-                                           height_ * 0.27f));
-                ImGui::Image(reinterpret_cast<ImTextureID>(ui_logo_descriptor_set_),
-                             ImVec2(logo_height * logo->width / logo->height, logo_height));
+                const float logo_scale = width_ / (logo->width * 1.6f);
+                const float logo_width = logo->width * logo_scale;
+                const float logo_height = logo->height * logo_scale;
+                const float logo_x = (width_ - logo_width) * 0.5f;
+                const float logo_y = height_ * 0.45f - logo_height * 0.5f;
+                std::array<ImTextureID, 8> sparkle_textures{};
+                for (std::size_t index = 0; index < sparkle_textures.size(); ++index) {
+                    if (ui_sparkle_descriptor_sets_[index] != VK_NULL_HANDLE) {
+                        sparkle_textures[index] = reinterpret_cast<ImTextureID>(
+                            ui_sparkle_descriptor_sets_[index]);
+                    }
+                }
+                logo_sparkles_.draw(draw_list, *logo, sparkle_textures,
+                                    logo_x, logo_y, logo_width, logo_height, title_time,
+                                    logo_alpha / 255.0f);
+                draw_list->AddImage(reinterpret_cast<ImTextureID>(ui_logo_descriptor_set_),
+                                    ImVec2(logo_x, logo_y),
+                                    ImVec2(logo_x + logo_width, logo_y + logo_height),
+                                    ImVec2(0, 0), ImVec2(1, 1),
+                                    IM_COL32(255, 255, 255, logo_alpha));
             } else {
                 draw_list->AddText(ImGui::GetFont(), 92.0f,
                                    ImVec2(width_ * 0.24f, height_ * 0.32f),
-                                   IM_COL32(255, 255, 255, 245), "FABLE II");
+                                   IM_COL32(255, 255, 255, logo_alpha), "FABLE II");
             }
             const auto prompt = input_.prompt(f2::NativeInputAction::Accept);
             const std::string prompt_text = "Press " + prompt + " to start";
             const auto prompt_size = ImGui::CalcTextSize(prompt_text.c_str());
             draw_list->AddText(ImGui::GetFont(), 26.0f,
-                               ImVec2((width_ - prompt_size.x) * 0.5f, height_ * 0.66f),
-                               IM_COL32(235, 235, 235, 235), prompt_text.c_str());
+                               ImVec2((width_ - prompt_size.x) * 0.5f, height_ * 0.56f),
+                               IM_COL32(235, 235, 235, alpha((title_time - 0.12f) / 0.38f)),
+                               prompt_text.c_str());
+            const int legal_alpha = alpha(std::clamp((title_time - 0.20f) / 0.45f, 0.0f, 1.0f));
+            const ImU32 legal_color = IM_COL32(242, 242, 242, legal_alpha);
+            draw_list->AddText(ImGui::GetFont(), 20.0f, ImVec2(width_ * 0.25f, height_ * 0.73f),
+                               legal_color,
+                               "\xC2\xA9 & \xE2\x84\x97 2008 Microsoft Corporation. All rights reserved. Developed by");
+            draw_list->AddText(ImGui::GetFont(), 20.0f, ImVec2(width_ * 0.25f, height_ * 0.79f),
+                               legal_color, "Lionhead Studios.");
+            draw_list->AddText(ImGui::GetFont(), 20.0f, ImVec2(width_ * 0.25f, height_ * 0.87f),
+                               legal_color, "Online Interactions Not Rated by the ESRB");
             ImGui::SetCursorPos(ImVec2(0, 0));
             if (ImGui::InvisibleButton("##title_accept", ImVec2(static_cast<float>(width_),
                                                                   static_cast<float>(height_)))) {
@@ -726,18 +802,37 @@ private:
                          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings);
             auto* draw_list = ImGui::GetWindowDrawList();
+            const auto alpha = [](float value) {
+                return static_cast<int>(std::clamp(value, 0.0f, 1.0f) * 255.0f);
+            };
             const auto background_descriptor = ui_main_background_descriptor_set_ != VK_NULL_HANDLE
                 ? ui_main_background_descriptor_set_ : ui_background_descriptor_set_;
             if (background_descriptor != VK_NULL_HANDLE) {
-                ImGui::SetCursorPos(ImVec2(0, 0));
-                ImGui::Image(reinterpret_cast<ImTextureID>(background_descriptor),
-                             ImVec2(static_cast<float>(width_), static_cast<float>(height_)));
+                const auto* background = ui_assets_.texture(
+                    ui_main_background_descriptor_set_ != VK_NULL_HANDLE
+                        ? f2::NativeUiAsset::MainBackground : f2::NativeUiAsset::TitleBackground);
+                const float scale = height_ / static_cast<float>(background->height);
+                const float image_width = background->width * scale;
+                const float offset = std::fmod(static_cast<float>(game_.frontend.state_time()) * 29.0f,
+                                               image_width);
+                for (float x = -offset; x < static_cast<float>(width_); x += image_width) {
+                    draw_list->AddImage(reinterpret_cast<ImTextureID>(background_descriptor),
+                                        ImVec2(x, 0), ImVec2(x + image_width, height_));
+                }
             } else {
                 draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
                 draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_ * 0.46f, height_),
                                          IM_COL32(14, 24, 39, 255));
             }
             if (state == f2::FrontendState::MainMenu) {
+                if (ui_menu_surface_descriptor_set_ != VK_NULL_HANDLE) {
+                    draw_list->AddImage(reinterpret_cast<ImTextureID>(ui_menu_surface_descriptor_set_),
+                                        ImVec2(0, 0), ImVec2(width_ * 0.16f, height_),
+                                        ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 245));
+                    draw_list->AddImage(reinterpret_cast<ImTextureID>(ui_menu_surface_descriptor_set_),
+                                        ImVec2(width_ * 0.84f, 0), ImVec2(width_, height_),
+                                        ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 245));
+                }
                 const float row_x = width_ * 0.16f;
                 const float row_y = height_ * 0.23f;
                 const float row_width = width_ * 0.32f;
@@ -746,18 +841,33 @@ private:
                 for (std::size_t index = 0; index < game_.frontend.menu_items().size(); ++index) {
                     const auto& item = game_.frontend.menu_items()[index];
                     const bool selected = index == game_.frontend.selected_item();
-                    const ImVec2 row_position(row_x, row_y + index * (row_height + row_gap));
+                    const float row_fade = std::clamp(
+                        (static_cast<float>(game_.frontend.state_time()) - index * 0.06f) / 0.28f,
+                        0.0f, 1.0f);
+                    const float row_slide = (1.0f - row_fade) * 32.0f;
+                    const ImVec2 row_position(row_x - row_slide,
+                                              row_y + index * (row_height + row_gap));
                     const auto window_position = ImGui::GetWindowPos();
                     const ImVec2 row_min(window_position.x + row_position.x,
                                         window_position.y + row_position.y);
                     const ImVec2 row_max(row_min.x + row_width, row_min.y + row_height);
+                    if (ui_menu_surface_descriptor_set_ != VK_NULL_HANDLE) {
+                        draw_list->AddImage(reinterpret_cast<ImTextureID>(ui_menu_surface_descriptor_set_),
+                                            row_min, row_max, ImVec2(0, 0), ImVec2(1, 1),
+                                            IM_COL32(255, 255, 255, alpha(row_fade * 0.95f)));
+                    } else {
+                        draw_list->AddRectFilled(row_min, row_max,
+                                                 selected ? IM_COL32(60, 43, 27, alpha(row_fade))
+                                                           : IM_COL32(19, 16, 15, alpha(row_fade)),
+                                                 24.0f);
+                    }
                     draw_list->AddRectFilled(row_min, row_max,
-                                             selected ? IM_COL32(60, 43, 27, 245)
-                                                       : IM_COL32(19, 16, 15, 225),
+                                             selected ? IM_COL32(60, 43, 27, alpha(row_fade * 0.35f))
+                                                       : IM_COL32(19, 16, 15, alpha(row_fade * 0.25f)),
                                              24.0f);
                     draw_list->AddRect(row_min, row_max,
-                                       selected ? IM_COL32(223, 166, 91, 255)
-                                                : IM_COL32(139, 91, 48, 235),
+                                       selected ? IM_COL32(223, 166, 91, alpha(row_fade))
+                                                : IM_COL32(139, 91, 48, alpha(row_fade)),
                                        24.0f, 0, selected ? 3.0f : 2.0f);
                     ImGui::SetCursorPos(row_position);
                     if (ImGui::InvisibleButton(("##menu_" + item.id).c_str(),
@@ -768,8 +878,8 @@ private:
                     if (ImGui::IsItemHovered()) game_.frontend.select_menu_item(item.id);
                     draw_list->AddText(ImGui::GetFont(), 24.0f,
                                        ImVec2(row_min.x + 42.0f, row_min.y + 13.0f),
-                                       selected ? IM_COL32(255, 226, 143, 255)
-                                                : IM_COL32(226, 195, 125, 245),
+                                       selected ? IM_COL32(255, 226, 143, alpha(row_fade))
+                                                : IM_COL32(226, 195, 125, alpha(row_fade)),
                                        item.label.c_str());
                     if (selected && input_.using_controller_prompts() && ui_accept_descriptor_set_ != VK_NULL_HANDLE) {
                         ImGui::SetCursorPos(ImVec2(row_x - 47.0f, row_y + index *
@@ -920,6 +1030,16 @@ private:
                 ImGui_ImplVulkan_RemoveTexture(ui_back_descriptor_set_);
                 ui_back_descriptor_set_ = VK_NULL_HANDLE;
             }
+            if (ui_menu_surface_descriptor_set_ != VK_NULL_HANDLE) {
+                ImGui_ImplVulkan_RemoveTexture(ui_menu_surface_descriptor_set_);
+                ui_menu_surface_descriptor_set_ = VK_NULL_HANDLE;
+            }
+            for (auto& descriptor_set : ui_sparkle_descriptor_sets_) {
+                if (descriptor_set != VK_NULL_HANDLE) {
+                    ImGui_ImplVulkan_RemoveTexture(descriptor_set);
+                    descriptor_set = VK_NULL_HANDLE;
+                }
+            }
             ImGui_ImplVulkan_Shutdown();
             ImGui_ImplWin32_Shutdown();
             ImGui::DestroyContext();
@@ -930,6 +1050,8 @@ private:
         ui_logo_texture_.destroy();
         ui_accept_texture_.destroy();
         ui_back_texture_.destroy();
+        ui_menu_surface_texture_.destroy();
+        for (auto& texture : ui_sparkle_textures_) texture.destroy();
         video_texture_.destroy();
         video_decoder_.close();
         world_renderer_.destroy();
@@ -968,6 +1090,7 @@ private:
     std::filesystem::path video_root_;
     std::filesystem::path ui_root_;
     f2::NativeUiAssets ui_assets_;
+    f2::NativeFrontendAudio audio_;
     std::filesystem::path active_video_path_;
     f2::NativeVideoDecoder video_decoder_;
     f2::NativeVideoFrame video_frame_;
@@ -978,11 +1101,16 @@ private:
     f2::NativeVulkanVideoTexture ui_logo_texture_;
     f2::NativeVulkanVideoTexture ui_accept_texture_;
     f2::NativeVulkanVideoTexture ui_back_texture_;
+    f2::NativeVulkanVideoTexture ui_menu_surface_texture_;
+    std::array<f2::NativeVulkanVideoTexture, 8> ui_sparkle_textures_;
+    f2::NativeLogoSparkles logo_sparkles_;
     VkDescriptorSet ui_background_descriptor_set_ = VK_NULL_HANDLE;
     VkDescriptorSet ui_main_background_descriptor_set_ = VK_NULL_HANDLE;
     VkDescriptorSet ui_logo_descriptor_set_ = VK_NULL_HANDLE;
     VkDescriptorSet ui_accept_descriptor_set_ = VK_NULL_HANDLE;
     VkDescriptorSet ui_back_descriptor_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet ui_menu_surface_descriptor_set_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, 8> ui_sparkle_descriptor_sets_{};
     std::uint64_t uploaded_video_serial_ = 0;
     double video_next_frame_time_ = 0.0;
     std::string video_error_;

@@ -4,6 +4,10 @@ project(Fable2Native LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(F2NATIVE_ASSETBROWSER_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Fable2AssetBrowser/source/src"
+    CACHE PATH "Local AssetBrowser source used by optional research cookers")
+
 add_library(f2native_core STATIC
     src/native_scene.cpp
     src/native_texture.cpp
@@ -11,6 +15,7 @@ add_library(f2native_core STATIC
     src/native_frontend.cpp
     src/native_install.cpp
     src/native_input.cpp
+    src/native_audio.cpp
     src/native_ui.cpp
     src/native_iso.cpp
     src/native_video.cpp
@@ -20,6 +25,22 @@ target_include_directories(f2native_core PUBLIC include)
 
 if(WIN32)
     target_link_libraries(f2native_core PUBLIC xinput9_1_0 windowscodecs)
+endif()
+
+option(F2NATIVE_ENABLE_LOCAL_COOKERS
+       "Build local research cookers; they never package game assets" ON)
+if(F2NATIVE_ENABLE_LOCAL_COOKERS AND EXISTS
+   "${F2NATIVE_ASSETBROWSER_SOURCE}/textures/LhTexCodec.cpp")
+    add_executable(f2native_cook_lh_tex
+        tools/cook_lh_tex.cpp
+        "${F2NATIVE_ASSETBROWSER_SOURCE}/textures/LhTexCodec.cpp")
+    target_include_directories(f2native_cook_lh_tex PRIVATE
+        "${F2NATIVE_ASSETBROWSER_SOURCE}/textures")
+    if(MSVC)
+        target_compile_options(f2native_cook_lh_tex PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(f2native_cook_lh_tex PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
 endif()
 
 if(WIN32)
@@ -89,6 +110,7 @@ if(WIN32)
 
     add_executable(f2native_frontend WIN32
         src/native_frontend_app.cpp
+        src/native_logo_effects.cpp
         src/native_world_renderer.cpp)
     target_link_libraries(f2native_frontend PRIVATE
         f2native_core
@@ -100,7 +122,7 @@ if(WIN32)
         ole32
         shell32
         user32)
-    target_link_libraries(f2native_frontend PRIVATE xinput9_1_0)
+    target_link_libraries(f2native_frontend PRIVATE xinput9_1_0 xaudio2)
     target_include_directories(f2native_frontend PRIVATE
         "${F2NATIVE_IMGUI_SOURCE}"
         "${F2NATIVE_IMGUI_SOURCE}/backends")
@@ -134,6 +156,7 @@ if(WIN32)
 
         add_executable(f2native_frontend_vulkan WIN32
             src/native_frontend_vulkan_app.cpp
+            src/native_logo_effects.cpp
             src/native_vulkan_video_texture.cpp
             src/native_vulkan_world_renderer.cpp)
         target_link_libraries(f2native_frontend_vulkan PRIVATE
@@ -144,7 +167,7 @@ if(WIN32)
             ole32
             shell32
             user32)
-        target_link_libraries(f2native_frontend_vulkan PRIVATE xinput9_1_0)
+        target_link_libraries(f2native_frontend_vulkan PRIVATE xinput9_1_0 xaudio2)
         target_include_directories(f2native_frontend_vulkan PRIVATE
             "${F2NATIVE_IMGUI_SOURCE}"
             "${F2NATIVE_IMGUI_SOURCE}/backends")

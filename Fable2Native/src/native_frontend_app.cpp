@@ -1,6 +1,8 @@
 #include "f2/native_game.h"
+#include "f2/native_audio.h"
 #include "f2/native_install.h"
 #include "f2/native_input.h"
+#include "f2/native_logo_effects.h"
 #include "f2/native_ui.h"
 #include "f2/native_video_decoder.h"
 #include "f2/native_world_renderer.h"
@@ -20,6 +22,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -35,7 +38,7 @@ namespace {
 
 constexpr UINT kFrameCount = 2;
 constexpr DXGI_FORMAT kBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-constexpr UINT kUiTextureCount = 6;
+constexpr UINT kUiTextureCount = 15;
 
 struct FrameContext {
     ComPtr<ID3D12CommandAllocator> allocator;
@@ -200,6 +203,8 @@ public:
             MessageBoxA(window_, ui_error.c_str(), "Fable II Native - UI asset warning",
                         MB_OK | MB_ICONWARNING);
         }
+        std::string audio_error;
+        audio_.initialise(command_line_path(L"--audio-root").value_or(ui_root_), audio_error);
         input_.load_bindings(source_config_path().parent_path() / "bindings.ini");
         if (command_line_flag(L"--skip-intro")) {
             game_.frontend.dispatch(f2::FrontendAction::Skip);
@@ -256,6 +261,10 @@ public:
             update_video();
             input_.poll();
             handle_input();
+            audio_.tick();
+            const auto state = game_.frontend.state();
+            audio_.set_music_enabled(state == f2::FrontendState::Title ||
+                                     state == f2::FrontendState::MainMenu);
             draw();
             if (game_.frontend.quit_requested()) PostMessageA(window_, WM_CLOSE, 0, 0);
         }
@@ -512,6 +521,15 @@ private:
         case f2::NativeUiAsset::Accept: return 2;
         case f2::NativeUiAsset::Back: return 3;
         case f2::NativeUiAsset::MainBackground: return 4;
+        case f2::NativeUiAsset::MenuSurface: return 5;
+        case f2::NativeUiAsset::Sparkle1: return 6;
+        case f2::NativeUiAsset::Sparkle2: return 7;
+        case f2::NativeUiAsset::Sparkle3: return 8;
+        case f2::NativeUiAsset::Sparkle4: return 9;
+        case f2::NativeUiAsset::Sparkle5: return 10;
+        case f2::NativeUiAsset::Sparkle6: return 11;
+        case f2::NativeUiAsset::Sparkle7: return 12;
+        case f2::NativeUiAsset::Sparkle8: return 13;
         default: return 0;
         }
     }
@@ -579,12 +597,26 @@ private:
         ensure_ui_texture(f2::NativeUiAsset::Logo);
         ensure_ui_texture(f2::NativeUiAsset::Accept);
         ensure_ui_texture(f2::NativeUiAsset::Back);
+        ensure_ui_texture(f2::NativeUiAsset::MenuSurface);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle1);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle2);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle3);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle4);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle5);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle6);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle7);
+        ensure_ui_texture(f2::NativeUiAsset::Sparkle8);
     }
 
     void upload_ui_textures(ID3D12GraphicsCommandList* command_list) {
-        const std::array<f2::NativeUiAsset, 5> assets = {
+        const std::array<f2::NativeUiAsset, 14> assets = {
             f2::NativeUiAsset::TitleBackground, f2::NativeUiAsset::MainBackground,
-            f2::NativeUiAsset::Logo, f2::NativeUiAsset::Accept, f2::NativeUiAsset::Back};
+            f2::NativeUiAsset::Logo, f2::NativeUiAsset::Accept, f2::NativeUiAsset::Back,
+            f2::NativeUiAsset::MenuSurface, f2::NativeUiAsset::Sparkle1,
+            f2::NativeUiAsset::Sparkle2, f2::NativeUiAsset::Sparkle3,
+            f2::NativeUiAsset::Sparkle4, f2::NativeUiAsset::Sparkle5,
+            f2::NativeUiAsset::Sparkle6, f2::NativeUiAsset::Sparkle7,
+            f2::NativeUiAsset::Sparkle8};
         for (const auto asset : assets) {
             const auto* source = ui_assets_.texture(asset);
             if (!source) continue;
@@ -661,10 +693,22 @@ private:
 
     void handle_input() {
         using Action = f2::NativeInputAction;
-        if (input_.pressed(Action::Up)) game_.frontend.dispatch(f2::FrontendAction::Up);
-        if (input_.pressed(Action::Down)) game_.frontend.dispatch(f2::FrontendAction::Down);
-        if (input_.pressed(Action::Accept)) game_.frontend.dispatch(f2::FrontendAction::Accept);
-        if (input_.pressed(Action::Back)) game_.frontend.dispatch(f2::FrontendAction::Back);
+        if (input_.pressed(Action::Up)) {
+            game_.frontend.dispatch(f2::FrontendAction::Up);
+            audio_.play(f2::NativeFrontendSound::Navigate);
+        }
+        if (input_.pressed(Action::Down)) {
+            game_.frontend.dispatch(f2::FrontendAction::Down);
+            audio_.play(f2::NativeFrontendSound::Navigate);
+        }
+        if (input_.pressed(Action::Accept)) {
+            game_.frontend.dispatch(f2::FrontendAction::Accept);
+            audio_.play(f2::NativeFrontendSound::Accept);
+        }
+        if (input_.pressed(Action::Back)) {
+            game_.frontend.dispatch(f2::FrontendAction::Back);
+            audio_.play(f2::NativeFrontendSound::Back);
+        }
         if (input_.pressed(Action::Skip)) game_.frontend.dispatch(f2::FrontendAction::Skip);
     }
 
@@ -700,31 +744,74 @@ private:
                          ImGuiWindowFlags_NoSavedSettings);
             auto* draw_list = ImGui::GetWindowDrawList();
             const auto& background = ui_textures_[0];
+            const float title_time = static_cast<float>(game_.frontend.state_time());
+            const auto alpha = [](float value) {
+                return static_cast<int>(std::clamp(value, 0.0f, 1.0f) * 255.0f);
+            };
+            draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(0, 0, 0, 255));
             if (background.texture) {
-                ImGui::SetCursorPos(ImVec2(0, 0));
-                ImGui::Image(static_cast<ImTextureID>(background.gpu.ptr),
-                             ImVec2(static_cast<float>(width_), static_cast<float>(height_)));
-            } else {
-                draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
+                const float fade = std::clamp((title_time - 0.72f) / 1.10f, 0.0f, 1.0f);
+                const float scale = height_ / static_cast<float>(background.height);
+                const float image_width = background.width * scale;
+                // Measured against the captured native title sequence: the
+                // panorama advances roughly 116 px every four seconds at the
+                // reference 720 px presentation height.
+                const float offset = std::fmod(title_time * 29.0f, image_width);
+                for (float x = -offset; x < static_cast<float>(width_); x += image_width) {
+                    draw_list->AddImage(static_cast<ImTextureID>(background.gpu.ptr),
+                                        ImVec2(x, 0), ImVec2(x + image_width, height_),
+                                        ImVec2(0, 0), ImVec2(1, 1),
+                                        IM_COL32(255, 255, 255, alpha(fade)));
+                }
             }
-            if (ui_textures_[1].texture) {
-                const auto logo_height = height_ * 0.25f;
-                ImGui::SetCursorPos(ImVec2((width_ - logo_height * ui_textures_[1].width /
-                                           ui_textures_[1].height) * 0.5f, height_ * 0.27f));
-                ImGui::Image(static_cast<ImTextureID>(ui_textures_[1].gpu.ptr),
-                             ImVec2(logo_height * ui_textures_[1].width / ui_textures_[1].height,
-                                    logo_height));
-            } else {
+            const float logo_fade = std::clamp((title_time - 0.86f) / 0.75f, 0.0f, 1.0f);
+            if (ui_textures_[1].texture && logo_fade > 0.0f) {
+                // This is the authored splash proportion used by the local
+                // reference implementation: one logo width per 1.5 viewport
+                // widths, with the vertical anchor measured from the native
+                // title capture.
+                const float logo_scale = width_ /
+                                         (ui_textures_[1].width * 1.6f);
+                const float logo_width = ui_textures_[1].width * logo_scale;
+                const float logo_height = ui_textures_[1].height * logo_scale;
+                const float logo_x = (width_ - logo_width) * 0.5f;
+                const float logo_y = height_ * 0.45f - logo_height * 0.5f;
+                std::array<ImTextureID, 8> sparkle_textures{};
+                for (std::size_t index = 0; index < sparkle_textures.size(); ++index) {
+                    const auto& sparkle = ui_textures_[6 + index];
+                    if (sparkle.texture && sparkle.shader_read) {
+                        sparkle_textures[index] = static_cast<ImTextureID>(sparkle.gpu.ptr);
+                    }
+                }
+                logo_sparkles_.draw(draw_list, *ui_assets_.texture(f2::NativeUiAsset::Logo),
+                                    sparkle_textures, logo_x, logo_y, logo_width, logo_height,
+                                    title_time, logo_fade);
+                draw_list->AddImage(static_cast<ImTextureID>(ui_textures_[1].gpu.ptr),
+                                    ImVec2(logo_x, logo_y), ImVec2(logo_x + logo_width,
+                                                                     logo_y + logo_height),
+                                    ImVec2(0, 0), ImVec2(1, 1),
+                                    IM_COL32(255, 255, 255, alpha(logo_fade)));
+            } else if (!ui_textures_[1].texture) {
                 draw_list->AddText(ImGui::GetFont(), 92.0f,
                                    ImVec2(width_ * 0.24f, height_ * 0.32f),
-                                   IM_COL32(255, 255, 255, 245), "FABLE II");
+                                   IM_COL32(255, 255, 255, alpha(logo_fade)), "FABLE II");
             }
             const auto prompt = input_.prompt(f2::NativeInputAction::Accept);
             const std::string prompt_text = "Press " + prompt + " to start";
             const auto prompt_size = ImGui::CalcTextSize(prompt_text.c_str());
+            const int prompt_alpha = alpha(std::clamp((title_time - 0.12f) / 0.38f, 0.0f, 1.0f));
             draw_list->AddText(ImGui::GetFont(), 26.0f,
-                               ImVec2((width_ - prompt_size.x) * 0.5f, height_ * 0.66f),
-                               IM_COL32(235, 235, 235, 235), prompt_text.c_str());
+                               ImVec2((width_ - prompt_size.x) * 0.5f, height_ * 0.56f),
+                               IM_COL32(235, 235, 235, prompt_alpha), prompt_text.c_str());
+            const int legal_alpha = alpha(std::clamp((title_time - 0.20f) / 0.45f, 0.0f, 1.0f));
+            const ImU32 legal_color = IM_COL32(242, 242, 242, legal_alpha);
+            draw_list->AddText(ImGui::GetFont(), 20.0f, ImVec2(width_ * 0.25f, height_ * 0.73f),
+                               legal_color,
+                               "\xC2\xA9 & \xE2\x84\x97 2008 Microsoft Corporation. All rights reserved. Developed by");
+            draw_list->AddText(ImGui::GetFont(), 20.0f, ImVec2(width_ * 0.25f, height_ * 0.79f),
+                               legal_color, "Lionhead Studios.");
+            draw_list->AddText(ImGui::GetFont(), 20.0f, ImVec2(width_ * 0.25f, height_ * 0.87f),
+                               legal_color, "Online Interactions Not Rated by the ESRB");
             ImGui::SetCursorPos(ImVec2(0, 0));
             if (ImGui::InvisibleButton("##title_accept", ImVec2(static_cast<float>(width_),
                                                                   static_cast<float>(height_)))) {
@@ -738,17 +825,33 @@ private:
                          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings);
             auto* draw_list = ImGui::GetWindowDrawList();
+            const auto alpha = [](float value) {
+                return static_cast<int>(std::clamp(value, 0.0f, 1.0f) * 255.0f);
+            };
             const auto& background = ui_textures_[4].texture ? ui_textures_[4] : ui_textures_[0];
             if (background.texture) {
-                ImGui::SetCursorPos(ImVec2(0, 0));
-                ImGui::Image(static_cast<ImTextureID>(background.gpu.ptr),
-                             ImVec2(static_cast<float>(width_), static_cast<float>(height_)));
+                const float scale = height_ / static_cast<float>(background.height);
+                const float image_width = background.width * scale;
+                const float offset = std::fmod(static_cast<float>(game_.frontend.state_time()) * 29.0f,
+                                               image_width);
+                for (float x = -offset; x < static_cast<float>(width_); x += image_width) {
+                    draw_list->AddImage(static_cast<ImTextureID>(background.gpu.ptr),
+                                        ImVec2(x, 0), ImVec2(x + image_width, height_));
+                }
             } else {
                 draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
                 draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_ * 0.46f, height_),
                                          IM_COL32(14, 24, 39, 255));
             }
             if (state == f2::FrontendState::MainMenu) {
+                if (ui_textures_[5].texture) {
+                    draw_list->AddImage(static_cast<ImTextureID>(ui_textures_[5].gpu.ptr),
+                                        ImVec2(0, 0), ImVec2(width_ * 0.16f, height_),
+                                        ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 245));
+                    draw_list->AddImage(static_cast<ImTextureID>(ui_textures_[5].gpu.ptr),
+                                        ImVec2(width_ * 0.84f, 0), ImVec2(width_, height_),
+                                        ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 245));
+                }
                 const float row_x = width_ * 0.16f;
                 const float row_y = height_ * 0.23f;
                 const float row_width = width_ * 0.32f;
@@ -757,18 +860,33 @@ private:
                 for (std::size_t index = 0; index < game_.frontend.menu_items().size(); ++index) {
                     const auto& item = game_.frontend.menu_items()[index];
                     const bool selected = index == game_.frontend.selected_item();
-                    const ImVec2 row_position(row_x, row_y + index * (row_height + row_gap));
+                    const float row_fade = std::clamp(
+                        (static_cast<float>(game_.frontend.state_time()) - index * 0.06f) / 0.28f,
+                        0.0f, 1.0f);
+                    const float row_slide = (1.0f - row_fade) * 32.0f;
+                    const ImVec2 row_position(row_x - row_slide,
+                                              row_y + index * (row_height + row_gap));
                     const auto window_position = ImGui::GetWindowPos();
                     const ImVec2 row_min(window_position.x + row_position.x,
                                         window_position.y + row_position.y);
                     const ImVec2 row_max(row_min.x + row_width, row_min.y + row_height);
+                    if (ui_textures_[5].texture) {
+                        draw_list->AddImage(static_cast<ImTextureID>(ui_textures_[5].gpu.ptr),
+                                            row_min, row_max, ImVec2(0, 0), ImVec2(1, 1),
+                                            IM_COL32(255, 255, 255, alpha(row_fade * 0.95f)));
+                    } else {
+                        draw_list->AddRectFilled(row_min, row_max,
+                                                 selected ? IM_COL32(60, 43, 27, alpha(row_fade))
+                                                           : IM_COL32(19, 16, 15, alpha(row_fade)),
+                                                 24.0f);
+                    }
                     draw_list->AddRectFilled(row_min, row_max,
-                                             selected ? IM_COL32(60, 43, 27, 245)
-                                                       : IM_COL32(19, 16, 15, 225),
+                                             selected ? IM_COL32(60, 43, 27, alpha(row_fade * 0.35f))
+                                                       : IM_COL32(19, 16, 15, alpha(row_fade * 0.25f)),
                                              24.0f);
                     draw_list->AddRect(row_min, row_max,
-                                       selected ? IM_COL32(223, 166, 91, 255)
-                                                : IM_COL32(139, 91, 48, 235),
+                                       selected ? IM_COL32(223, 166, 91, alpha(row_fade))
+                                                : IM_COL32(139, 91, 48, alpha(row_fade)),
                                        24.0f, 0, selected ? 3.0f : 2.0f);
                     ImGui::SetCursorPos(row_position);
                     if (ImGui::InvisibleButton(("##menu_" + item.id).c_str(),
@@ -779,8 +897,8 @@ private:
                     if (ImGui::IsItemHovered()) game_.frontend.select_menu_item(item.id);
                     draw_list->AddText(ImGui::GetFont(), 24.0f,
                                        ImVec2(row_min.x + 42.0f, row_min.y + 13.0f),
-                                       selected ? IM_COL32(255, 226, 143, 255)
-                                                : IM_COL32(226, 195, 125, 245),
+                                       selected ? IM_COL32(255, 226, 143, alpha(row_fade))
+                                                : IM_COL32(226, 195, 125, alpha(row_fade)),
                                        item.label.c_str());
                     if (selected && input_.using_controller_prompts() && ui_textures_[2].texture) {
                         ImGui::SetCursorPos(ImVec2(row_x - 47.0f, row_y + index *
@@ -889,7 +1007,9 @@ private:
     std::filesystem::path video_root_;
     std::filesystem::path ui_root_;
     f2::NativeUiAssets ui_assets_;
-    std::array<UiGpuTexture, 5> ui_textures_;
+    std::array<UiGpuTexture, 14> ui_textures_;
+    f2::NativeLogoSparkles logo_sparkles_;
+    f2::NativeFrontendAudio audio_;
     std::filesystem::path active_video_path_;
     f2::NativeVideoDecoder video_decoder_;
     f2::NativeVideoFrame video_frame_;
