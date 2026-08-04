@@ -28,6 +28,17 @@ add_executable(f2native_installer src/installer_main.cpp)
 target_link_libraries(f2native_installer PRIVATE f2native_core)
 
 if(WIN32)
+    option(F2NATIVE_ENABLE_VULKAN "Build the Vulkan native frontend" ON)
+    if(F2NATIVE_ENABLE_VULKAN)
+        find_package(Vulkan QUIET)
+        find_program(F2NATIVE_GLSLC glslc
+            HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin")
+        if(NOT Vulkan_FOUND OR NOT F2NATIVE_GLSLC)
+            message(WARNING "Vulkan SDK/glslc not found; Vulkan frontend will not be built")
+            set(F2NATIVE_ENABLE_VULKAN OFF)
+        endif()
+    endif()
+
     set(F2NATIVE_IMGUI_SOURCE "" CACHE PATH "Dear ImGui source directory")
     if(NOT F2NATIVE_IMGUI_SOURCE AND EXISTS
        "${CMAKE_CURRENT_SOURCE_DIR}/../Fable2AssetBrowser/source/build/_deps/imgui-src")
@@ -52,6 +63,11 @@ if(WIN32)
         "${F2NATIVE_IMGUI_SOURCE}/imgui_widgets.cpp"
         "${F2NATIVE_IMGUI_SOURCE}/backends/imgui_impl_win32.cpp"
         "${F2NATIVE_IMGUI_SOURCE}/backends/imgui_impl_dx12.cpp")
+    if(F2NATIVE_ENABLE_VULKAN)
+        target_sources(f2native_imgui PRIVATE
+            "${F2NATIVE_IMGUI_SOURCE}/backends/imgui_impl_vulkan.cpp")
+        target_link_libraries(f2native_imgui PRIVATE Vulkan::Vulkan)
+    endif()
     target_include_directories(f2native_imgui PUBLIC
         "${F2NATIVE_IMGUI_SOURCE}"
         "${F2NATIVE_IMGUI_SOURCE}/backends")
@@ -74,6 +90,52 @@ if(WIN32)
     target_compile_definitions(f2native_frontend PRIVATE
         WIN32_LEAN_AND_MEAN
         NOMINMAX)
+
+    if(F2NATIVE_ENABLE_VULKAN)
+        set(F2NATIVE_VULKAN_SHADER_OUTPUT_DIR
+            "${CMAKE_CURRENT_BINARY_DIR}/vulkan_shaders")
+        set(F2NATIVE_VULKAN_SHADER_OUTPUTS
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.vert.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.frag.spv")
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.vert.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.vert.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world.vert"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world.vert"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.frag.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.frag.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world.frag"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world.frag"
+            VERBATIM)
+        add_custom_target(f2native_vulkan_shaders DEPENDS ${F2NATIVE_VULKAN_SHADER_OUTPUTS})
+
+        add_executable(f2native_frontend_vulkan WIN32
+            src/native_frontend_vulkan_app.cpp
+            src/native_vulkan_world_renderer.cpp)
+        target_link_libraries(f2native_frontend_vulkan PRIVATE
+            f2native_core
+            f2native_imgui
+            Vulkan::Vulkan
+            ole32
+            shell32
+            user32)
+        target_include_directories(f2native_frontend_vulkan PRIVATE
+            "${F2NATIVE_IMGUI_SOURCE}"
+            "${F2NATIVE_IMGUI_SOURCE}/backends")
+        file(TO_CMAKE_PATH "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+             F2NATIVE_VULKAN_SHADER_DIR_DEFINE)
+        target_compile_definitions(f2native_frontend_vulkan PRIVATE
+            WIN32_LEAN_AND_MEAN
+            NOMINMAX
+            F2NATIVE_VULKAN_SHADER_DIR="${F2NATIVE_VULKAN_SHADER_DIR_DEFINE}")
+        add_dependencies(f2native_frontend_vulkan f2native_vulkan_shaders)
+    endif()
 endif()
 
 include(CTest)

@@ -2,8 +2,8 @@
 
 An unofficial native C++23 PC port and reconstruction of **Fable II**.
 
-Albion Reforged is building a real PC game runtime: native memory and streaming, a D3D12
-renderer, replaceable media, modern asset packages, and an open modding surface. The original
+Albion Reforged is building a real PC game runtime: native memory and streaming, D3D12 and Vulkan
+renderers, replaceable media, modern asset packages, and an open modding surface. The original
 Xbox 360 executable and ReXGlue recompilation remain behavioral oracles for reverse engineering
 and parity testing; they are not shipping dependencies of the native runtime.
 
@@ -16,12 +16,12 @@ native packages from that user-owned source.
 
 ## Current vertical slice
 
-The native executable currently connects:
+The native executables currently connect:
 
-`source validation -> boot -> intro sequence contract -> title -> main menu -> loading -> D3D12 world`
+`source validation -> boot -> intro sequence contract -> title -> main menu -> loading -> native world`
 
-The world renderer accepts a user-cooked `F2SCENE` package through `--scene` and has an asset-free
-procedural fallback for bring-up.
+The D3D12 and Vulkan world renderers accept the same user-cooked `F2SCENE` package through
+`--scene` and have an asset-free procedural fallback for bring-up.
 
 ## Build
 
@@ -30,6 +30,10 @@ cmake -S Fable2Native -B Fable2Native/build -DBUILD_TESTING=ON
 cmake --build Fable2Native/build --config RelWithDebInfo
 ctest --test-dir Fable2Native/build -C RelWithDebInfo --output-on-failure
 ```
+
+With the Vulkan SDK installed, configure the additional frontend with
+`-DF2NATIVE_ENABLE_VULKAN=ON`. This produces `f2native_frontend_vulkan.exe` beside the D3D12
+frontend.
 
 ## Install user-owned game data
 

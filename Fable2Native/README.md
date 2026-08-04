@@ -48,6 +48,17 @@ On Windows, launch the standalone native D3D12 frontend:
 build\RelWithDebInfo\f2native_frontend.exe
 ```
 
+The Vulkan frontend is available when the Vulkan SDK and `glslc` are installed:
+
+```powershell
+cmake -S . -B build -DF2NATIVE_ENABLE_VULKAN=ON
+cmake --build build --config RelWithDebInfo
+build\RelWithDebInfo\f2native_frontend_vulkan.exe
+```
+
+Both frontends use the same native scene package and user-selected game source. D3D12 and Vulkan
+are presentation backends for the native runtime; neither backend runs the Xbox 360 renderer.
+
 The frontend requires user-supplied game data. On first launch it opens a folder picker;
 choose the extracted Fable II game directory containing `data\dir.manifest`. The selected
 source is remembered under the user's local application data directory and can be overridden
@@ -67,8 +78,14 @@ For the current vertical-slice world handoff, pass a user-cooked scene package:
 build\RelWithDebInfo\f2native_frontend.exe --game-dir path\to\Fable2NativeGame --scene cooked\model.f2scene
 ```
 
-Selecting New Game reaches a real native D3D12 geometry pass. Without `--scene`, the app uses an
-asset-free procedural fallback so the frontend-to-world transition remains testable.
+The same scene can be viewed through Vulkan:
+
+```powershell
+build\RelWithDebInfo\f2native_frontend_vulkan.exe --game-dir path\to\Fable2NativeGame --scene cooked\model.f2scene
+```
+
+Selecting New Game reaches a real native geometry pass on either backend. Without `--scene`, the
+app uses an asset-free procedural fallback so the frontend-to-world transition remains testable.
 
 Cook the extracted startup movies into a native package with FFmpeg:
 
@@ -80,6 +97,6 @@ This produces `cooked\videos\manifest.json` plus modern MP4 assets. The runtime 
 player owns sequencing and skip behavior; the D3D12 frame decoder/presenter is the next
 frontend slice. The original Bink files remain cooker inputs only.
 
-The frontend uses D3D12 and Dear ImGui only for this first native UI bring-up. It has
-no Xenos, PM4, EDRAM, guest address space, or ReXGlue dependency. The final art/UI
-renderer will consume cooked Fable assets through the same native D3D12 layer.
+The frontends use D3D12 or Vulkan and Dear ImGui for the native UI bring-up. They have no Xenos,
+PM4, EDRAM, guest address space, or ReXGlue dependency. The final art/UI renderer will consume
+cooked Fable assets through the same backend-neutral native scene layer.
