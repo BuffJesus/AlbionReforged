@@ -2,6 +2,8 @@
 
 #include "f2/native_game.h"
 #include "f2/native_install.h"
+#include "f2/native_input.h"
+#include "f2/native_ui.h"
 #include "f2/native_video_decoder.h"
 #include "f2/native_vulkan_video_texture.h"
 #include "f2/native_vulkan_world_renderer.h"
@@ -79,6 +81,21 @@ std::optional<std::filesystem::path> command_line_path(std::wstring_view option)
     }
     LocalFree(arguments);
     return result;
+}
+
+bool command_line_flag(std::wstring_view option) {
+    int argument_count = 0;
+    LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argument_count);
+    if (!arguments) return false;
+    bool found = false;
+    for (int index = 0; index < argument_count; ++index) {
+        if (option == arguments[index]) {
+            found = true;
+            break;
+        }
+    }
+    LocalFree(arguments);
+    return found;
 }
 
 std::filesystem::path source_config_path() {
@@ -162,6 +179,20 @@ public:
             for (auto& mesh : game_.scene.meshes) mesh.material = 0;
         }
         video_root_ = command_line_path(L"--video-root").value_or(std::filesystem::path{});
+        ui_root_ = command_line_path(L"--ui-root").value_or(
+            source_->data_root / "art" / "gui" / "native_ui");
+        std::string ui_error;
+        if (!ui_assets_.load(ui_root_, ui_error) && !ui_error.empty()) {
+            MessageBoxA(window_, ui_error.c_str(), "Fable II Native - UI asset warning",
+                        MB_OK | MB_ICONWARNING);
+        }
+        input_.load_bindings(source_config_path().parent_path() / "bindings.ini");
+        if (command_line_flag(L"--skip-intro")) {
+            game_.frontend.dispatch(f2::FrontendAction::Skip);
+            if (command_line_flag(L"--start-menu")) {
+                game_.frontend.dispatch(f2::FrontendAction::Accept);
+            }
+        }
         if (!create_vulkan()) return false;
         std::string renderer_error;
         if (!world_renderer_.initialise(physical_device_, device_, command_pool_, queue_,
@@ -200,6 +231,7 @@ public:
             previous = now;
             game_.tick(delta);
             update_video();
+            input_.poll();
             handle_input();
             draw();
             if (game_.frontend.quit_requested()) PostMessageA(window_, WM_CLOSE, 0, 0);
@@ -503,11 +535,12 @@ private:
     }
 
     void handle_input() {
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true)) game_.frontend.dispatch(f2::FrontendAction::Up);
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) game_.frontend.dispatch(f2::FrontendAction::Down);
-        if (ImGui::IsKeyPressed(ImGuiKey_Enter, true)) game_.frontend.dispatch(f2::FrontendAction::Accept);
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, true)) game_.frontend.dispatch(f2::FrontendAction::Back);
-        if (ImGui::IsKeyPressed(ImGuiKey_Space, true)) game_.frontend.dispatch(f2::FrontendAction::Skip);
+        using Action = f2::NativeInputAction;
+        if (input_.pressed(Action::Up)) game_.frontend.dispatch(f2::FrontendAction::Up);
+        if (input_.pressed(Action::Down)) game_.frontend.dispatch(f2::FrontendAction::Down);
+        if (input_.pressed(Action::Accept)) game_.frontend.dispatch(f2::FrontendAction::Accept);
+        if (input_.pressed(Action::Back)) game_.frontend.dispatch(f2::FrontendAction::Back);
+        if (input_.pressed(Action::Skip)) game_.frontend.dispatch(f2::FrontendAction::Skip);
     }
 
     void update_video() {
@@ -587,6 +620,49 @@ private:
         return video_descriptor_set_ != VK_NULL_HANDLE;
     }
 
+    bool ensure_ui_texture(f2::NativeUiAsset asset, f2::NativeVulkanVideoTexture& texture,
+                           VkDescriptorSet& descriptor_set) {
+        const auto* source = ui_assets_.texture(asset);
+        if (!source) return false;
+        if (texture.is_ready() && texture.width() == source->width &&
+            texture.height() == source->height && descriptor_set != VK_NULL_HANDLE) return true;
+        if (descriptor_set != VK_NULL_HANDLE) {
+            vkDeviceWaitIdle(device_);
+            ImGui_ImplVulkan_RemoveTexture(descriptor_set);
+            descriptor_set = VK_NULL_HANDLE;
+        }
+        texture.destroy();
+        f2::NativeVideoFrame frame;
+        frame.width = source->width;
+        frame.height = source->height;
+        frame.serial = 1;
+        frame.rgba8 = source->rgba8;
+        std::string error;
+        if (!texture.initialise(physical_device_, device_, command_pool_, queue_, frame, error)) {
+            video_error_ = std::move(error);
+            return false;
+        }
+        descriptor_set = ImGui_ImplVulkan_AddTexture(
+            texture.sampler(), texture.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        if (descriptor_set == VK_NULL_HANDLE) {
+            texture.destroy();
+            video_error_ = "Vulkan could not create the ImGui UI descriptor.";
+            return false;
+        }
+        return true;
+    }
+
+    void ensure_ui_textures() {
+        ensure_ui_texture(f2::NativeUiAsset::TitleBackground, ui_background_texture_,
+                          ui_background_descriptor_set_);
+        ensure_ui_texture(f2::NativeUiAsset::MainBackground, ui_main_background_texture_,
+                          ui_main_background_descriptor_set_);
+        ensure_ui_texture(f2::NativeUiAsset::Logo, ui_logo_texture_, ui_logo_descriptor_set_);
+        ensure_ui_texture(f2::NativeUiAsset::Accept, ui_accept_texture_,
+                          ui_accept_descriptor_set_);
+        ensure_ui_texture(f2::NativeUiAsset::Back, ui_back_texture_, ui_back_descriptor_set_);
+    }
+
     void draw_ui() {
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplWin32_NewFrame();
@@ -612,11 +688,22 @@ private:
             ImGui::Begin("##title", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings);
             auto* draw_list = ImGui::GetWindowDrawList();
-            draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
-            draw_list->AddRectFilled(ImVec2(0, height_ * 0.68f), ImVec2(width_, height_),
-                                     IM_COL32(16, 28, 45, 255));
+            if (ui_background_descriptor_set_ != VK_NULL_HANDLE) {
+                ImGui::SetCursorPos(ImVec2(0, 0));
+                ImGui::Image(reinterpret_cast<ImTextureID>(ui_background_descriptor_set_),
+                             ImVec2(static_cast<float>(width_), static_cast<float>(height_)));
+            } else {
+                draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
+            }
+            if (ui_logo_descriptor_set_ != VK_NULL_HANDLE) {
+                const auto* logo = ui_assets_.texture(f2::NativeUiAsset::Logo);
+                const auto logo_height = height_ * 0.18f;
+                ImGui::SetCursorPos(ImVec2(width_ * 0.09f, height_ * 0.12f));
+                ImGui::Image(reinterpret_cast<ImTextureID>(ui_logo_descriptor_set_),
+                             ImVec2(logo_height * logo->width / logo->height, logo_height));
+            }
             ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.25f));
-            ImGui::TextUnformatted("FABLE II");
+            if (ui_logo_descriptor_set_ == VK_NULL_HANDLE) ImGui::TextUnformatted("FABLE II");
             ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.25f + 46.0f));
             ImGui::TextUnformatted("ALBION REFORGED  /  NATIVE PC EDITION");
             ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.62f));
@@ -624,7 +711,13 @@ private:
                 game_.frontend.dispatch(f2::FrontendAction::Accept);
             }
             ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.62f + 68.0f));
-            ImGui::TextUnformatted("ENTER  /  START");
+            if (input_.using_controller_prompts() && ui_accept_descriptor_set_ != VK_NULL_HANDLE) {
+                ImGui::Image(reinterpret_cast<ImTextureID>(ui_accept_descriptor_set_), ImVec2(28, 28));
+                ImGui::SameLine();
+                ImGui::TextUnformatted("A  /  START");
+            } else {
+                ImGui::Text("%s  /  START", input_.prompt(f2::NativeInputAction::Accept).c_str());
+            }
             ImGui::End();
         } else if (state == f2::FrontendState::MainMenu || state == f2::FrontendState::Options) {
             ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -633,12 +726,20 @@ private:
                          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings);
             auto* draw_list = ImGui::GetWindowDrawList();
-            draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
-            draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_ * 0.46f, height_),
-                                     IM_COL32(14, 24, 39, 255));
+            const auto background_descriptor = ui_main_background_descriptor_set_ != VK_NULL_HANDLE
+                ? ui_main_background_descriptor_set_ : ui_background_descriptor_set_;
+            if (background_descriptor != VK_NULL_HANDLE) {
+                ImGui::SetCursorPos(ImVec2(0, 0));
+                ImGui::Image(reinterpret_cast<ImTextureID>(background_descriptor),
+                             ImVec2(static_cast<float>(width_), static_cast<float>(height_)));
+            } else {
+                draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
+                draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_ * 0.46f, height_),
+                                         IM_COL32(14, 24, 39, 255));
+            }
             if (state == f2::FrontendState::MainMenu) {
                 ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.10f));
-                ImGui::TextUnformatted("FABLE II");
+                if (ui_logo_descriptor_set_ == VK_NULL_HANDLE) ImGui::TextUnformatted("FABLE II");
                 ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.10f + 34.0f));
                 ImGui::TextUnformatted("MAIN MENU");
                 ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.24f));
@@ -653,7 +754,11 @@ private:
                     ImGui::Spacing();
                 }
                 ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ - 54.0f));
-                ImGui::TextUnformatted("ARROWS  MOVE     ENTER  SELECT     ESC  BACK");
+                ImGui::Text("%s/%s  MOVE     %s  SELECT     %s  BACK",
+                            input_.prompt(f2::NativeInputAction::Up).c_str(),
+                            input_.prompt(f2::NativeInputAction::Down).c_str(),
+                            input_.prompt(f2::NativeInputAction::Accept).c_str(),
+                            input_.prompt(f2::NativeInputAction::Back).c_str());
             } else {
                 ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.10f));
                 ImGui::TextUnformatted("Native PC options");
@@ -683,6 +788,8 @@ private:
 
     void draw() {
         if (game_.frontend.state() == f2::FrontendState::IntroVideo) ensure_video_texture();
+        if (game_.frontend.state() == f2::FrontendState::Title ||
+            game_.frontend.state() == f2::FrontendState::MainMenu) ensure_ui_textures();
         draw_ui();
         if (framebuffer_resized_) recreate_swapchain();
         vkWaitForFences(device_, 1, &in_flight_[current_frame_], VK_TRUE, UINT64_MAX);
@@ -769,11 +876,36 @@ private:
                 ImGui_ImplVulkan_RemoveTexture(video_descriptor_set_);
                 video_descriptor_set_ = VK_NULL_HANDLE;
             }
+            if (ui_background_descriptor_set_ != VK_NULL_HANDLE) {
+                ImGui_ImplVulkan_RemoveTexture(ui_background_descriptor_set_);
+                ui_background_descriptor_set_ = VK_NULL_HANDLE;
+            }
+            if (ui_main_background_descriptor_set_ != VK_NULL_HANDLE) {
+                ImGui_ImplVulkan_RemoveTexture(ui_main_background_descriptor_set_);
+                ui_main_background_descriptor_set_ = VK_NULL_HANDLE;
+            }
+            if (ui_logo_descriptor_set_ != VK_NULL_HANDLE) {
+                ImGui_ImplVulkan_RemoveTexture(ui_logo_descriptor_set_);
+                ui_logo_descriptor_set_ = VK_NULL_HANDLE;
+            }
+            if (ui_accept_descriptor_set_ != VK_NULL_HANDLE) {
+                ImGui_ImplVulkan_RemoveTexture(ui_accept_descriptor_set_);
+                ui_accept_descriptor_set_ = VK_NULL_HANDLE;
+            }
+            if (ui_back_descriptor_set_ != VK_NULL_HANDLE) {
+                ImGui_ImplVulkan_RemoveTexture(ui_back_descriptor_set_);
+                ui_back_descriptor_set_ = VK_NULL_HANDLE;
+            }
             ImGui_ImplVulkan_Shutdown();
             ImGui_ImplWin32_Shutdown();
             ImGui::DestroyContext();
             imgui_context_ = false;
         }
+        ui_background_texture_.destroy();
+        ui_main_background_texture_.destroy();
+        ui_logo_texture_.destroy();
+        ui_accept_texture_.destroy();
+        ui_back_texture_.destroy();
         video_texture_.destroy();
         video_decoder_.close();
         world_renderer_.destroy();
@@ -810,16 +942,29 @@ private:
     bool video_runtime_started_ = false;
     std::optional<f2::GameSource> source_;
     std::filesystem::path video_root_;
+    std::filesystem::path ui_root_;
+    f2::NativeUiAssets ui_assets_;
     std::filesystem::path active_video_path_;
     f2::NativeVideoDecoder video_decoder_;
     f2::NativeVideoFrame video_frame_;
     f2::NativeVulkanVideoTexture video_texture_;
     VkDescriptorSet video_descriptor_set_ = VK_NULL_HANDLE;
+    f2::NativeVulkanVideoTexture ui_background_texture_;
+    f2::NativeVulkanVideoTexture ui_main_background_texture_;
+    f2::NativeVulkanVideoTexture ui_logo_texture_;
+    f2::NativeVulkanVideoTexture ui_accept_texture_;
+    f2::NativeVulkanVideoTexture ui_back_texture_;
+    VkDescriptorSet ui_background_descriptor_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet ui_main_background_descriptor_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet ui_logo_descriptor_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet ui_accept_descriptor_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet ui_back_descriptor_set_ = VK_NULL_HANDLE;
     std::uint64_t uploaded_video_serial_ = 0;
     double video_next_frame_time_ = 0.0;
     std::string video_error_;
     f2::NativeVulkanWorldRenderer world_renderer_;
     f2::NativeGame game_;
+    f2::NativeInputRouter input_;
     VkInstance instance_ = VK_NULL_HANDLE;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
     VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;

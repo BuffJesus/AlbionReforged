@@ -20,9 +20,26 @@ The native executables currently connect:
 
 `source validation -> boot -> intro sequence contract -> title -> main menu -> loading -> native world`
 
-The title and main menu are now full-screen native UI with keyboard and mouse selection. Frontend
-and gameplay state advances on a fixed 60 Hz simulation clock, independent of render FPS; video
-presentation is paced from each decoded movie's frame rate.
+The title and main menu are now full-screen native UI with keyboard, mouse, and XInput controller
+selection. Prompt text follows the last input device and the user's local keyboard bindings.
+Frontend and gameplay state advances on a fixed 60 Hz simulation clock, independent of render FPS;
+video presentation is paced from each decoded movie's frame rate.
+
+The frontends can also consume a user-local `ui_manifest.ini` containing DDS exports of the real
+Fable II front-end textures. The manifest is deliberately outside source control; the runtime
+loads it through `--ui-root` and falls back to the asset-free layout when it is absent:
+
+```ini
+title_background=title_background.dds
+main_background=main_background.dds
+logo=logo.dds
+button_accept=button_accept.dds
+button_back=button_back.dds
+```
+
+For example, place that manifest and the user-cooked textures in
+`%LOCALAPPDATA%\Fable2Native\ui` and launch with `--ui-root %LOCALAPPDATA%\Fable2Native\ui`.
+No original TEX, BNK, DDS, or PNG files are included in this repository.
 
 The D3D12 and Vulkan world renderers accept the same user-cooked `F2SCENE` package through
 `--scene`, bind albedo textures per material, can consume a user-owned DXT1/DXT5 DDS through
@@ -51,6 +68,9 @@ explicitly:
 Fable2Native\build\RelWithDebInfo\f2native_frontend.exe `
   --game-dir path\to\extracted\Fable2
 ```
+
+For fast UI bring-up, `--skip-intro` jumps to the title screen and `--start-menu` continues to
+the main menu after skipping the intro.
 
 For an Xbox 360 ISO backup:
 
@@ -87,6 +107,16 @@ Fable2Native\build\RelWithDebInfo\f2native_frontend.exe `
 Use `f2native_frontend_vulkan.exe` in the final command to preview the same frames through Vulkan.
 The decoded media stays in the user-selected/cooker output directory and is ignored by source
 control.
+
+Keyboard bindings are read from `%LOCALAPPDATA%\Fable2Native\bindings.ini`:
+
+```ini
+accept=Enter
+back=Escape
+up=Up
+down=Down
+skip=Space
+```
 
 ## Repository layout
 

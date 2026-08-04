@@ -1,5 +1,7 @@
 #include "f2/native_game.h"
 #include "f2/native_install.h"
+#include "f2/native_input.h"
+#include "f2/native_ui.h"
 #include "f2/native_video_decoder.h"
 #include "f2/native_world_renderer.h"
 
@@ -33,11 +35,26 @@ namespace {
 
 constexpr UINT kFrameCount = 2;
 constexpr DXGI_FORMAT kBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+constexpr UINT kUiTextureCount = 6;
 
 struct FrameContext {
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<ID3D12Resource> render_target;
     D3D12_CPU_DESCRIPTOR_HANDLE rtv{};
+};
+
+struct UiGpuTexture {
+    ComPtr<ID3D12Resource> texture;
+    ComPtr<ID3D12Resource> upload;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT row_count = 0;
+    UINT64 row_size = 0;
+    UINT64 upload_size = 0;
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu{};
+    UINT descriptor_index = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    bool shader_read = false;
 };
 
 std::optional<std::filesystem::path> show_source_picker(HWND owner, bool pick_iso) {
@@ -85,6 +102,21 @@ std::optional<std::filesystem::path> command_line_path(std::wstring_view option)
     }
     LocalFree(arguments);
     return result;
+}
+
+bool command_line_flag(std::wstring_view option) {
+    int argument_count = 0;
+    LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argument_count);
+    if (!arguments) return false;
+    bool found = false;
+    for (int index = 0; index < argument_count; ++index) {
+        if (option == arguments[index]) {
+            found = true;
+            break;
+        }
+    }
+    LocalFree(arguments);
+    return found;
 }
 
 std::filesystem::path source_config_path() {
@@ -161,6 +193,20 @@ public:
             for (auto& mesh : game_.scene.meshes) mesh.material = 0;
         }
         video_root_ = command_line_path(L"--video-root").value_or(std::filesystem::path{});
+        ui_root_ = command_line_path(L"--ui-root").value_or(
+            source_->data_root / "art" / "gui" / "native_ui");
+        std::string ui_error;
+        if (!ui_assets_.load(ui_root_, ui_error) && !ui_error.empty()) {
+            MessageBoxA(window_, ui_error.c_str(), "Fable II Native - UI asset warning",
+                        MB_OK | MB_ICONWARNING);
+        }
+        input_.load_bindings(source_config_path().parent_path() / "bindings.ini");
+        if (command_line_flag(L"--skip-intro")) {
+            game_.frontend.dispatch(f2::FrontendAction::Skip);
+            if (command_line_flag(L"--start-menu")) {
+                game_.frontend.dispatch(f2::FrontendAction::Accept);
+            }
+        }
         if (com_initialized) CoUninitialize();
         if (!create_device()) return false;
         std::string renderer_error;
@@ -208,6 +254,7 @@ public:
             previous = now;
             game_.tick(delta);
             update_video();
+            input_.poll();
             handle_input();
             draw();
             if (game_.frontend.quit_requested()) PostMessageA(window_, WM_CLOSE, 0, 0);
@@ -320,13 +367,13 @@ private:
         rtv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (FAILED(device_->CreateDescriptorHeap(&rtv_desc, IID_PPV_ARGS(&rtv_heap_)))) return false;
         D3D12_DESCRIPTOR_HEAP_DESC srv_desc{};
-        srv_desc.NumDescriptors = f2::NativeWorldRenderer::kMaxMaterialTextures + 2;
+        srv_desc.NumDescriptors = f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount;
         srv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         srv_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device_->CreateDescriptorHeap(&srv_desc, IID_PPV_ARGS(&descriptor_heap_)))) return false;
         descriptor_stride_ = device_->GetDescriptorHandleIncrementSize(
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        video_descriptor_index_ = f2::NativeWorldRenderer::kMaxMaterialTextures + 1;
+        video_descriptor_index_ = f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount - 1;
 
         rtv_stride_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         auto handle = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
@@ -458,6 +505,120 @@ private:
         return true;
     }
 
+    static std::size_t ui_slot(f2::NativeUiAsset asset) {
+        switch (asset) {
+        case f2::NativeUiAsset::TitleBackground: return 0;
+        case f2::NativeUiAsset::Logo: return 1;
+        case f2::NativeUiAsset::Accept: return 2;
+        case f2::NativeUiAsset::Back: return 3;
+        case f2::NativeUiAsset::MainBackground: return 4;
+        default: return 0;
+        }
+    }
+
+    bool ensure_ui_texture(f2::NativeUiAsset asset) {
+        const auto* source = ui_assets_.texture(asset);
+        if (!source) return false;
+        auto& target = ui_textures_[ui_slot(asset)];
+        if (target.texture && target.width == source->width && target.height == source->height) {
+            return true;
+        }
+        wait_for_gpu();
+        target = {};
+        target.width = source->width;
+        target.height = source->height;
+        target.descriptor_index = f2::NativeWorldRenderer::kMaxMaterialTextures +
+                                  static_cast<UINT>(ui_slot(asset));
+        D3D12_RESOURCE_DESC description{};
+        description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        description.Width = source->width;
+        description.Height = source->height;
+        description.DepthOrArraySize = 1;
+        description.MipLevels = 1;
+        description.Format = kBackBufferFormat;
+        description.SampleDesc.Count = 1;
+        description.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        D3D12_HEAP_PROPERTIES default_heap{};
+        default_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        if (FAILED(device_->CreateCommittedResource(
+                &default_heap, D3D12_HEAP_FLAG_NONE, &description,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                IID_PPV_ARGS(&target.texture)))) return false;
+        device_->GetCopyableFootprints(&description, 0, 1, 0, &target.footprint,
+                                       &target.row_count, &target.row_size, &target.upload_size);
+        D3D12_RESOURCE_DESC upload_description{};
+        upload_description.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        upload_description.Width = target.upload_size;
+        upload_description.Height = 1;
+        upload_description.DepthOrArraySize = 1;
+        upload_description.MipLevels = 1;
+        upload_description.SampleDesc.Count = 1;
+        upload_description.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        D3D12_HEAP_PROPERTIES upload_heap{};
+        upload_heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        if (FAILED(device_->CreateCommittedResource(
+                &upload_heap, D3D12_HEAP_FLAG_NONE, &upload_description,
+                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                IID_PPV_ARGS(&target.upload)))) return false;
+        auto cpu = descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
+        cpu.ptr += static_cast<std::size_t>(target.descriptor_index) * descriptor_stride_;
+        D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+        view.Format = kBackBufferFormat;
+        view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        view.Texture2D.MipLevels = 1;
+        device_->CreateShaderResourceView(target.texture.Get(), &view, cpu);
+        target.gpu = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
+        target.gpu.ptr += static_cast<std::size_t>(target.descriptor_index) * descriptor_stride_;
+        return true;
+    }
+
+    void ensure_ui_textures() {
+        ensure_ui_texture(f2::NativeUiAsset::TitleBackground);
+        ensure_ui_texture(f2::NativeUiAsset::MainBackground);
+        ensure_ui_texture(f2::NativeUiAsset::Logo);
+        ensure_ui_texture(f2::NativeUiAsset::Accept);
+        ensure_ui_texture(f2::NativeUiAsset::Back);
+    }
+
+    void upload_ui_textures(ID3D12GraphicsCommandList* command_list) {
+        const std::array<f2::NativeUiAsset, 5> assets = {
+            f2::NativeUiAsset::TitleBackground, f2::NativeUiAsset::MainBackground,
+            f2::NativeUiAsset::Logo, f2::NativeUiAsset::Accept, f2::NativeUiAsset::Back};
+        for (const auto asset : assets) {
+            const auto* source = ui_assets_.texture(asset);
+            if (!source) continue;
+            auto& target = ui_textures_[ui_slot(asset)];
+            if (!target.texture || target.shader_read) continue;
+            void* mapped = nullptr;
+            if (FAILED(target.upload->Map(0, nullptr, &mapped))) continue;
+            auto* destination = static_cast<std::uint8_t*>(mapped) + target.footprint.Offset;
+            const auto source_row_pitch = static_cast<std::size_t>(source->width) * 4;
+            for (std::uint32_t row = 0; row < source->height; ++row) {
+                std::memcpy(destination + row * target.footprint.Footprint.RowPitch,
+                            source->rgba8.data() + row * source_row_pitch, source_row_pitch);
+            }
+            target.upload->Unmap(0, nullptr);
+            D3D12_TEXTURE_COPY_LOCATION destination_location{};
+            destination_location.pResource = target.texture.Get();
+            destination_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            D3D12_TEXTURE_COPY_LOCATION source_location{};
+            source_location.pResource = target.upload.Get();
+            source_location.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            source_location.PlacedFootprint = target.footprint;
+            command_list->CopyTextureRegion(&destination_location, 0, 0, 0,
+                                             &source_location, nullptr);
+            D3D12_RESOURCE_BARRIER barrier{};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Transition.pResource = target.texture.Get();
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            command_list->ResourceBarrier(1, &barrier);
+            target.shader_read = true;
+        }
+    }
+
     void upload_video_frame(ID3D12GraphicsCommandList* command_list) {
         if (!video_texture_ || video_frame_.serial == 0 ||
             video_frame_.serial == uploaded_video_serial_) return;
@@ -499,18 +660,21 @@ private:
     }
 
     void handle_input() {
-        auto& io = ImGui::GetIO();
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true)) game_.frontend.dispatch(f2::FrontendAction::Up);
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) game_.frontend.dispatch(f2::FrontendAction::Down);
-        if (ImGui::IsKeyPressed(ImGuiKey_Enter, true)) game_.frontend.dispatch(f2::FrontendAction::Accept);
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, true)) game_.frontend.dispatch(f2::FrontendAction::Back);
-        if (ImGui::IsKeyPressed(ImGuiKey_Space, true)) game_.frontend.dispatch(f2::FrontendAction::Skip);
-        (void)io;
+        using Action = f2::NativeInputAction;
+        if (input_.pressed(Action::Up)) game_.frontend.dispatch(f2::FrontendAction::Up);
+        if (input_.pressed(Action::Down)) game_.frontend.dispatch(f2::FrontendAction::Down);
+        if (input_.pressed(Action::Accept)) game_.frontend.dispatch(f2::FrontendAction::Accept);
+        if (input_.pressed(Action::Back)) game_.frontend.dispatch(f2::FrontendAction::Back);
+        if (input_.pressed(Action::Skip)) game_.frontend.dispatch(f2::FrontendAction::Skip);
     }
 
     void draw() {
         if (game_.frontend.state() == f2::FrontendState::IntroVideo && video_frame_.serial != 0) {
             ensure_video_texture(video_frame_);
+        }
+        if (game_.frontend.state() == f2::FrontendState::Title ||
+            game_.frontend.state() == f2::FrontendState::MainMenu) {
+            ensure_ui_textures();
         }
         ImGui_ImplDX12_NewFrame();
         ImGui_ImplWin32_NewFrame();
@@ -535,11 +699,23 @@ private:
             ImGui::Begin("##title", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings);
             auto* draw_list = ImGui::GetWindowDrawList();
-            draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
-            draw_list->AddRectFilled(ImVec2(0, height_ * 0.68f), ImVec2(width_, height_),
-                                     IM_COL32(16, 28, 45, 255));
+            const auto& background = ui_textures_[0];
+            if (background.texture) {
+                ImGui::SetCursorPos(ImVec2(0, 0));
+                ImGui::Image(static_cast<ImTextureID>(background.gpu.ptr),
+                             ImVec2(static_cast<float>(width_), static_cast<float>(height_)));
+            } else {
+                draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
+            }
+            if (ui_textures_[1].texture) {
+                ImGui::SetCursorPos(ImVec2(width_ * 0.09f, height_ * 0.12f));
+                const auto logo_height = height_ * 0.18f;
+                ImGui::Image(static_cast<ImTextureID>(ui_textures_[1].gpu.ptr),
+                             ImVec2(logo_height * ui_textures_[1].width / ui_textures_[1].height,
+                                    logo_height));
+            }
             ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.25f));
-            ImGui::TextUnformatted("FABLE II");
+            if (!ui_textures_[1].texture) ImGui::TextUnformatted("FABLE II");
             ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.25f + 46.0f));
             ImGui::TextUnformatted("ALBION REFORGED  /  NATIVE PC EDITION");
             ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.62f));
@@ -547,7 +723,13 @@ private:
                 game_.frontend.dispatch(f2::FrontendAction::Accept);
             }
             ImGui::SetCursorPos(ImVec2(width_ * 0.12f, height_ * 0.62f + 68.0f));
-            ImGui::TextUnformatted("ENTER  /  START");
+            if (input_.using_controller_prompts() && ui_textures_[2].texture) {
+                ImGui::Image(static_cast<ImTextureID>(ui_textures_[2].gpu.ptr), ImVec2(28, 28));
+                ImGui::SameLine();
+                ImGui::TextUnformatted("A  /  START");
+            } else {
+                ImGui::Text("%s  /  START", input_.prompt(f2::NativeInputAction::Accept).c_str());
+            }
             ImGui::End();
         } else if (state == f2::FrontendState::MainMenu || state == f2::FrontendState::Options) {
             ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -556,12 +738,19 @@ private:
                          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings);
             auto* draw_list = ImGui::GetWindowDrawList();
-            draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
-            draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_ * 0.46f, height_),
-                                     IM_COL32(14, 24, 39, 255));
+            const auto& background = ui_textures_[4].texture ? ui_textures_[4] : ui_textures_[0];
+            if (background.texture) {
+                ImGui::SetCursorPos(ImVec2(0, 0));
+                ImGui::Image(static_cast<ImTextureID>(background.gpu.ptr),
+                             ImVec2(static_cast<float>(width_), static_cast<float>(height_)));
+            } else {
+                draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_, height_), IM_COL32(8, 12, 22, 255));
+                draw_list->AddRectFilled(ImVec2(0, 0), ImVec2(width_ * 0.46f, height_),
+                                         IM_COL32(14, 24, 39, 255));
+            }
             if (state == f2::FrontendState::MainMenu) {
                 ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.10f));
-                ImGui::TextUnformatted("FABLE II");
+                if (!ui_textures_[1].texture) ImGui::TextUnformatted("FABLE II");
                 ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.10f + 34.0f));
                 ImGui::TextUnformatted("MAIN MENU");
                 ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.24f));
@@ -576,7 +765,11 @@ private:
                     ImGui::Spacing();
                 }
                 ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ - 54.0f));
-                ImGui::TextUnformatted("ARROWS  MOVE     ENTER  SELECT     ESC  BACK");
+                ImGui::Text("%s/%s  MOVE     %s  SELECT     %s  BACK",
+                            input_.prompt(f2::NativeInputAction::Up).c_str(),
+                            input_.prompt(f2::NativeInputAction::Down).c_str(),
+                            input_.prompt(f2::NativeInputAction::Accept).c_str(),
+                            input_.prompt(f2::NativeInputAction::Back).c_str());
             } else {
                 ImGui::SetCursorPos(ImVec2(width_ * 0.08f, height_ * 0.10f));
                 ImGui::TextUnformatted("Native PC options");
@@ -610,6 +803,7 @@ private:
         frame.allocator->Reset();
         command_list_->Reset(frame.allocator.Get(), nullptr);
         upload_video_frame(command_list_.Get());
+        upload_ui_textures(command_list_.Get());
         D3D12_RESOURCE_BARRIER barrier{};
         barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         barrier.Transition.pResource = frame.render_target.Get();
@@ -669,6 +863,9 @@ private:
     HANDLE fence_event_ = nullptr;
     std::optional<f2::GameSource> source_;
     std::filesystem::path video_root_;
+    std::filesystem::path ui_root_;
+    f2::NativeUiAssets ui_assets_;
+    std::array<UiGpuTexture, 5> ui_textures_;
     std::filesystem::path active_video_path_;
     f2::NativeVideoDecoder video_decoder_;
     f2::NativeVideoFrame video_frame_;
@@ -688,6 +885,7 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE video_gpu_handle_{};
     f2::NativeWorldRenderer world_renderer_;
     f2::NativeGame game_;
+    f2::NativeInputRouter input_;
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12CommandQueue> queue_;
     ComPtr<IDXGISwapChain4> swap_chain_;

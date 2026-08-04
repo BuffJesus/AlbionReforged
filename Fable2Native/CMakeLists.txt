@@ -10,11 +10,17 @@ add_library(f2native_core STATIC
     src/native_game.cpp
     src/native_frontend.cpp
     src/native_install.cpp
+    src/native_input.cpp
+    src/native_ui.cpp
     src/native_iso.cpp
     src/native_video.cpp
 )
 
 target_include_directories(f2native_core PUBLIC include)
+
+if(WIN32)
+    target_link_libraries(f2native_core PUBLIC xinput9_1_0)
+endif()
 
 if(WIN32)
     add_library(f2native_video STATIC src/native_video_decoder.cpp)
@@ -94,6 +100,7 @@ if(WIN32)
         ole32
         shell32
         user32)
+    target_link_libraries(f2native_frontend PRIVATE xinput9_1_0)
     target_include_directories(f2native_frontend PRIVATE
         "${F2NATIVE_IMGUI_SOURCE}"
         "${F2NATIVE_IMGUI_SOURCE}/backends")
@@ -137,6 +144,7 @@ if(WIN32)
             ole32
             shell32
             user32)
+        target_link_libraries(f2native_frontend_vulkan PRIVATE xinput9_1_0)
         target_include_directories(f2native_frontend_vulkan PRIVATE
             "${F2NATIVE_IMGUI_SOURCE}"
             "${F2NATIVE_IMGUI_SOURCE}/backends")

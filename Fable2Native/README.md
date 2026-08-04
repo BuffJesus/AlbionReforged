@@ -56,6 +56,9 @@ On Windows, launch the standalone native D3D12 frontend:
 build\RelWithDebInfo\f2native_frontend.exe
 ```
 
+Use `--skip-intro` for the title screen or add `--start-menu` to begin directly at the main menu
+while working on front-end art and input.
+
 The Vulkan frontend is available when the Vulkan SDK and `glslc` are installed:
 
 ```powershell
@@ -143,3 +146,28 @@ The original Bink files and the cooked MP4 files remain user-local runtime/cooke
 The frontends use D3D12 or Vulkan and Dear ImGui for the native UI bring-up. They have no Xenos,
 PM4, EDRAM, guest address space, or ReXGlue dependency. The final art/UI renderer will consume
 cooked Fable assets through the same backend-neutral native scene layer.
+
+The title and main-menu layer accepts keyboard, mouse, and XInput controller input. Prompt labels
+follow the last device used, and keyboard labels follow `%LOCALAPPDATA%\Fable2Native\bindings.ini`:
+
+```ini
+accept=Enter
+back=Escape
+up=Up
+down=Down
+skip=Space
+```
+
+Real front-end art is a user-local runtime input. Export/cook the desired Fable II DDS textures
+into a directory with this `ui_manifest.ini` (the repository ships no art):
+
+```ini
+title_background=title_background.dds
+main_background=main_background.dds
+logo=logo.dds
+button_accept=button_accept.dds
+button_back=button_back.dds
+```
+
+Launch either frontend with `--ui-root path\to\cooked-ui`. Missing UI files use the procedural
+bring-up layout, so the runtime remains testable before the full front-end cooker is complete.

@@ -1,6 +1,7 @@
 #include "f2/native_game.h"
 #include "f2/native_install.h"
 #include "f2/native_texture.h"
+#include "f2/native_ui.h"
 
 #include <cassert>
 #include <array>
@@ -27,6 +28,18 @@ int main() {
     assert(f2::decode_dds_rgba8(dxt1, decoded_texture, texture_error));
     assert(decoded_texture.width == 4 && decoded_texture.height == 4);
     assert(decoded_texture.rgba8.size() == 64);
+
+    const auto ui_root = std::filesystem::temp_directory_path() / "f2native_ui_test";
+    std::filesystem::create_directories(ui_root);
+    std::ofstream(ui_root / "title_background.dds", std::ios::binary)
+        .write(reinterpret_cast<const char*>(dxt1.data()), static_cast<std::streamsize>(dxt1.size()));
+    std::ofstream(ui_root / "ui_manifest.ini") << "title_background=title_background.dds\n";
+    f2::NativeUiAssets ui_assets;
+    std::string ui_error;
+    assert(ui_assets.load(ui_root, ui_error));
+    assert(ui_assets.has(f2::NativeUiAsset::TitleBackground));
+    assert(ui_assets.texture(f2::NativeUiAsset::TitleBackground)->width == 4);
+    std::filesystem::remove_all(ui_root);
 
     const auto path = std::filesystem::temp_directory_path() / "f2native_core_test.f2scene";
     {
