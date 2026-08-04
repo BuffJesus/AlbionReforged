@@ -32,7 +32,7 @@ int main() {
     {
         std::ofstream out(path);
         out << "F2SCENE 1\n"
-            << "material stone 0.7 0.7 0.7 1\n"
+            << "material stone 0.7 0.7 0.7 1 albedo=pubgames/common/bar_focus.dds\n"
             << "mesh floor 3 3 0\n"
             << "vertex 0 0 0 0 1 0 0 0\n"
             << "vertex 1 0 0 0 1 0 1 0\n"
@@ -46,6 +46,7 @@ int main() {
     assert(game.load_scene(path, error));
     assert(game.scene.meshes.size() == 1);
     assert(game.scene.instances.size() == 1);
+    assert(game.scene.materials[0].albedo == "pubgames/common/bar_focus.dds");
     game.tick(1.0 / 30.0);
     assert(game.elapsed_seconds > 0.0);
     game.tick(0.5);

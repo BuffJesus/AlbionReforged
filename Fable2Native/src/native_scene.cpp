@@ -83,7 +83,23 @@ bool load_native_scene(const std::filesystem::path& path,
                 return fail(&error, "invalid material at line " + std::to_string(line_number));
             }
             // Texture paths are optional so older F2SCENE packages remain valid.
-            line >> material.albedo >> material.normal >> material.material;
+            // New cookers emit explicit key=value tokens to keep the text format
+            // extensible without making empty fields positional.
+            std::string option;
+            while (line >> option) {
+                const auto separator = option.find('=');
+                if (separator == std::string::npos) {
+                    return fail(&error, "invalid material option at line " +
+                                          std::to_string(line_number));
+                }
+                const auto key = option.substr(0, separator);
+                const auto value = option.substr(separator + 1);
+                if (key == "albedo") material.albedo = value;
+                else if (key == "normal") material.normal = value;
+                else if (key == "material") material.material = value;
+                else return fail(&error, "unknown material option '" + key + "' at line " +
+                                 std::to_string(line_number));
+            }
             parsed.materials.push_back(std::move(material));
         } else if (opcode == "mesh") {
             NativeMesh mesh;

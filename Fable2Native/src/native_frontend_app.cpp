@@ -424,6 +424,9 @@ private:
             ImGui::Text("Meshes: %zu  Instances: %zu", game_.scene.meshes.size(),
                         game_.scene.instances.size());
             ImGui::TextUnformatted("Geometry comes from a user-cooked F2SCENE package when supplied.");
+            if (!game_.scene.materials.empty() && !game_.scene.materials[0].albedo.empty()) {
+                ImGui::Text("Albedo: %s", game_.scene.materials[0].albedo.c_str());
+            }
             ImGui::End();
         }
 

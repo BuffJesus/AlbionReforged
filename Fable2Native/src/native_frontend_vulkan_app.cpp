@@ -553,6 +553,9 @@ private:
             ImGui::TextUnformatted("Native Vulkan world renderer active.");
             ImGui::Text("Meshes: %zu  Instances: %zu", game_.scene.meshes.size(), game_.scene.instances.size());
             if (source_) ImGui::Text("Source: %s", source_->root.string().c_str());
+            if (!game_.scene.materials.empty() && !game_.scene.materials[0].albedo.empty()) {
+                ImGui::Text("Albedo: %s", game_.scene.materials[0].albedo.c_str());
+            }
             ImGui::TextUnformatted("Geometry comes from a user-owned F2SCENE package when supplied.");
             ImGui::End();
         }

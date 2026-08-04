@@ -27,6 +27,14 @@ index 0 1 2
 instance terrain 0 0 0 0 0 0 1
 ```
 
+Cooked materials may append explicit texture references:
+
+```text
+material stone 0.7 0.7 0.7 1 albedo=pubgames/common/bar_focus.dds
+```
+
+The paths resolve against the selected source's `data` directory at runtime.
+
 This is deliberately small and temporary. The next cooker milestone replaces the
 text transport with a versioned binary package produced from real Fable II data.
 
@@ -37,10 +45,10 @@ python tools\cook_mdl.py path\to\model.mdl cooked\model.f2scene
 build\RelWithDebInfo\f2native_probe.exe cooked\model.f2scene
 ```
 
-This first bridge intentionally cooks geometry and flat materials only. Texture
-dependencies, level placement, terrain, animation, and streaming are the next data
-layer; they will be added to the package rather than reintroduced through 360 GPU
-or memory emulation.
+This first bridge cooks geometry, UVs, and the MDL's diffuse/normal/specular texture
+references. Texture decoding currently covers the local DXT1/DXT5 DDS set; level placement,
+terrain, animation, and streaming are the next data layer rather than 360 GPU or memory
+emulation.
 
 On Windows, launch the standalone native D3D12 frontend:
 

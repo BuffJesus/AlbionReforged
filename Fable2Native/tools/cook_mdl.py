@@ -38,6 +38,11 @@ def add_normals(positions: list[float], indices: list[int]) -> list[float]:
     return normals
 
 
+def texture_token(value: str) -> str:
+    """Keep source texture names portable in the whitespace-delimited package."""
+    return value.replace("\\", "/").replace(" ", "_")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mdl", type=Path, help="exported/glued Fable II .mdl")
@@ -61,7 +66,15 @@ def main() -> int:
         out.write("# Native package prototype generated from one MDL\n")
         out.write("F2SCENE 1\n")
         for material_index, geom in enumerate(geoms):
-            out.write(f"material mat_{material_index} 0.72 0.72 0.72 1\n")
+            options = []
+            if getattr(geom, "diffuse", ""):
+                options.append(f"albedo={texture_token(geom.diffuse)}")
+            if getattr(geom, "normal_tex", ""):
+                options.append(f"normal={texture_token(geom.normal_tex)}")
+            if getattr(geom, "specular_tex", ""):
+                options.append(f"material={texture_token(geom.specular_tex)}")
+            suffix = (" " + " ".join(options)) if options else ""
+            out.write(f"material mat_{material_index} 0.72 0.72 0.72 1{suffix}\n")
         for mesh_index, geom in enumerate(geoms):
             positions = geom.positions
             normals = geom.normals or add_normals(positions, geom.indices)
