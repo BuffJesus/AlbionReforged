@@ -15,6 +15,18 @@ namespace f2 {
 // effect attached to whichever logo the selected game data provides.
 class NativeLogoSparkles {
 public:
+    // FXGUI_Logomain_Ambient uses the same authored Fable II mask as the
+    // white logo, but renders it behind the logo with a blue additive-looking
+    // falloff. The mask is supplied by the selected user's UI asset root.
+    void draw_ambient(ImDrawList* draw_list,
+                      ImTextureID logo_texture,
+                      float x,
+                      float y,
+                      float width,
+                      float height,
+                      float time,
+                      float opacity);
+
     void draw(ImDrawList* draw_list,
               const NativeTexture& logo,
               const std::array<ImTextureID, 8>& textures,

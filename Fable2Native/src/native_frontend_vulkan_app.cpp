@@ -760,6 +760,9 @@ private:
                             ui_sparkle_descriptor_sets_[index]);
                     }
                 }
+                logo_sparkles_.draw_ambient(
+                    draw_list, reinterpret_cast<ImTextureID>(ui_logo_descriptor_set_), logo_x,
+                    logo_y, logo_width, logo_height, title_time, 1.0f);
                 logo_sparkles_.draw(draw_list, *logo, sparkle_textures,
                                     logo_x, logo_y, logo_width, logo_height, title_time,
                                     logo_alpha / 255.0f);

@@ -22,6 +22,51 @@ float triangle_wave(float value) {
 
 }  // namespace
 
+void NativeLogoSparkles::draw_ambient(ImDrawList* draw_list,
+                                      ImTextureID logo_texture,
+                                      float x,
+                                      float y,
+                                      float width,
+                                      float height,
+                                      float time,
+                                      float opacity) {
+    if (!draw_list || !logo_texture || width <= 0.0f || height <= 0.0f || opacity <= 0.0f) {
+        return;
+    }
+
+    // The startup capture shows the blue ambient component beginning before
+    // the white logo and settling into a low halo after the reveal. Keep the
+    // two timelines independent: this is the authored mask's presentation,
+    // while draw() below remains the sparkle pass.
+    const float reveal = std::clamp((time - 0.18f) / 0.58f, 0.0f, 1.0f);
+    const float burst_in = std::clamp((time - 0.16f) / 0.30f, 0.0f, 1.0f);
+    const float burst_out = 1.0f - std::clamp((time - 0.44f) / 0.92f, 0.0f, 1.0f);
+    const float burst = burst_in * burst_out;
+    const ImVec2 center(x + width * 0.5f, y + height * 0.5f);
+
+    const auto add_mask = [&](float scale, int alpha) {
+        const float scaled_width = width * scale;
+        const float scaled_height = height * scale;
+        draw_list->AddImage(logo_texture,
+                            ImVec2(center.x - scaled_width * 0.5f,
+                                   center.y - scaled_height * 0.5f),
+                            ImVec2(center.x + scaled_width * 0.5f,
+                                   center.y + scaled_height * 0.5f),
+                            ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                            IM_COL32(32, 104, 232,
+                                     std::clamp(static_cast<int>(alpha * opacity), 0, 255)));
+    };
+
+    // The concentric passes are a resolution-independent approximation of
+    // the material's soft ambient falloff; the source shape remains the
+    // game's actual logo mask, so its silhouette and counters stay exact.
+    add_mask(1.24f, static_cast<int>(34.0f * burst));
+    add_mask(1.14f, static_cast<int>(52.0f * burst));
+    add_mask(1.06f, static_cast<int>(74.0f * burst));
+    add_mask(1.12f, static_cast<int>(18.0f * reveal));
+    add_mask(1.045f, static_cast<int>(34.0f * reveal));
+}
+
 void NativeLogoSparkles::rebuild(const NativeTexture& logo) {
     particles_.clear();
     particles_.reserve(kNumSparkles);

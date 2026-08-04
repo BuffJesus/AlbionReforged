@@ -783,6 +783,9 @@ private:
                         sparkle_textures[index] = static_cast<ImTextureID>(sparkle.gpu.ptr);
                     }
                 }
+                logo_sparkles_.draw_ambient(
+                    draw_list, static_cast<ImTextureID>(ui_textures_[1].gpu.ptr), logo_x, logo_y,
+                    logo_width, logo_height, title_time, 1.0f);
                 logo_sparkles_.draw(draw_list, *ui_assets_.texture(f2::NativeUiAsset::Logo),
                                     sparkle_textures, logo_x, logo_y, logo_width, logo_height,
                                     title_time, logo_fade);
