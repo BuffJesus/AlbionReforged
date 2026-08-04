@@ -24,6 +24,12 @@ struct Constants {
 struct Geometry {
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
+    struct DrawRange {
+        std::uint32_t first_index = 0;
+        std::uint32_t index_count = 0;
+        std::uint32_t material_index = 0;
+    };
+    std::vector<DrawRange> draw_ranges;
 };
 
 std::array<float, 3> subtract(const std::array<float, 3>& a,
@@ -82,7 +88,12 @@ Geometry make_geometry(const NativeScene& scene) {
                 color,
                 source.uv});
         }
+        const auto first_index = static_cast<std::uint32_t>(geometry.indices.size());
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
+        geometry.draw_ranges.push_back({first_index,
+                                        static_cast<std::uint32_t>(mesh.indices.size()),
+                                        std::min(mesh.material,
+                                                 NativeVulkanWorldRenderer::kMaxMaterialTextures - 1)});
     }
 
     if (!geometry.vertices.empty()) return geometry;
@@ -96,6 +107,7 @@ Geometry make_geometry(const NativeScene& scene) {
     };
     geometry.indices = {0, 1, 2, 0, 2, 3, 0, 4, 1, 1, 4, 2,
                         2, 4, 3, 3, 4, 0};
+    geometry.draw_ranges.push_back({0, static_cast<std::uint32_t>(geometry.indices.size()), 0});
     return geometry;
 }
 
@@ -394,22 +406,26 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         return false;
     }
 
-    NativeTexture native_texture;
-    std::filesystem::path texture_path;
-    for (const auto& material : scene.materials) {
-        texture_path = resolve_texture(material, texture_root);
-        if (!texture_path.empty()) break;
-    }
-    if (!texture_path.empty()) {
-        if (!load_dds_rgba8(texture_path, native_texture, error)) return false;
-    } else {
-        native_texture.width = 1;
-        native_texture.height = 1;
-        native_texture.rgba8 = {255, 255, 255, 255};
-    }
-    if (!create_texture(physical_device, device_, command_pool_, queue_, native_texture,
-                        texture_image_, texture_memory_, texture_view_, texture_sampler_, error)) {
-        return false;
+    const auto material_count = std::max<std::size_t>(
+        1, std::min<std::size_t>(scene.materials.size(), kMaxMaterialTextures));
+    texture_images_.resize(material_count);
+    texture_memories_.resize(material_count);
+    texture_views_.resize(material_count);
+    texture_samplers_.resize(material_count);
+    for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
+        NativeTexture native_texture{1, 1, {255, 255, 255, 255}};
+        if (material_index < scene.materials.size()) {
+            const auto texture_path = resolve_texture(scene.materials[material_index], texture_root);
+            if (!texture_path.empty()) {
+                std::string texture_error;
+                load_dds_rgba8(texture_path, native_texture, texture_error);
+            }
+        }
+        if (!create_texture(physical_device, device_, command_pool_, queue_, native_texture,
+                            texture_images_[material_index], texture_memories_[material_index],
+                            texture_views_[material_index], texture_samplers_[material_index], error)) {
+            return false;
+        }
     }
 
     VkDescriptorSetLayoutBinding bindings[2]{};
@@ -430,42 +446,55 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     }
 
     VkDescriptorPoolSize pool_sizes[] = {
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<std::uint32_t>(material_count)},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<std::uint32_t>(material_count)},
     };
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pool_info.maxSets = 1;
+    pool_info.maxSets = static_cast<std::uint32_t>(material_count);
     pool_info.poolSizeCount = 2;
     pool_info.pPoolSizes = pool_sizes;
     if (vkCreateDescriptorPool(device_, &pool_info, nullptr, &descriptor_pool_) != VK_SUCCESS) {
         error = "Vulkan could not create the world descriptor pool.";
         return false;
     }
+    std::vector<VkDescriptorSetLayout> set_layouts(material_count, descriptor_set_layout_);
+    descriptor_sets_.resize(material_count);
     VkDescriptorSetAllocateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     set_info.descriptorPool = descriptor_pool_;
-    set_info.descriptorSetCount = 1;
-    set_info.pSetLayouts = &descriptor_set_layout_;
-    if (vkAllocateDescriptorSets(device_, &set_info, &descriptor_set_) != VK_SUCCESS) {
-        error = "Vulkan could not allocate the world descriptor set.";
+    set_info.descriptorSetCount = static_cast<std::uint32_t>(material_count);
+    set_info.pSetLayouts = set_layouts.data();
+    if (vkAllocateDescriptorSets(device_, &set_info, descriptor_sets_.data()) != VK_SUCCESS) {
+        error = "Vulkan could not allocate the world descriptor sets.";
         return false;
     }
     VkDescriptorBufferInfo buffer_info{constant_buffer_, 0, sizeof(Constants)};
-    VkDescriptorImageInfo image_info{texture_sampler_, texture_view_,
-                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet writes[2]{};
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = descriptor_set_;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[0].pBufferInfo = &buffer_info;
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = descriptor_set_;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorCount = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[1].pImageInfo = &image_info;
-    vkUpdateDescriptorSets(device_, 2, writes, 0, nullptr);
+    std::vector<VkDescriptorImageInfo> image_infos(material_count);
+    std::vector<VkWriteDescriptorSet> writes(material_count * 2);
+    for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
+        image_infos[material_index] = {texture_samplers_[material_index],
+                                       texture_views_[material_index],
+                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        auto& uniform_write = writes[material_index * 2];
+        uniform_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        uniform_write.dstSet = descriptor_sets_[material_index];
+        uniform_write.dstBinding = 0;
+        uniform_write.descriptorCount = 1;
+        uniform_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uniform_write.pBufferInfo = &buffer_info;
+        auto& image_write = writes[material_index * 2 + 1];
+        image_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        image_write.dstSet = descriptor_sets_[material_index];
+        image_write.dstBinding = 1;
+        image_write.descriptorCount = 1;
+        image_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        image_write.pImageInfo = &image_infos[material_index];
+    }
+    vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()),
+                           writes.data(), 0, nullptr);
+    draw_ranges_.clear();
+    for (const auto& range : geometry.draw_ranges) {
+        draw_ranges_.push_back({range.first_index, range.index_count, range.material_index});
+    }
 
     std::vector<std::uint32_t> vertex_code;
     std::vector<std::uint32_t> fragment_code;
@@ -600,11 +629,16 @@ void NativeVulkanWorldRenderer::render(VkCommandBuffer command_buffer,
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
     VkDeviceSize offset = 0;
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
-    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_,
-                            0, 1, &descriptor_set_, 0, nullptr);
     vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer_, &offset);
     vkCmdBindIndexBuffer(command_buffer, index_buffer_, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(command_buffer, index_count_, 1, 0, 0, 0);
+    for (const auto& range : draw_ranges_) {
+        const auto material_index = std::min<std::size_t>(range.material_index,
+                                                           descriptor_sets_.size() - 1);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipeline_layout_, 0, 1,
+                                &descriptor_sets_[material_index], 0, nullptr);
+        vkCmdDrawIndexed(command_buffer, range.index_count, 1, range.first_index, 0, 0);
+    }
 }
 
 void NativeVulkanWorldRenderer::destroy() {
@@ -612,10 +646,18 @@ void NativeVulkanWorldRenderer::destroy() {
     if (mapped_constants_) vkUnmapMemory(device_, constant_memory_);
     if (pipeline_) vkDestroyPipeline(device_, pipeline_, nullptr);
     if (pipeline_layout_) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
-    if (texture_sampler_) vkDestroySampler(device_, texture_sampler_, nullptr);
-    if (texture_view_) vkDestroyImageView(device_, texture_view_, nullptr);
-    if (texture_image_) vkDestroyImage(device_, texture_image_, nullptr);
-    if (texture_memory_) vkFreeMemory(device_, texture_memory_, nullptr);
+    for (const auto sampler : texture_samplers_) {
+        if (sampler) vkDestroySampler(device_, sampler, nullptr);
+    }
+    for (const auto view : texture_views_) {
+        if (view) vkDestroyImageView(device_, view, nullptr);
+    }
+    for (const auto image : texture_images_) {
+        if (image) vkDestroyImage(device_, image, nullptr);
+    }
+    for (const auto memory : texture_memories_) {
+        if (memory) vkFreeMemory(device_, memory, nullptr);
+    }
     if (descriptor_pool_) vkDestroyDescriptorPool(device_, descriptor_pool_, nullptr);
     if (descriptor_set_layout_) vkDestroyDescriptorSetLayout(device_, descriptor_set_layout_, nullptr);
     if (constant_buffer_) vkDestroyBuffer(device_, constant_buffer_, nullptr);
@@ -636,13 +678,13 @@ void NativeVulkanWorldRenderer::destroy() {
     mapped_constants_ = nullptr;
     descriptor_set_layout_ = VK_NULL_HANDLE;
     descriptor_pool_ = VK_NULL_HANDLE;
-    descriptor_set_ = VK_NULL_HANDLE;
     pipeline_layout_ = VK_NULL_HANDLE;
     pipeline_ = VK_NULL_HANDLE;
-    texture_image_ = VK_NULL_HANDLE;
-    texture_memory_ = VK_NULL_HANDLE;
-    texture_view_ = VK_NULL_HANDLE;
-    texture_sampler_ = VK_NULL_HANDLE;
+    descriptor_sets_.clear();
+    texture_images_.clear();
+    texture_memories_.clear();
+    texture_views_.clear();
+    texture_samplers_.clear();
 }
 
 }  // namespace f2

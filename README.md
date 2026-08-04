@@ -21,8 +21,8 @@ The native executables currently connect:
 `source validation -> boot -> intro sequence contract -> title -> main menu -> loading -> native world`
 
 The D3D12 and Vulkan world renderers accept the same user-cooked `F2SCENE` package through
-`--scene`, can consume a user-owned DXT1/DXT5 DDS through `--texture`, and have an asset-free
-procedural fallback for bring-up.
+`--scene`, bind albedo textures per material, can consume a user-owned DXT1/DXT5 DDS through
+`--texture`, and have an asset-free procedural fallback for bring-up.
 
 ## Build
 

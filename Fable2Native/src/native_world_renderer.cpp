@@ -25,6 +25,12 @@ struct Constants {
 struct Geometry {
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
+    struct DrawRange {
+        std::uint32_t first_index = 0;
+        std::uint32_t index_count = 0;
+        std::uint32_t material_index = 0;
+    };
+    std::vector<DrawRange> draw_ranges;
 };
 
 D3D12_HEAP_PROPERTIES upload_heap() {
@@ -114,7 +120,11 @@ Geometry make_geometry(const NativeScene& scene) {
                 color,
                 source.uv});
         }
+        const auto first_index = static_cast<std::uint32_t>(geometry.indices.size());
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
+        geometry.draw_ranges.push_back({first_index,
+                                        static_cast<std::uint32_t>(mesh.indices.size()),
+                                        std::min(mesh.material, NativeWorldRenderer::kMaxMaterialTextures - 1)});
     }
 
     if (!geometry.vertices.empty()) return geometry;
@@ -130,6 +140,7 @@ Geometry make_geometry(const NativeScene& scene) {
     };
     geometry.indices = {0, 1, 2, 0, 2, 3, 0, 4, 1, 1, 4, 2,
                         2, 4, 3, 3, 4, 0};
+    geometry.draw_ranges.push_back({0, static_cast<std::uint32_t>(geometry.indices.size()), 0});
     return geometry;
 }
 
@@ -291,29 +302,36 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
         return false;
     }
 
-    NativeTexture native_texture;
-    std::filesystem::path texture_path;
-    for (const auto& material : scene.materials) {
-        texture_path = resolve_texture(material, texture_root);
-        if (!texture_path.empty()) break;
-    }
-    if (!texture_path.empty()) {
-        if (!load_dds_rgba8(texture_path, native_texture, error)) return false;
-    } else {
-        native_texture.width = 1;
-        native_texture.height = 1;
-        native_texture.rgba8 = {255, 255, 255, 255};
-    }
-    if (!create_texture(device, queue, native_texture, texture_, error)) {
-        return false;
-    }
+    const auto material_count = std::max<std::size_t>(
+        1, std::min<std::size_t>(scene.materials.size(), kMaxMaterialTextures));
+    texture_descriptor_stride_ = device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    textures_.resize(material_count);
     D3D12_SHADER_RESOURCE_VIEW_DESC texture_view{};
     texture_view.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     texture_view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     texture_view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     texture_view.Texture2D.MipLevels = 1;
-    device->CreateShaderResourceView(texture_.Get(), &texture_view, texture_cpu_handle);
+    for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
+        NativeTexture native_texture{1, 1, {255, 255, 255, 255}};
+        if (material_index < scene.materials.size()) {
+            const auto texture_path = resolve_texture(scene.materials[material_index], texture_root);
+            if (!texture_path.empty()) {
+                std::string texture_error;
+                load_dds_rgba8(texture_path, native_texture, texture_error);
+            }
+        }
+        if (!create_texture(device, queue, native_texture, textures_[material_index], error)) return false;
+        auto material_cpu_handle = texture_cpu_handle;
+        material_cpu_handle.ptr += material_index * texture_descriptor_stride_;
+        device->CreateShaderResourceView(textures_[material_index].Get(), &texture_view,
+                                         material_cpu_handle);
+    }
     texture_gpu_handle_ = texture_gpu_handle;
+    draw_ranges_.clear();
+    for (const auto& range : geometry.draw_ranges) {
+        draw_ranges_.push_back({range.first_index, range.index_count, range.material_index});
+    }
 
     const auto constant_size = (sizeof(Constants) + 255u) & ~255u;
     const auto heap = upload_heap();
@@ -476,7 +494,13 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     command_list->IASetVertexBuffers(0, 1, &vertex_view_);
     command_list->IASetIndexBuffer(&index_view_);
-    command_list->DrawIndexedInstanced(index_count_, 1, 0, 0, 0);
+    for (const auto& range : draw_ranges_) {
+        auto texture_handle = texture_gpu_handle_;
+        texture_handle.ptr += static_cast<std::size_t>(range.material_index) *
+                             texture_descriptor_stride_;
+        command_list->SetGraphicsRootDescriptorTable(1, texture_handle);
+        command_list->DrawIndexedInstanced(range.index_count, 1, range.first_index, 0, 0);
+    }
 }
 
 }  // namespace f2

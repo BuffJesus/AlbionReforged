@@ -7,11 +7,13 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace f2 {
 
 class NativeVulkanWorldRenderer {
 public:
+    static constexpr std::uint32_t kMaxMaterialTextures = 64;
     bool initialise(VkPhysicalDevice physical_device,
                     VkDevice device,
                     VkCommandPool command_pool,
@@ -41,14 +43,20 @@ private:
     void* mapped_constants_ = nullptr;
     VkDescriptorSetLayout descriptor_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> descriptor_sets_;
     VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
-    VkImage texture_image_ = VK_NULL_HANDLE;
-    VkDeviceMemory texture_memory_ = VK_NULL_HANDLE;
-    VkImageView texture_view_ = VK_NULL_HANDLE;
-    VkSampler texture_sampler_ = VK_NULL_HANDLE;
+    std::vector<VkImage> texture_images_;
+    std::vector<VkDeviceMemory> texture_memories_;
+    std::vector<VkImageView> texture_views_;
+    std::vector<VkSampler> texture_samplers_;
     std::uint32_t index_count_ = 0;
+    struct DrawRange {
+        std::uint32_t first_index = 0;
+        std::uint32_t index_count = 0;
+        std::uint32_t material_index = 0;
+    };
+    std::vector<DrawRange> draw_ranges_;
 };
 
 }  // namespace f2

@@ -102,8 +102,9 @@ build\RelWithDebInfo\f2native_frontend_vulkan.exe `
 ```
 
 The native texture bridge currently decodes the legacy DXT1 and DXT5 files found in the local
-Fable II data set into RGBA8 before uploading them to D3D12 or Vulkan. Original DDS files remain
-cooker/runtime inputs and are never copied into the repository.
+Fable II data set into RGBA8 before uploading them to D3D12 or Vulkan. Each material draw range
+binds its own albedo descriptor; missing or unsupported textures use a white fallback. Original
+DDS files remain cooker/runtime inputs and are never copied into the repository.
 
 Selecting New Game reaches a real native geometry pass on either backend. Without `--scene`, the
 app uses an asset-free procedural fallback so the frontend-to-world transition remains testable.

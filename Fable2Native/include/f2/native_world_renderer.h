@@ -8,11 +8,13 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace f2 {
 
 class NativeWorldRenderer {
 public:
+    static constexpr std::uint32_t kMaxMaterialTextures = 64;
     bool initialise(ID3D12Device* device,
                     ID3D12CommandQueue* queue,
                     const NativeScene& scene,
@@ -32,13 +34,20 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> constant_buffer_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_state_;
-    Microsoft::WRL::ComPtr<ID3D12Resource> texture_;
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> textures_;
     D3D12_VERTEX_BUFFER_VIEW vertex_view_{};
     D3D12_INDEX_BUFFER_VIEW index_view_{};
     D3D12_GPU_VIRTUAL_ADDRESS constant_address_ = 0;
     std::uint32_t index_count_ = 0;
+    struct DrawRange {
+        std::uint32_t first_index = 0;
+        std::uint32_t index_count = 0;
+        std::uint32_t material_index = 0;
+    };
+    std::vector<DrawRange> draw_ranges_;
     void* mapped_constants_ = nullptr;
     D3D12_GPU_DESCRIPTOR_HANDLE texture_gpu_handle_{};
+    std::uint32_t texture_descriptor_stride_ = 0;
 };
 
 }  // namespace f2
