@@ -1,5 +1,6 @@
 #include "f2/native_game.h"
 #include "f2/native_install.h"
+#include "f2/native_video_decoder.h"
 #include "f2/native_world_renderer.h"
 
 #include "imgui.h"
@@ -16,6 +17,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -118,6 +120,13 @@ public:
         const HRESULT com_result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         const bool com_initialized = SUCCEEDED(com_result);
         if (FAILED(com_result) && com_result != RPC_E_CHANGED_MODE) return false;
+        std::string video_error;
+        if (!f2::start_native_video_runtime(video_error)) {
+            MessageBoxA(nullptr, video_error.c_str(), "Fable II Native - video runtime failed",
+                        MB_OK | MB_ICONERROR);
+            return false;
+        }
+        video_runtime_started_ = true;
 
         WNDCLASSA window_class{};
         window_class.hInstance = instance;
@@ -151,6 +160,7 @@ public:
             game_.scene.materials[0].albedo = texture->string();
             for (auto& mesh : game_.scene.meshes) mesh.material = 0;
         }
+        video_root_ = command_line_path(L"--video-root").value_or(std::filesystem::path{});
         if (com_initialized) CoUninitialize();
         if (!create_device()) return false;
         std::string renderer_error;
@@ -197,6 +207,7 @@ public:
             const double delta = std::chrono::duration<double>(now - previous).count();
             previous = now;
             game_.tick(delta);
+            update_video();
             handle_input();
             draw();
             if (game_.frontend.quit_requested()) PostMessageA(window_, WM_CLOSE, 0, 0);
@@ -309,10 +320,13 @@ private:
         rtv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (FAILED(device_->CreateDescriptorHeap(&rtv_desc, IID_PPV_ARGS(&rtv_heap_)))) return false;
         D3D12_DESCRIPTOR_HEAP_DESC srv_desc{};
-        srv_desc.NumDescriptors = f2::NativeWorldRenderer::kMaxMaterialTextures + 1;
+        srv_desc.NumDescriptors = f2::NativeWorldRenderer::kMaxMaterialTextures + 2;
         srv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         srv_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device_->CreateDescriptorHeap(&srv_desc, IID_PPV_ARGS(&descriptor_heap_)))) return false;
+        descriptor_stride_ = device_->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        video_descriptor_index_ = f2::NativeWorldRenderer::kMaxMaterialTextures + 1;
 
         rtv_stride_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         auto handle = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
@@ -349,6 +363,125 @@ private:
         }
     }
 
+    void update_video() {
+        if (game_.frontend.state() != f2::FrontendState::IntroVideo || video_root_.empty()) {
+            video_decoder_.close();
+            active_video_path_.clear();
+            video_frame_ = {};
+            if (video_texture_) {
+                wait_for_gpu();
+                video_texture_.Reset();
+                video_upload_.Reset();
+                video_width_ = 0;
+                video_height_ = 0;
+                uploaded_video_serial_ = 0;
+                video_texture_shader_state_ = false;
+            }
+            return;
+        }
+        const auto* clip = game_.frontend.intro_videos().current_clip();
+        if (!clip) return;
+        const auto path = video_root_ / clip->asset;
+        if (path != active_video_path_) {
+            active_video_path_ = path;
+            video_frame_ = {};
+            if (!video_decoder_.open(path, video_error_)) return;
+        }
+        f2::NativeVideoFrame frame;
+        if (video_decoder_.read_next_frame(frame, video_error_)) video_frame_ = std::move(frame);
+    }
+
+    bool ensure_video_texture(const f2::NativeVideoFrame& frame) {
+        if (frame.width == 0 || frame.height == 0) return false;
+        if (video_texture_ && video_width_ == frame.width && video_height_ == frame.height) return true;
+        wait_for_gpu();
+        video_texture_.Reset();
+        video_upload_.Reset();
+        video_texture_shader_state_ = false;
+        video_width_ = frame.width;
+        video_height_ = frame.height;
+        D3D12_RESOURCE_DESC texture_description{};
+        texture_description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        texture_description.Width = frame.width;
+        texture_description.Height = frame.height;
+        texture_description.DepthOrArraySize = 1;
+        texture_description.MipLevels = 1;
+        texture_description.Format = kBackBufferFormat;
+        texture_description.SampleDesc.Count = 1;
+        texture_description.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        D3D12_HEAP_PROPERTIES default_heap{};
+        default_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        if (FAILED(device_->CreateCommittedResource(
+                &default_heap, D3D12_HEAP_FLAG_NONE, &texture_description,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&video_texture_)))) return false;
+        device_->GetCopyableFootprints(&texture_description, 0, 1, 0, &video_footprint_,
+                                       &video_row_count_, &video_row_size_, &video_upload_size_);
+        D3D12_RESOURCE_DESC upload_description{};
+        upload_description.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        upload_description.Width = video_upload_size_;
+        upload_description.Height = 1;
+        upload_description.DepthOrArraySize = 1;
+        upload_description.MipLevels = 1;
+        upload_description.SampleDesc.Count = 1;
+        upload_description.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        D3D12_HEAP_PROPERTIES upload_heap{};
+        upload_heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        if (FAILED(device_->CreateCommittedResource(
+                &upload_heap, D3D12_HEAP_FLAG_NONE, &upload_description,
+                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&video_upload_)))) return false;
+        auto cpu = descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
+        cpu.ptr += static_cast<std::size_t>(video_descriptor_index_) * descriptor_stride_;
+        D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+        view.Format = kBackBufferFormat;
+        view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        view.Texture2D.MipLevels = 1;
+        device_->CreateShaderResourceView(video_texture_.Get(), &view, cpu);
+        video_gpu_handle_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
+        video_gpu_handle_.ptr += static_cast<std::size_t>(video_descriptor_index_) * descriptor_stride_;
+        return true;
+    }
+
+    void upload_video_frame(ID3D12GraphicsCommandList* command_list) {
+        if (!video_texture_ || video_frame_.serial == 0 ||
+            video_frame_.serial == uploaded_video_serial_) return;
+        void* mapped = nullptr;
+        if (FAILED(video_upload_->Map(0, nullptr, &mapped))) return;
+        auto* destination = static_cast<std::uint8_t*>(mapped) + video_footprint_.Offset;
+        const auto source_row_pitch = static_cast<std::size_t>(video_frame_.width) * 4;
+        for (std::uint32_t row = 0; row < video_frame_.height; ++row) {
+            std::memcpy(destination + row * video_footprint_.Footprint.RowPitch,
+                        video_frame_.rgba8.data() + row * source_row_pitch, source_row_pitch);
+        }
+        video_upload_->Unmap(0, nullptr);
+        if (video_texture_shader_state_) {
+            D3D12_RESOURCE_BARRIER barrier{};
+            barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Transition.pResource = video_texture_.Get();
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+            command_list->ResourceBarrier(1, &barrier);
+        }
+        D3D12_TEXTURE_COPY_LOCATION destination_location{};
+        destination_location.pResource = video_texture_.Get();
+        destination_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        D3D12_TEXTURE_COPY_LOCATION source_location{};
+        source_location.pResource = video_upload_.Get();
+        source_location.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        source_location.PlacedFootprint = video_footprint_;
+        command_list->CopyTextureRegion(&destination_location, 0, 0, 0, &source_location, nullptr);
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = video_texture_.Get();
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        command_list->ResourceBarrier(1, &barrier);
+        video_texture_shader_state_ = true;
+        uploaded_video_serial_ = video_frame_.serial;
+    }
+
     void handle_input() {
         auto& io = ImGui::GetIO();
         if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true)) game_.frontend.dispatch(f2::FrontendAction::Up);
@@ -371,17 +504,25 @@ private:
             ImGui::Begin("##intro", nullptr,
                          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                          ImGuiWindowFlags_NoSavedSettings);
-            ImGui::SetCursorPos(ImVec2(width_ * 0.5f - 180.0f, height_ * 0.45f));
-            if (state == f2::FrontendState::Boot) {
-                ImGui::TextUnformatted("FABLE II NATIVE");
-            } else if (const auto* clip = game_.frontend.intro_videos().current_clip()) {
-                ImGui::Text("INTRO VIDEO: %s", clip->id.c_str());
-                ImGui::Text("Asset: %s", clip->asset.string().c_str());
+            if (state == f2::FrontendState::IntroVideo && video_texture_) {
+                ImGui::SetCursorPos(ImVec2(0, 0));
+                ImGui::Image(static_cast<ImTextureID>(video_gpu_handle_.ptr),
+                             ImVec2(static_cast<float>(width_), static_cast<float>(height_)));
+                ImGui::SetCursorPos(ImVec2(24, static_cast<float>(height_ - 42)));
+                ImGui::TextUnformatted("Press Space to skip");
             } else {
-                ImGui::TextUnformatted("INTRO VIDEO PLAYER");
+                ImGui::SetCursorPos(ImVec2(width_ * 0.5f - 180.0f, height_ * 0.45f));
+                if (state == f2::FrontendState::Boot) {
+                ImGui::TextUnformatted("FABLE II NATIVE");
+                } else if (const auto* clip = game_.frontend.intro_videos().current_clip()) {
+                    ImGui::Text("INTRO VIDEO: %s", clip->id.c_str());
+                    ImGui::Text("Asset: %s", clip->asset.string().c_str());
+                } else {
+                    ImGui::TextUnformatted("INTRO VIDEO PLAYER");
+                }
+                ImGui::SetCursorPos(ImVec2(width_ * 0.5f - 120.0f, height_ * 0.55f));
+                ImGui::TextUnformatted("Press Space to skip");
             }
-            ImGui::SetCursorPos(ImVec2(width_ * 0.5f - 120.0f, height_ * 0.55f));
-            ImGui::TextUnformatted("Press Space to skip");
             ImGui::End();
         } else if (state == f2::FrontendState::Title) {
             ImGui::SetNextWindowPos(ImVec2(width_ * 0.5f, height_ * 0.5f),
@@ -431,10 +572,12 @@ private:
         }
 
         ImGui::Render();
+        if (video_frame_.serial != 0) ensure_video_texture(video_frame_);
         const UINT frame_index = swap_chain_->GetCurrentBackBufferIndex();
         auto& frame = frames_[frame_index];
         frame.allocator->Reset();
         command_list_->Reset(frame.allocator.Get(), nullptr);
+        upload_video_frame(command_list_.Get());
         D3D12_RESOURCE_BARRIER barrier{};
         barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         barrier.Transition.pResource = frame.render_target.Get();
@@ -476,6 +619,11 @@ private:
         ImGui_ImplDX12_Shutdown();
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
+        video_decoder_.close();
+        if (video_runtime_started_) {
+            f2::stop_native_video_runtime();
+            video_runtime_started_ = false;
+        }
         if (fence_event_) CloseHandle(fence_event_);
     }
 
@@ -483,9 +631,28 @@ private:
     UINT width_ = 1280;
     UINT height_ = 720;
     UINT rtv_stride_ = 0;
+    UINT descriptor_stride_ = 0;
+    UINT video_descriptor_index_ = 0;
     UINT64 fence_value_ = 0;
     HANDLE fence_event_ = nullptr;
     std::optional<f2::GameSource> source_;
+    std::filesystem::path video_root_;
+    std::filesystem::path active_video_path_;
+    f2::NativeVideoDecoder video_decoder_;
+    f2::NativeVideoFrame video_frame_;
+    std::string video_error_;
+    bool video_runtime_started_ = false;
+    ComPtr<ID3D12Resource> video_texture_;
+    ComPtr<ID3D12Resource> video_upload_;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT video_footprint_{};
+    UINT video_row_count_ = 0;
+    UINT64 video_row_size_ = 0;
+    UINT64 video_upload_size_ = 0;
+    UINT video_width_ = 0;
+    UINT video_height_ = 0;
+    UINT64 uploaded_video_serial_ = 0;
+    bool video_texture_shader_state_ = false;
+    D3D12_GPU_DESCRIPTOR_HANDLE video_gpu_handle_{};
     f2::NativeWorldRenderer world_renderer_;
     f2::NativeGame game_;
     ComPtr<ID3D12Device> device_;

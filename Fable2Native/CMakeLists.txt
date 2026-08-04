@@ -16,6 +16,14 @@ add_library(f2native_core STATIC
 
 target_include_directories(f2native_core PUBLIC include)
 
+if(WIN32)
+    add_library(f2native_video STATIC src/native_video_decoder.cpp)
+    target_include_directories(f2native_video PUBLIC include)
+    target_link_libraries(f2native_video PUBLIC mfplat mfreadwrite mfuuid)
+    add_executable(f2native_video_probe src/video_probe_main.cpp)
+    target_link_libraries(f2native_video_probe PRIVATE f2native_video)
+endif()
+
 if(MSVC)
     target_compile_options(f2native_core PRIVATE /W4 /permissive-)
 else()
@@ -78,6 +86,7 @@ if(WIN32)
         src/native_world_renderer.cpp)
     target_link_libraries(f2native_frontend PRIVATE
         f2native_core
+        f2native_video
         f2native_imgui
         d3d12
         d3dcompiler
@@ -118,9 +127,11 @@ if(WIN32)
 
         add_executable(f2native_frontend_vulkan WIN32
             src/native_frontend_vulkan_app.cpp
+            src/native_vulkan_video_texture.cpp
             src/native_vulkan_world_renderer.cpp)
         target_link_libraries(f2native_frontend_vulkan PRIVATE
             f2native_core
+            f2native_video
             f2native_imgui
             Vulkan::Vulkan
             ole32

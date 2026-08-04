@@ -22,7 +22,9 @@ The native executables currently connect:
 
 The D3D12 and Vulkan world renderers accept the same user-cooked `F2SCENE` package through
 `--scene`, bind albedo textures per material, can consume a user-owned DXT1/DXT5 DDS through
-`--texture`, and have an asset-free procedural fallback for bring-up.
+`--texture`, and have an asset-free procedural fallback for bring-up. Startup movies are now
+decoded from user-cooked MP4 files into real RGBA frames on both backends; no movie data is
+shipped.
 
 ## Build
 
@@ -64,6 +66,23 @@ Fable2Native\build\RelWithDebInfo\f2native_frontend.exe `
   --game-dir path\to\AlbionReforgedGame `
   --scene cooked\model.f2scene
 ```
+
+To preview the local startup movies, cook them from the user's extracted game data and pass the
+cooker output as a runtime-only media root:
+
+```powershell
+python Fable2Native\tools\cook_videos.py `
+  path\to\extracted\Fable2\data\art\videos `
+  path\to\AlbionReforgedCooked
+
+Fable2Native\build\RelWithDebInfo\f2native_frontend.exe `
+  --game-dir path\to\extracted\Fable2 `
+  --video-root path\to\AlbionReforgedCooked
+```
+
+Use `f2native_frontend_vulkan.exe` in the final command to preview the same frames through Vulkan.
+The decoded media stays in the user-selected/cooker output directory and is ignored by source
+control.
 
 ## Repository layout
 

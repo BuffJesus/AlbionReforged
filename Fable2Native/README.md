@@ -116,8 +116,27 @@ python tools\cook_videos.py ..\Fable2Recomp\assets\game\data\art\videos cooked
 ```
 
 This produces `cooked\videos\manifest.json` plus modern MP4 assets. The runtime video
-player owns sequencing and skip behavior; the D3D12 frame decoder/presenter is the next
-frontend slice. The original Bink files remain cooker inputs only.
+player owns sequencing and skip behavior. Both frontends now decode the MP4 frames through
+Media Foundation and upload real RGBA pixels to their native presentation backend. Pass the
+cooker directory to either frontend:
+
+```powershell
+build\RelWithDebInfo\f2native_frontend.exe `
+  --game-dir path\to\Fable2NativeGame `
+  --video-root cooked
+
+build\RelWithDebInfo\f2native_frontend_vulkan.exe `
+  --game-dir path\to\Fable2NativeGame `
+  --video-root cooked
+```
+
+The decoder probe can validate one local movie without opening a frontend:
+
+```powershell
+build\RelWithDebInfo\f2native_video_probe.exe cooked\videos\microsoft_logo.mp4
+```
+
+The original Bink files and the cooked MP4 files remain user-local runtime/cooker inputs only.
 
 The frontends use D3D12 or Vulkan and Dear ImGui for the native UI bring-up. They have no Xenos,
 PM4, EDRAM, guest address space, or ReXGlue dependency. The final art/UI renderer will consume
