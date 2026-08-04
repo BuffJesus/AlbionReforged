@@ -1,11 +1,33 @@
 #include "f2/native_game.h"
 #include "f2/native_install.h"
+#include "f2/native_texture.h"
 
 #include <cassert>
+#include <array>
+#include <cstring>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 
 int main() {
+    const std::array<std::uint8_t, 136> dxt1 = [] {
+        std::array<std::uint8_t, 136> bytes{};
+        bytes[0] = 'D'; bytes[1] = 'D'; bytes[2] = 'S'; bytes[3] = ' ';
+        auto write = [&](std::size_t offset, std::uint32_t value) {
+            std::memcpy(bytes.data() + offset, &value, sizeof(value));
+        };
+        write(4, 124); write(12, 4); write(16, 4); write(76, 32);
+        bytes[80] = 4; bytes[84] = 'D'; bytes[85] = 'X'; bytes[86] = 'T'; bytes[87] = '1';
+        bytes[128] = 0xff; bytes[129] = 0xff; // white endpoint
+        bytes[130] = 0; bytes[131] = 0; // black endpoint
+        return bytes;
+    }();
+    f2::NativeTexture decoded_texture;
+    std::string texture_error;
+    assert(f2::decode_dds_rgba8(dxt1, decoded_texture, texture_error));
+    assert(decoded_texture.width == 4 && decoded_texture.height == 4);
+    assert(decoded_texture.rgba8.size() == 64);
+
     const auto path = std::filesystem::temp_directory_path() / "f2native_core_test.f2scene";
     {
         std::ofstream out(path);

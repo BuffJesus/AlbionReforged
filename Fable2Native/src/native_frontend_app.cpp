@@ -146,10 +146,24 @@ public:
                 return false;
             }
         }
+        if (const auto texture = command_line_path(L"--texture")) {
+            if (game_.scene.materials.empty()) game_.scene.materials.push_back({"cli_texture"});
+            game_.scene.materials[0].albedo = texture->string();
+            for (auto& mesh : game_.scene.meshes) mesh.material = 0;
+        }
         if (com_initialized) CoUninitialize();
         if (!create_device()) return false;
         std::string renderer_error;
-        if (!world_renderer_.initialise(device_.Get(), game_.scene, renderer_error)) {
+        auto texture_cpu_handle = descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
+        auto texture_gpu_handle = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
+        const auto descriptor_stride = device_->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        texture_cpu_handle.ptr += descriptor_stride;
+        texture_gpu_handle.ptr += descriptor_stride;
+        if (!world_renderer_.initialise(
+                device_.Get(), queue_.Get(), game_.scene,
+                source_ ? source_->data_root : std::filesystem::path{},
+                texture_cpu_handle, texture_gpu_handle, renderer_error)) {
             MessageBoxA(window_, renderer_error.c_str(), "Fable II Native - renderer failed",
                         MB_OK | MB_ICONERROR);
             return false;
@@ -295,7 +309,7 @@ private:
         rtv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (FAILED(device_->CreateDescriptorHeap(&rtv_desc, IID_PPV_ARGS(&rtv_heap_)))) return false;
         D3D12_DESCRIPTOR_HEAP_DESC srv_desc{};
-        srv_desc.NumDescriptors = 1;
+        srv_desc.NumDescriptors = 2;
         srv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         srv_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device_->CreateDescriptorHeap(&srv_desc, IID_PPV_ARGS(&descriptor_heap_)))) return false;

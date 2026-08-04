@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(f2native_core STATIC
     src/native_scene.cpp
+    src/native_texture.cpp
     src/native_game.cpp
     src/native_frontend.cpp
     src/native_install.cpp

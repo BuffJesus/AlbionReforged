@@ -14,8 +14,11 @@ class NativeVulkanWorldRenderer {
 public:
     bool initialise(VkPhysicalDevice physical_device,
                     VkDevice device,
+                    VkCommandPool command_pool,
+                    VkQueue queue,
                     VkRenderPass render_pass,
                     VkFormat color_format,
+                    const std::filesystem::path& texture_root,
                     const std::filesystem::path& shader_directory,
                     const NativeScene& scene,
                     std::string& error);
@@ -27,6 +30,8 @@ public:
 
 private:
     VkDevice device_ = VK_NULL_HANDLE;
+    VkCommandPool command_pool_ = VK_NULL_HANDLE;
+    VkQueue queue_ = VK_NULL_HANDLE;
     VkBuffer vertex_buffer_ = VK_NULL_HANDLE;
     VkDeviceMemory vertex_memory_ = VK_NULL_HANDLE;
     VkBuffer index_buffer_ = VK_NULL_HANDLE;
@@ -39,6 +44,10 @@ private:
     VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeline_layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+    VkImage texture_image_ = VK_NULL_HANDLE;
+    VkDeviceMemory texture_memory_ = VK_NULL_HANDLE;
+    VkImageView texture_view_ = VK_NULL_HANDLE;
+    VkSampler texture_sampler_ = VK_NULL_HANDLE;
     std::uint32_t index_count_ = 0;
 };
 

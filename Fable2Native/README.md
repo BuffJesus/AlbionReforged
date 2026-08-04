@@ -84,6 +84,19 @@ The same scene can be viewed through Vulkan:
 build\RelWithDebInfo\f2native_frontend_vulkan.exe --game-dir path\to\Fable2NativeGame --scene cooked\model.f2scene
 ```
 
+For a first local-art validation, an extracted DDS can be supplied explicitly:
+
+```powershell
+build\RelWithDebInfo\f2native_frontend_vulkan.exe `
+  --game-dir path\to\Fable2NativeGame `
+  --scene cooked\model.f2scene `
+  --texture path\to\data\pubgames\common\bar_focus.dds
+```
+
+The native texture bridge currently decodes the legacy DXT1 and DXT5 files found in the local
+Fable II data set into RGBA8 before uploading them to D3D12 or Vulkan. Original DDS files remain
+cooker/runtime inputs and are never copied into the repository.
+
 Selecting New Game reaches a real native geometry pass on either backend. Without `--scene`, the
 app uses an asset-free procedural fallback so the frontend-to-world transition remains testable.
 

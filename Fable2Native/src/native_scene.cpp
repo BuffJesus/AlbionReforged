@@ -82,6 +82,8 @@ bool load_native_scene(const std::filesystem::path& path,
                 !read_value(line, material.base_color[3])) {
                 return fail(&error, "invalid material at line " + std::to_string(line_number));
             }
+            // Texture paths are optional so older F2SCENE packages remain valid.
+            line >> material.albedo >> material.normal >> material.material;
             parsed.materials.push_back(std::move(material));
         } else if (opcode == "mesh") {
             NativeMesh mesh;

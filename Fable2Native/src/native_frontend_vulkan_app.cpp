@@ -147,10 +147,16 @@ public:
                 return false;
             }
         }
+        if (const auto texture = command_line_path(L"--texture")) {
+            if (game_.scene.materials.empty()) game_.scene.materials.push_back({"cli_texture"});
+            game_.scene.materials[0].albedo = texture->string();
+            for (auto& mesh : game_.scene.meshes) mesh.material = 0;
+        }
         if (!create_vulkan()) return false;
         std::string renderer_error;
-        if (!world_renderer_.initialise(physical_device_, device_, render_pass_,
-                                        surface_format_.format,
+        if (!world_renderer_.initialise(physical_device_, device_, command_pool_, queue_,
+                                        render_pass_, surface_format_.format,
+                                        source_ ? source_->data_root : std::filesystem::path{},
                                         F2NATIVE_VULKAN_SHADER_DIR, game_.scene,
                                         renderer_error)) {
             MessageBoxA(window_, renderer_error.c_str(), "Fable II Native - Vulkan renderer failed",

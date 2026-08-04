@@ -1,4 +1,5 @@
 #include "f2/native_world_renderer.h"
+#include "f2/native_texture.h"
 
 #include <d3dcompiler.h>
 
@@ -14,6 +15,7 @@ namespace {
 struct Vertex {
     std::array<float, 3> position{};
     std::array<float, 4> color{};
+    std::array<float, 2> uv{};
 };
 
 struct Constants {
@@ -109,7 +111,8 @@ Geometry make_geometry(const NativeScene& scene) {
                 {source.position[0] * instance.scale + instance.position[0],
                  source.position[1] * instance.scale + instance.position[1],
                  source.position[2] * instance.scale + instance.position[2]},
-                color});
+                color,
+                source.uv});
         }
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
     }
@@ -151,9 +154,130 @@ bool create_upload_buffer(ID3D12Device* device, const void* data, std::size_t si
     return true;
 }
 
+std::filesystem::path resolve_texture(const NativeMaterial& material,
+                                      const std::filesystem::path& texture_root) {
+    if (material.albedo.empty()) return {};
+    const std::filesystem::path requested(material.albedo);
+    if (requested.is_absolute() && std::filesystem::is_regular_file(requested)) return requested;
+    const auto direct = texture_root / requested;
+    if (std::filesystem::is_regular_file(direct)) return direct;
+    if (requested.has_parent_path() && requested.begin()->string() == "data") {
+        const auto without_data = texture_root / std::filesystem::path(
+            requested.lexically_relative(requested.root_path() / "data"));
+        if (std::filesystem::is_regular_file(without_data)) return without_data;
+    }
+    return {};
+}
+
+bool create_texture(ID3D12Device* device, ID3D12CommandQueue* queue,
+                    const NativeTexture& source,
+                    Microsoft::WRL::ComPtr<ID3D12Resource>& texture,
+                    std::string& error) {
+    D3D12_RESOURCE_DESC texture_description{};
+    texture_description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texture_description.Width = source.width;
+    texture_description.Height = source.height;
+    texture_description.DepthOrArraySize = 1;
+    texture_description.MipLevels = 1;
+    texture_description.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texture_description.SampleDesc.Count = 1;
+    texture_description.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    auto default_heap = upload_heap();
+    default_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    if (FAILED(device->CreateCommittedResource(
+            &default_heap, D3D12_HEAP_FLAG_NONE, &texture_description,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture)))) {
+        error = "D3D12 could not allocate the native texture.";
+        return false;
+    }
+
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT row_count = 0;
+    UINT64 row_size = 0;
+    UINT64 upload_size = 0;
+    device->GetCopyableFootprints(&texture_description, 0, 1, 0, &footprint,
+                                  &row_count, &row_size, &upload_size);
+    const auto upload_description = buffer_description(upload_size);
+    Microsoft::WRL::ComPtr<ID3D12Resource> upload;
+    const auto upload_heap_properties = upload_heap();
+    if (FAILED(device->CreateCommittedResource(
+            &upload_heap_properties, D3D12_HEAP_FLAG_NONE, &upload_description,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)))) {
+        error = "D3D12 could not allocate the native texture upload buffer.";
+        return false;
+    }
+    void* mapped = nullptr;
+    if (FAILED(upload->Map(0, nullptr, &mapped))) {
+        error = "D3D12 could not map the native texture upload buffer.";
+        return false;
+    }
+    auto* destination = static_cast<std::uint8_t*>(mapped) + footprint.Offset;
+    const auto source_row_pitch = static_cast<std::size_t>(source.width) * 4;
+    for (std::uint32_t row = 0; row < source.height; ++row) {
+        std::memcpy(destination + row * footprint.Footprint.RowPitch,
+                    source.rgba8.data() + row * source_row_pitch, source_row_pitch);
+    }
+    upload->Unmap(0, nullptr);
+
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> command_list;
+    Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+    if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                               IID_PPV_ARGS(&allocator))) ||
+        FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                          allocator.Get(), nullptr,
+                                          IID_PPV_ARGS(&command_list))) ||
+        FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) {
+        error = "D3D12 could not create the native texture upload commands.";
+        return false;
+    }
+    D3D12_TEXTURE_COPY_LOCATION destination_location{};
+    destination_location.pResource = texture.Get();
+    destination_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    destination_location.SubresourceIndex = 0;
+    D3D12_TEXTURE_COPY_LOCATION source_location{};
+    source_location.pResource = upload.Get();
+    source_location.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    source_location.PlacedFootprint = footprint;
+    command_list->CopyTextureRegion(&destination_location, 0, 0, 0, &source_location, nullptr);
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = texture.Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    command_list->ResourceBarrier(1, &barrier);
+    if (FAILED(command_list->Close())) {
+        error = "D3D12 could not close the native texture upload commands.";
+        return false;
+    }
+    ID3D12CommandList* lists[] = {command_list.Get()};
+    queue->ExecuteCommandLists(1, lists);
+    constexpr UINT64 fence_value = 1;
+    if (FAILED(queue->Signal(fence.Get(), fence_value))) {
+        error = "D3D12 could not submit the native texture upload.";
+        return false;
+    }
+    HANDLE event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    if (!event) {
+        error = "D3D12 could not create the native texture upload event.";
+        return false;
+    }
+    if (fence->GetCompletedValue() < fence_value) {
+        fence->SetEventOnCompletion(fence_value, event);
+        WaitForSingleObject(event, INFINITE);
+    }
+    CloseHandle(event);
+    return true;
+}
+
 }  // namespace
 
-bool NativeWorldRenderer::initialise(ID3D12Device* device, const NativeScene& scene,
+bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* queue,
+                                     const NativeScene& scene,
+                                     const std::filesystem::path& texture_root,
+                                     D3D12_CPU_DESCRIPTOR_HANDLE texture_cpu_handle,
+                                     D3D12_GPU_DESCRIPTOR_HANDLE texture_gpu_handle,
                                      std::string& error) {
     const auto geometry = make_geometry(scene);
     if (geometry.vertices.empty() || geometry.indices.empty()) {
@@ -166,6 +290,30 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, const NativeScene& sc
                               geometry.indices.size() * sizeof(std::uint32_t), index_buffer_, error)) {
         return false;
     }
+
+    NativeTexture native_texture;
+    std::filesystem::path texture_path;
+    for (const auto& material : scene.materials) {
+        texture_path = resolve_texture(material, texture_root);
+        if (!texture_path.empty()) break;
+    }
+    if (!texture_path.empty()) {
+        if (!load_dds_rgba8(texture_path, native_texture, error)) return false;
+    } else {
+        native_texture.width = 1;
+        native_texture.height = 1;
+        native_texture.rgba8 = {255, 255, 255, 255};
+    }
+    if (!create_texture(device, queue, native_texture, texture_, error)) {
+        return false;
+    }
+    D3D12_SHADER_RESOURCE_VIEW_DESC texture_view{};
+    texture_view.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texture_view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    texture_view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    texture_view.Texture2D.MipLevels = 1;
+    device->CreateShaderResourceView(texture_.Get(), &texture_view, texture_cpu_handle);
+    texture_gpu_handle_ = texture_gpu_handle;
 
     const auto constant_size = (sizeof(Constants) + 255u) & ~255u;
     const auto heap = upload_heap();
@@ -184,15 +332,18 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, const NativeScene& sc
     Microsoft::WRL::ComPtr<ID3DBlob> shader_errors;
     constexpr char shader_source[] = R"(
 cbuffer Camera : register(b0) { float4x4 view_projection; };
-struct VSInput { float3 position : POSITION; float4 color : COLOR; };
-struct PSInput { float4 position : SV_POSITION; float4 color : COLOR; };
+Texture2D albedo : register(t0);
+SamplerState albedo_sampler : register(s0);
+struct VSInput { float3 position : POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; };
+struct PSInput { float4 position : SV_POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; };
 PSInput vs_main(VSInput input) {
     PSInput output;
     output.position = mul(float4(input.position, 1.0), view_projection);
     output.color = input.color;
+    output.uv = input.uv;
     return output;
 }
-float4 ps_main(PSInput input) : SV_TARGET { return input.color; }
+float4 ps_main(PSInput input) : SV_TARGET { return input.color * albedo.Sample(albedo_sampler, input.uv); }
 )";
     const auto compile = [&](const char* entry, const char* target,
                              Microsoft::WRL::ComPtr<ID3DBlob>& blob) {
@@ -205,13 +356,31 @@ float4 ps_main(PSInput input) : SV_TARGET { return input.color; }
         return false;
     }
 
-    D3D12_ROOT_PARAMETER root_parameter{};
-    root_parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    root_parameter.Descriptor.ShaderRegister = 0;
-    root_parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    D3D12_ROOT_PARAMETER root_parameters[2]{};
+    root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    root_parameters[0].Descriptor.ShaderRegister = 0;
+    root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    D3D12_DESCRIPTOR_RANGE texture_range{};
+    texture_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    texture_range.NumDescriptors = 1;
+    texture_range.BaseShaderRegister = 0;
+    root_parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    root_parameters[1].DescriptorTable.NumDescriptorRanges = 1;
+    root_parameters[1].DescriptorTable.pDescriptorRanges = &texture_range;
+    root_parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister = 0;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_ROOT_SIGNATURE_DESC root_description{};
-    root_description.NumParameters = 1;
-    root_description.pParameters = &root_parameter;
+    root_description.NumParameters = 2;
+    root_description.pParameters = root_parameters;
+    root_description.NumStaticSamplers = 1;
+    root_description.pStaticSamplers = &sampler;
     root_description.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
     Microsoft::WRL::ComPtr<ID3DBlob> root_blob;
     if (FAILED(D3D12SerializeRootSignature(&root_description,
@@ -228,6 +397,8 @@ float4 ps_main(PSInput input) : SV_TARGET { return input.color; }
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12,
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 28,
          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
     };
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pipeline{};
@@ -301,6 +472,7 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     command_list->SetPipelineState(pipeline_state_.Get());
     command_list->SetGraphicsRootSignature(root_signature_.Get());
     command_list->SetGraphicsRootConstantBufferView(0, constant_address_);
+    command_list->SetGraphicsRootDescriptorTable(1, texture_gpu_handle_);
     command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     command_list->IASetVertexBuffers(0, 1, &vertex_view_);
     command_list->IASetIndexBuffer(&index_view_);

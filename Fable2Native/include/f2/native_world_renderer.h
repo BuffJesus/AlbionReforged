@@ -6,13 +6,20 @@
 #include <wrl/client.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 
 namespace f2 {
 
 class NativeWorldRenderer {
 public:
-    bool initialise(ID3D12Device* device, const NativeScene& scene, std::string& error);
+    bool initialise(ID3D12Device* device,
+                    ID3D12CommandQueue* queue,
+                    const NativeScene& scene,
+                    const std::filesystem::path& texture_root,
+                    D3D12_CPU_DESCRIPTOR_HANDLE texture_cpu_handle,
+                    D3D12_GPU_DESCRIPTOR_HANDLE texture_gpu_handle,
+                    std::string& error);
     void render(ID3D12GraphicsCommandList* command_list,
                 const NativeScene& scene,
                 std::uint32_t width,
@@ -25,11 +32,13 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> constant_buffer_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_state_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> texture_;
     D3D12_VERTEX_BUFFER_VIEW vertex_view_{};
     D3D12_INDEX_BUFFER_VIEW index_view_{};
     D3D12_GPU_VIRTUAL_ADDRESS constant_address_ = 0;
     std::uint32_t index_count_ = 0;
     void* mapped_constants_ = nullptr;
+    D3D12_GPU_DESCRIPTOR_HANDLE texture_gpu_handle_{};
 };
 
 }  // namespace f2

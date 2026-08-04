@@ -1,4 +1,5 @@
 #include "f2/native_vulkan_world_renderer.h"
+#include "f2/native_texture.h"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,7 @@ namespace {
 struct Vertex {
     std::array<float, 3> position{};
     std::array<float, 4> color{};
+    std::array<float, 2> uv{};
 };
 
 struct Constants {
@@ -77,7 +79,8 @@ Geometry make_geometry(const NativeScene& scene) {
                 {source.position[0] * instance.scale + instance.position[0],
                  source.position[1] * instance.scale + instance.position[1],
                  source.position[2] * instance.scale + instance.position[2]},
-                color});
+                color,
+                source.uv});
         }
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
     }
@@ -175,6 +178,159 @@ bool upload_buffer(VkPhysicalDevice physical_device,
     return true;
 }
 
+std::filesystem::path resolve_texture(const NativeMaterial& material,
+                                      const std::filesystem::path& texture_root) {
+    if (material.albedo.empty()) return {};
+    const std::filesystem::path requested(material.albedo);
+    if (requested.is_absolute() && std::filesystem::is_regular_file(requested)) return requested;
+    const auto direct = texture_root / requested;
+    if (std::filesystem::is_regular_file(direct)) return direct;
+    if (requested.has_parent_path() && requested.begin()->string() == "data") {
+        const auto without_data = texture_root / requested.lexically_relative("data");
+        if (std::filesystem::is_regular_file(without_data)) return without_data;
+    }
+    return {};
+}
+
+bool create_texture(VkPhysicalDevice physical_device,
+                    VkDevice device,
+                    VkCommandPool command_pool,
+                    VkQueue queue,
+                    const NativeTexture& source,
+                    VkImage& image,
+                    VkDeviceMemory& memory,
+                    VkImageView& view,
+                    VkSampler& sampler,
+                    std::string& error) {
+    VkImageCreateInfo image_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    image_info.extent = {source.width, source.height, 1};
+    image_info.mipLevels = 1;
+    image_info.arrayLayers = 1;
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(device, &image_info, nullptr, &image) != VK_SUCCESS) {
+        error = "Vulkan could not create the native texture image.";
+        return false;
+    }
+    VkMemoryRequirements image_requirements{};
+    vkGetImageMemoryRequirements(device, image, &image_requirements);
+    std::uint32_t memory_type = 0;
+    if (!find_memory_type(physical_device, image_requirements.memoryTypeBits,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, memory_type) &&
+        !find_memory_type(physical_device, image_requirements.memoryTypeBits,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          memory_type)) {
+        error = "Vulkan has no usable memory type for the native texture.";
+        return false;
+    }
+    VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocation.allocationSize = image_requirements.size;
+    allocation.memoryTypeIndex = memory_type;
+    if (vkAllocateMemory(device, &allocation, nullptr, &memory) != VK_SUCCESS ||
+        vkBindImageMemory(device, image, memory, 0) != VK_SUCCESS) {
+        error = "Vulkan could not allocate native texture memory.";
+        return false;
+    }
+
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory staging_memory = VK_NULL_HANDLE;
+    if (!create_buffer(physical_device, device, source.rgba8.size(),
+                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT, staging, staging_memory, error)) {
+        return false;
+    }
+    void* mapped = nullptr;
+    if (vkMapMemory(device, staging_memory, 0, source.rgba8.size(), 0, &mapped) != VK_SUCCESS) {
+        error = "Vulkan could not map the native texture staging buffer.";
+        return false;
+    }
+    std::memcpy(mapped, source.rgba8.data(), source.rgba8.size());
+    vkUnmapMemory(device, staging_memory);
+
+    VkCommandBufferAllocateInfo command_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    command_info.commandPool = command_pool;
+    command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    command_info.commandBufferCount = 1;
+    VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(device, &command_info, &command_buffer) != VK_SUCCESS) {
+        error = "Vulkan could not allocate native texture upload commands.";
+        return false;
+    }
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(command_buffer, &begin);
+    VkImageMemoryBarrier to_transfer{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    to_transfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    to_transfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    to_transfer.srcAccessMask = 0;
+    to_transfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    to_transfer.image = image;
+    to_transfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    to_transfer.subresourceRange.levelCount = 1;
+    to_transfer.subresourceRange.layerCount = 1;
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+                         1, &to_transfer);
+    VkBufferImageCopy copy{};
+    copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy.imageSubresource.layerCount = 1;
+    copy.imageExtent = {source.width, source.height, 1};
+    vkCmdCopyBufferToImage(command_buffer, staging, image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    VkImageMemoryBarrier to_shader = to_transfer;
+    to_shader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    to_shader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    to_shader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    to_shader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &to_shader);
+    if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
+        error = "Vulkan could not finish native texture upload commands.";
+        return false;
+    }
+    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &command_buffer;
+    if (vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS ||
+        vkQueueWaitIdle(queue) != VK_SUCCESS) {
+        error = "Vulkan could not submit the native texture upload.";
+        return false;
+    }
+    vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
+    vkDestroyBuffer(device, staging, nullptr);
+    vkFreeMemory(device, staging_memory, nullptr);
+
+    VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    view_info.image = image;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(device, &view_info, nullptr, &view) != VK_SUCCESS) {
+        error = "Vulkan could not create the native texture view.";
+        return false;
+    }
+    VkSamplerCreateInfo sampler_info{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    sampler_info.magFilter = VK_FILTER_LINEAR;
+    sampler_info.minFilter = VK_FILTER_LINEAR;
+    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler_info.maxLod = 1.0f;
+    if (vkCreateSampler(device, &sampler_info, nullptr, &sampler) != VK_SUCCESS) {
+        error = "Vulkan could not create the native texture sampler.";
+        return false;
+    }
+    return true;
+}
+
 bool read_spirv(const std::filesystem::path& path,
                 std::vector<std::uint32_t>& code,
                 std::string& error) {
@@ -207,12 +363,17 @@ bool create_shader_module(VkDevice device,
 
 bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
                                            VkDevice device,
+                                           VkCommandPool command_pool,
+                                           VkQueue queue,
                                            VkRenderPass render_pass,
                                            VkFormat color_format,
+                                           const std::filesystem::path& texture_root,
                                            const std::filesystem::path& shader_directory,
                                            const NativeScene& scene,
                                            std::string& error) {
     device_ = device;
+    command_pool_ = command_pool;
+    queue_ = queue;
     const auto geometry = make_geometry(scene);
     if (geometry.vertices.empty() || geometry.indices.empty()) {
         error = "The native Vulkan world has no renderable geometry.";
@@ -233,24 +394,49 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         return false;
     }
 
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    NativeTexture native_texture;
+    std::filesystem::path texture_path;
+    for (const auto& material : scene.materials) {
+        texture_path = resolve_texture(material, texture_root);
+        if (!texture_path.empty()) break;
+    }
+    if (!texture_path.empty()) {
+        if (!load_dds_rgba8(texture_path, native_texture, error)) return false;
+    } else {
+        native_texture.width = 1;
+        native_texture.height = 1;
+        native_texture.rgba8 = {255, 255, 255, 255};
+    }
+    if (!create_texture(physical_device, device_, command_pool_, queue_, native_texture,
+                        texture_image_, texture_memory_, texture_view_, texture_sampler_, error)) {
+        return false;
+    }
+
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_info.bindingCount = 1;
-    layout_info.pBindings = &binding;
+    layout_info.bindingCount = 2;
+    layout_info.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &descriptor_set_layout_) != VK_SUCCESS) {
         error = "Vulkan could not create the world descriptor layout.";
         return false;
     }
 
-    VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1};
+    VkDescriptorPoolSize pool_sizes[] = {
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+    };
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool_info.maxSets = 1;
-    pool_info.poolSizeCount = 1;
-    pool_info.pPoolSizes = &pool_size;
+    pool_info.poolSizeCount = 2;
+    pool_info.pPoolSizes = pool_sizes;
     if (vkCreateDescriptorPool(device_, &pool_info, nullptr, &descriptor_pool_) != VK_SUCCESS) {
         error = "Vulkan could not create the world descriptor pool.";
         return false;
@@ -264,13 +450,22 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         return false;
     }
     VkDescriptorBufferInfo buffer_info{constant_buffer_, 0, sizeof(Constants)};
-    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    write.dstSet = descriptor_set_;
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    write.pBufferInfo = &buffer_info;
-    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    VkDescriptorImageInfo image_info{texture_sampler_, texture_view_,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet writes[2]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = descriptor_set_;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[0].pBufferInfo = &buffer_info;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = descriptor_set_;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].pImageInfo = &image_info;
+    vkUpdateDescriptorSets(device_, 2, writes, 0, nullptr);
 
     std::vector<std::uint32_t> vertex_code;
     std::vector<std::uint32_t> fragment_code;
@@ -300,11 +495,12 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     VkVertexInputAttributeDescription attributes[] = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
         {1, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 12},
+        {2, 0, VK_FORMAT_R32G32_SFLOAT, 28},
     };
     VkPipelineVertexInputStateCreateInfo vertex_input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vertex_input.vertexBindingDescriptionCount = 1;
     vertex_input.pVertexBindingDescriptions = &vertex_binding;
-    vertex_input.vertexAttributeDescriptionCount = 2;
+    vertex_input.vertexAttributeDescriptionCount = 3;
     vertex_input.pVertexAttributeDescriptions = attributes;
     VkPipelineInputAssemblyStateCreateInfo input_assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -416,6 +612,10 @@ void NativeVulkanWorldRenderer::destroy() {
     if (mapped_constants_) vkUnmapMemory(device_, constant_memory_);
     if (pipeline_) vkDestroyPipeline(device_, pipeline_, nullptr);
     if (pipeline_layout_) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
+    if (texture_sampler_) vkDestroySampler(device_, texture_sampler_, nullptr);
+    if (texture_view_) vkDestroyImageView(device_, texture_view_, nullptr);
+    if (texture_image_) vkDestroyImage(device_, texture_image_, nullptr);
+    if (texture_memory_) vkFreeMemory(device_, texture_memory_, nullptr);
     if (descriptor_pool_) vkDestroyDescriptorPool(device_, descriptor_pool_, nullptr);
     if (descriptor_set_layout_) vkDestroyDescriptorSetLayout(device_, descriptor_set_layout_, nullptr);
     if (constant_buffer_) vkDestroyBuffer(device_, constant_buffer_, nullptr);
@@ -425,6 +625,8 @@ void NativeVulkanWorldRenderer::destroy() {
     if (vertex_buffer_) vkDestroyBuffer(device_, vertex_buffer_, nullptr);
     if (vertex_memory_) vkFreeMemory(device_, vertex_memory_, nullptr);
     device_ = VK_NULL_HANDLE;
+    command_pool_ = VK_NULL_HANDLE;
+    queue_ = VK_NULL_HANDLE;
     vertex_buffer_ = VK_NULL_HANDLE;
     vertex_memory_ = VK_NULL_HANDLE;
     index_buffer_ = VK_NULL_HANDLE;
@@ -437,6 +639,10 @@ void NativeVulkanWorldRenderer::destroy() {
     descriptor_set_ = VK_NULL_HANDLE;
     pipeline_layout_ = VK_NULL_HANDLE;
     pipeline_ = VK_NULL_HANDLE;
+    texture_image_ = VK_NULL_HANDLE;
+    texture_memory_ = VK_NULL_HANDLE;
+    texture_view_ = VK_NULL_HANDLE;
+    texture_sampler_ = VK_NULL_HANDLE;
 }
 
 }  // namespace f2
