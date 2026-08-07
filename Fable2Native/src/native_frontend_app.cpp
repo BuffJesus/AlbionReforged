@@ -660,13 +660,22 @@ private:
         }
     }
 
+    // Stable TextureId for an arbitrary D3D12 descriptor, synced into the registry under `key`.
+    // (Slots 0..kUiTextureCount are reserved for UI assets; use high keys for non-slot textures
+    // like the ImGui glyph atlas or the video frame — a temporary bridge until native text lands.)
+    static constexpr std::uint32_t kFontTextureKey = 0x1000;
+    static constexpr std::uint32_t kVideoTextureKey = 0x1001;
+    f2::render::TextureId texture_id_for(std::uint32_t key, D3D12_GPU_DESCRIPTOR_HANDLE handle) {
+        const auto id = texture_registry_.id_for_key(key);
+        texture_registry_.set_handle(id, handle.ptr);
+        return id;
+    }
+
     // Stable TextureId for a UI asset, with its current D3D12 descriptor synced into the registry.
     // This is the resolver bridge for the backend-neutral scene path (f2::render).
     f2::render::TextureId ui_texture_id(f2::NativeUiAsset asset) {
         const std::size_t slot = ui_slot(asset);
-        const auto id = texture_registry_.id_for_key(static_cast<std::uint32_t>(slot));
-        texture_registry_.set_handle(id, ui_textures_[slot].gpu.ptr);
-        return id;
+        return texture_id_for(static_cast<std::uint32_t>(slot), ui_textures_[slot].gpu);
     }
 
     D3D12_GPU_DESCRIPTOR_HANDLE resolve_ui_texture(f2::render::TextureId id) const {
@@ -918,12 +927,15 @@ private:
 
     void render_native_main_menu(ID3D12GraphicsCommandList* command_list) {
         if (!native_ui_renderer_.ready()) return;
-        std::vector<f2::NativeUiQuad> quads;
+        // Migrated to the backend-neutral scene (docs/FRONTEND_ARCHITECTURE.md): build UiQuads by
+        // TextureId, render via the resolver overload. Text glyphs bridge through the ImGui font
+        // atlas as a TextureId for now (native text atlas is the follow-up that fully drops ImGui).
+        f2::render::UiDrawList scene;
         const auto add = [&](f2::NativeUiAsset asset, float x0, float y0, float x1, float y1,
                              float u0, float v0, float u1, float v1, std::uint32_t color) {
             const auto& texture = ui_textures_[ui_slot(asset)];
             if (!texture.texture) return;
-            quads.push_back({texture.gpu, x0, y0, x1, y1, u0, v0, u1, v1, color});
+            scene.add_sprite(ui_texture_id(asset), x0, y0, x1, y1, u0, v0, u1, v1, color);
         };
         const auto alpha = [](float value) {
             return static_cast<std::uint32_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f);
@@ -969,18 +981,19 @@ private:
                 const auto* glyph = font->FindGlyph(static_cast<ImWchar>(codepoint));
                 if (!glyph) continue;
                 if (glyph->Visible) {
-                    quads.push_back({font_texture, cursor + glyph->X0 * scale,
-                                     y + glyph->Y0 * scale, cursor + glyph->X1 * scale,
-                                     y + glyph->Y1 * scale, glyph->U0, glyph->V0,
-                                     glyph->U1, glyph->V1, color});
+                    scene.add_sprite(texture_id_for(kFontTextureKey, font_texture),
+                                     cursor + glyph->X0 * scale, y + glyph->Y0 * scale,
+                                     cursor + glyph->X1 * scale, y + glyph->Y1 * scale,
+                                     glyph->U0, glyph->V0, glyph->U1, glyph->V1, color);
                 }
                 cursor += glyph->AdvanceX * scale;
             }
         };
 
-        const auto& background = ui_textures_[ui_textures_[ui_slot(f2::NativeUiAsset::MainBackground)].texture
-                                                   ? ui_slot(f2::NativeUiAsset::MainBackground)
-                                                   : ui_slot(f2::NativeUiAsset::TitleBackground)];
+        const auto background_asset = ui_textures_[ui_slot(f2::NativeUiAsset::MainBackground)].texture
+                                          ? f2::NativeUiAsset::MainBackground
+                                          : f2::NativeUiAsset::TitleBackground;
+        const auto& background = ui_textures_[ui_slot(background_asset)];
         if (background.texture) {
             const float scale = height_ / static_cast<float>(background.height);
             const float image_width = background.width * scale;
@@ -989,10 +1002,11 @@ private:
                                                static_cast<float>(game_.frontend.state_time()) *
                                                    29.0f * pan_scale,
                                            image_width);
+            const auto background_id = ui_texture_id(background_asset);
             for (float x = -offset; x < static_cast<float>(width_); x += image_width) {
-                quads.push_back({background.gpu, x, 0.0f, x + image_width,
+                scene.add_sprite(background_id, x, 0.0f, x + image_width,
                                  static_cast<float>(height_), 0.0f, 0.0f, 1.0f, 1.0f,
-                                 rgba(255, 255, 255, 255)});
+                                 rgba(255, 255, 255, 255));
             }
         } else {
             add(f2::NativeUiAsset::MenuSurface, 0.0f, 0.0f, width_ * 0.16f,
@@ -1018,10 +1032,10 @@ private:
                                          std::uint32_t color, bool key_black_matte) {
             const auto add_slice = [&](float sx0, float sy0, float sx1, float sy1,
                                        float su0, float sv0, float su1, float sv1) {
-                const auto before = quads.size();
+                const auto before = scene.size();
                 add(asset, sx0, sy0, sx1, sy1, su0, sv0, su1, sv1, color);
-                if (key_black_matte && quads.size() != before) {
-                    quads.back().key_black_matte = true;
+                if (key_black_matte && scene.size() != before) {
+                    scene.set_last_key_black(true);
                 }
             };
             const float center_x0 = x0 + slice_width;
@@ -1039,17 +1053,12 @@ private:
             const float body_slice_width = body_width * (52.0f / 452.0f);
             const auto add_body_slice = [&](float sx0, float sx1,
                                             float su0, float su1) {
-                const auto before = quads.size();
+                const auto before = scene.size();
                 add(f2::NativeUiAsset::AbilityElements, sx0, y0, sx1, y1,
                     su0, 96.0f / 512.0f, su1, 152.0f / 512.0f, color);
-                if (quads.size() == before) return;
-                auto& body = quads.back();
-                body.detail_texture = menu_surface.gpu;
-                body.detail_u0 = (sx0 - x0) / body_width;
-                body.detail_v0 = 0.0f;
-                body.detail_u1 = (sx1 - x0) / body_width;
-                body.detail_v1 = 1.0f;
-                body.combine_detail = true;
+                if (scene.size() == before) return;
+                scene.set_last_detail(ui_texture_id(f2::NativeUiAsset::MenuSurface),
+                                      (sx0 - x0) / body_width, 0.0f, (sx1 - x0) / body_width, 1.0f);
             };
             const float center_x0 = x0 + body_slice_width;
             const float center_x1 = x1 - body_slice_width;
@@ -1166,9 +1175,9 @@ private:
                 726.98f * menu_unit_scale, 0.0f, 0.0f, 0.531f, 0.406f,
                 rgba(255, 255, 255, 255));
         } else if (menu_frame.texture) {
-            quads.push_back({menu_frame.gpu, 0.0f, 0.0f, static_cast<float>(width_),
-                             static_cast<float>(height_), 0.0f, 0.0f, 1.0f, 1.0f,
-                             rgba(255, 255, 255, 255)});
+            scene.add_sprite(ui_texture_id(f2::NativeUiAsset::MenuFrameOverlay), 0.0f, 0.0f,
+                             static_cast<float>(width_), static_cast<float>(height_),
+                             0.0f, 0.0f, 1.0f, 1.0f, rgba(255, 255, 255, 255));
         }
         const auto& side_rail_atlas =
             ui_textures_[ui_slot(f2::NativeUiAsset::SideRailAtlas)];
@@ -1242,12 +1251,13 @@ private:
                 const float card_height = 398.0f * menu_unit_scale;
                 const float center_y = height_ * 0.502f + y_offset * menu_unit_scale;
                 const float scaled_width = draw_width * menu_unit_scale;
-                quads.push_back({texture.gpu, x0 * menu_unit_scale,
+                scene.add_sprite(ui_texture_id(asset), x0 * menu_unit_scale,
                                  center_y - card_height * 0.5f,
                                  x0 * menu_unit_scale + scaled_width,
                                  center_y + card_height * 0.5f, 0.0f, 0.0f, 1.0f, 1.0f,
                                  rgba(255, 255, 255,
-                                      static_cast<std::uint32_t>(card_smooth * 255.0f)), angle});
+                                      static_cast<std::uint32_t>(card_smooth * 255.0f)));
+                scene.set_last_rotation(angle);
             };
             add_card(f2::NativeUiAsset::CardBoy, 349.0f, 410.0f, -12.0f, -0.14f);
             add_card(f2::NativeUiAsset::CardGirl, 654.0f, 250.0f, -3.0f, 0.105f);
@@ -1271,7 +1281,8 @@ private:
             add_card_hitbox("##choose_card_boy", false, 349.0f, 410.0f, -12.0f);
             add_card_hitbox("##choose_card_girl", true, 654.0f, 250.0f, -3.0f);
         }
-        native_ui_renderer_.render(command_list, width_, height_, quads);
+        native_ui_renderer_.render(command_list, width_, height_, scene.quads(),
+                                   [this](f2::render::TextureId id) { return resolve_ui_texture(id); });
     }
 
     void render_native_choose_card(ID3D12GraphicsCommandList* command_list) {

@@ -62,6 +62,21 @@ public:
         if (!quads_.empty()) quads_.back().rotation_radians = radians;
     }
 
+    // Attach a detail layer to the most recently appended quad (the retail two-layer material,
+    // built as "add sprite, then set detail" in the menu row slicing).
+    void set_last_detail(TextureId detail_texture, float du0, float dv0, float du1, float dv1) {
+        if (quads_.empty()) return;
+        auto& q = quads_.back();
+        q.detail_texture = detail_texture;
+        q.detail_u0 = du0; q.detail_v0 = dv0; q.detail_u1 = du1; q.detail_v1 = dv1;
+        q.combine_detail = true;
+    }
+
+    // Key pure black to transparent on the most recently appended quad.
+    void set_last_key_black(bool key) {
+        if (!quads_.empty()) quads_.back().key_black_matte = key;
+    }
+
 private:
     std::vector<UiQuad> quads_;
 };
