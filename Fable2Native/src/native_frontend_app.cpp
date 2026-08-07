@@ -7,6 +7,8 @@
 #include "f2/native_ui.h"
 #include "f2/native_ui_renderer.h"
 #include "f2/native_video_decoder.h"
+#include "f2/render/texture_registry.h"
+#include "f2/render/ui_draw_list.h"
 #include "f2/native_world_renderer.h"
 
 #include "imgui.h"
@@ -658,6 +660,21 @@ private:
         }
     }
 
+    // Stable TextureId for a UI asset, with its current D3D12 descriptor synced into the registry.
+    // This is the resolver bridge for the backend-neutral scene path (f2::render).
+    f2::render::TextureId ui_texture_id(f2::NativeUiAsset asset) {
+        const std::size_t slot = ui_slot(asset);
+        const auto id = texture_registry_.id_for_key(static_cast<std::uint32_t>(slot));
+        texture_registry_.set_handle(id, ui_textures_[slot].gpu.ptr);
+        return id;
+    }
+
+    D3D12_GPU_DESCRIPTOR_HANDLE resolve_ui_texture(f2::render::TextureId id) const {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle{};
+        handle.ptr = texture_registry_.handle(id);
+        return handle;
+    }
+
     bool ensure_ui_texture(f2::NativeUiAsset asset) {
         const auto* source = ui_assets_.texture(asset);
         if (!source) return false;
@@ -1282,12 +1299,14 @@ private:
 
     void render_native_title(ID3D12GraphicsCommandList* command_list) {
         if (!native_ui_renderer_.ready()) return;
-        std::vector<f2::NativeUiQuad> quads;
+        // Migrated to the backend-neutral scene: build an f2::render::UiDrawList referencing textures
+        // by TextureId, then render through the resolver overload (docs/FRONTEND_ARCHITECTURE.md).
+        f2::render::UiDrawList scene;
         const auto add = [&](f2::NativeUiAsset asset, float x0, float y0, float x1, float y1,
                              float u0, float v0, float u1, float v1, std::uint32_t color) {
             const auto& texture = ui_textures_[ui_slot(asset)];
             if (!texture.texture) return;
-            quads.push_back({texture.gpu, x0, y0, x1, y1, u0, v0, u1, v1, color});
+            scene.add_sprite(ui_texture_id(asset), x0, y0, x1, y1, u0, v0, u1, v1, color);
         };
         const auto alpha = [](float value) {
             return static_cast<std::uint32_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f);
@@ -1303,10 +1322,11 @@ private:
             const float scale = height_ / static_cast<float>(background.height);
             const float image_width = background.width * scale;
             const float offset = std::fmod(title_time * 29.0f, image_width);
+            const auto background_id = ui_texture_id(f2::NativeUiAsset::TitleBackground);
             for (float x = -offset; x < static_cast<float>(width_); x += image_width) {
-                quads.push_back({background.gpu, x, 0.0f, x + image_width,
+                scene.add_sprite(background_id, x, 0.0f, x + image_width,
                                  static_cast<float>(height_), 0.0f, 0.0f, 1.0f, 1.0f,
-                                 rgba(255, 255, 255, alpha(fade))});
+                                 rgba(255, 255, 255, alpha(fade)));
             }
         }
         const float logo_fade = std::clamp((title_time - 0.86f) / 0.75f, 0.0f, 1.0f);
@@ -1383,7 +1403,8 @@ private:
                 }
             }
         }
-        native_ui_renderer_.render(command_list, width_, height_, quads);
+        native_ui_renderer_.render(command_list, width_, height_, scene.quads(),
+                                   [this](f2::render::TextureId id) { return resolve_ui_texture(id); });
     }
 
     void handle_input() {
@@ -2670,6 +2691,7 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE video_gpu_handle_{};
     f2::NativeWorldRenderer world_renderer_;
     f2::NativeUiRenderer native_ui_renderer_;
+    f2::render::TextureRegistry texture_registry_;  // maps ui slots -> stable TextureIds (neutral scene)
     f2::NativeGame game_;
     f2::NativeInputRouter input_;
     ComPtr<ID3D12Device> device_;
