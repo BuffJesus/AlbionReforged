@@ -332,9 +332,12 @@ bool create_texture(VkPhysicalDevice physical_device,
     sampler_info.magFilter = VK_FILTER_LINEAR;
     sampler_info.minFilter = VK_FILTER_LINEAR;
     sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    // UI atlases are sampled at authored sub-rectangles. Wrapping would pull
+    // pixels from the opposite edge of the atlas into the curved borders and
+    // create the visible seams seen on the menu rails.
+    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampler_info.maxLod = 1.0f;
     if (vkCreateSampler(device, &sampler_info, nullptr, &sampler) != VK_SUCCESS) {
         error = "Vulkan could not create the native texture sampler.";

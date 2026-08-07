@@ -41,6 +41,10 @@ void NativeInputRouter::set_default_bindings() {
         {VK_RETURN, XINPUT_GAMEPAD_A, "ENTER", "A"};
     bindings_[static_cast<std::size_t>(NativeInputAction::Back)] =
         {VK_ESCAPE, XINPUT_GAMEPAD_B, "ESC", "B"};
+    bindings_[static_cast<std::size_t>(NativeInputAction::Left)] =
+        {VK_LEFT, 0, "LEFT", "LEFT"};
+    bindings_[static_cast<std::size_t>(NativeInputAction::Right)] =
+        {VK_RIGHT, 0, "RIGHT", "RIGHT"};
     bindings_[static_cast<std::size_t>(NativeInputAction::Up)] =
         {VK_UP, XINPUT_GAMEPAD_DPAD_UP, "UP", "DPAD UP"};
     bindings_[static_cast<std::size_t>(NativeInputAction::Down)] =
@@ -50,6 +54,8 @@ void NativeInputRouter::set_default_bindings() {
 #else
     bindings_[static_cast<std::size_t>(NativeInputAction::Accept)] = {0, 0, "ENTER", "A"};
     bindings_[static_cast<std::size_t>(NativeInputAction::Back)] = {0, 0, "ESC", "B"};
+    bindings_[static_cast<std::size_t>(NativeInputAction::Left)] = {0, 0, "LEFT", "LEFT"};
+    bindings_[static_cast<std::size_t>(NativeInputAction::Right)] = {0, 0, "RIGHT", "RIGHT"};
     bindings_[static_cast<std::size_t>(NativeInputAction::Up)] = {0, 0, "UP", "DPAD UP"};
     bindings_[static_cast<std::size_t>(NativeInputAction::Down)] = {0, 0, "DOWN", "DPAD DOWN"};
     bindings_[static_cast<std::size_t>(NativeInputAction::Skip)] = {0, 0, "SPACE", "START"};
@@ -73,6 +79,8 @@ void NativeInputRouter::load_binding_line(const std::string& key, const std::str
     NativeInputAction action = NativeInputAction::Count;
     if (normalized_key == "accept") action = NativeInputAction::Accept;
     else if (normalized_key == "back") action = NativeInputAction::Back;
+    else if (normalized_key == "left") action = NativeInputAction::Left;
+    else if (normalized_key == "right") action = NativeInputAction::Right;
     else if (normalized_key == "up") action = NativeInputAction::Up;
     else if (normalized_key == "down") action = NativeInputAction::Down;
     else if (normalized_key == "skip") action = NativeInputAction::Skip;
@@ -106,6 +114,7 @@ void NativeInputRouter::mark_pressed(NativeInputAction action) {
 }
 
 void NativeInputRouter::update_prompt_device(bool controller, bool mouse) {
+    if (controller_prompts_forced_) return;
     controller_prompt_active_ = controller;
     mouse_prompt_active_ = mouse;
 }

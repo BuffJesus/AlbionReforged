@@ -10,6 +10,8 @@ namespace f2 {
 enum class NativeInputAction : std::uint8_t {
     Accept,
     Back,
+    Left,
+    Right,
     Up,
     Down,
     Skip,
@@ -21,6 +23,10 @@ public:
     NativeInputRouter();
 
     void load_bindings(const std::filesystem::path& path);
+    void force_controller_prompts(bool active) noexcept {
+        controller_prompts_forced_ = active;
+        controller_prompt_active_ = active;
+    }
     void poll();
 
     [[nodiscard]] bool pressed(NativeInputAction action) const noexcept;
@@ -49,6 +55,7 @@ private:
     std::uint16_t previous_controller_buttons_ = 0;
     bool controller_connected_ = false;
     bool controller_prompt_active_ = false;
+    bool controller_prompts_forced_ = false;
     bool mouse_prompt_active_ = false;
 };
 
