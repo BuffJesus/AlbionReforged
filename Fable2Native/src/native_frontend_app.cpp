@@ -1287,7 +1287,7 @@ private:
 
     void render_native_choose_card(ID3D12GraphicsCommandList* command_list) {
         if (!native_ui_renderer_.ready()) return;
-        std::vector<f2::NativeUiQuad> quads;
+        f2::render::UiDrawList scene;  // migrated to the backend-neutral scene path
         const auto add_card = [&](f2::NativeUiAsset asset, float center_x, float angle) {
             const auto& texture = ui_textures_[ui_slot(asset)];
             if (!texture.texture) return;
@@ -1295,17 +1295,18 @@ private:
             const float card_width = 256.0f * scale;
             const float card_height = 384.0f * scale;
             const float center_y = height_ * 0.502f;
-            quads.push_back({texture.gpu, center_x * scale - card_width * 0.5f,
+            scene.add_sprite(ui_texture_id(asset), center_x * scale - card_width * 0.5f,
                              center_y - card_height * 0.5f,
                              center_x * scale + card_width * 0.5f,
-                             center_y + card_height * 0.5f, 0.0f, 0.0f, 1.0f, 1.0f,
-                             0xffffffffu, angle});
+                             center_y + card_height * 0.5f, 0.0f, 0.0f, 1.0f, 1.0f, 0xffffffffu);
+            scene.set_last_rotation(angle);
         };
         // These are the measured retail card centers and tilts from the captured
         // choosecard screen at the reference 1280x720 presentation size.
         add_card(f2::NativeUiAsset::CardBoy, 470.0f, -0.14f);
         add_card(f2::NativeUiAsset::CardGirl, 781.0f, 0.105f);
-        native_ui_renderer_.render(command_list, width_, height_, quads);
+        native_ui_renderer_.render(command_list, width_, height_, scene.quads(),
+                                   [this](f2::render::TextureId id) { return resolve_ui_texture(id); });
     }
 
     void render_native_title(ID3D12GraphicsCommandList* command_list) {
