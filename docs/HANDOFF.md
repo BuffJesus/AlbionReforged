@@ -1,6 +1,97 @@
 # Handoff — resume here
 
-## ▶▶ NEXT SESSION — START HERE (2026-08-01 midday)
+## ▶▶ ACTIVE TRACK (2026-08-06) — RETAIL FRONTEND DECOMP → Fable2Native fidelity ★ START HERE
+
+**Directive (user):** the Fable2Native frontend (UI setup/positioning, behaviour, animations,
+movies, effects, sounds) is being rebuilt from the **retail game decompilation FIRST**, not by
+approximation. Track = "both, staged" (recomp stays the playable oracle; Fable2Native is the shipping
+target). The XEX/PPC decomp is the PRIMARY source; the GUI LuaQ scripts are a thin event-firing top.
+
+**★ Read first:** [`docs/RETAIL_FRONTEND_SPEC.md`](RETAIL_FRONTEND_SPEC.md) — the consolidated,
+evidence-cited spec (state machine, input, movies, title, menu layout/animation, options, save/load,
+sound, loading) with exact addresses + the reusable RE machinery. Also memory
+`fable2-retail-frontend-re-workflow` and [`FRONTEND_FULL_PASS_NEXT_SESSION.md`](FRONTEND_FULL_PASS_NEXT_SESSION.md).
+
+**Machinery proven this session (all repeatable):**
+- Ghidra headless decompile: `& "D:\Subuwu\tools\ghidra-public\support\analyzeHeadless.bat" "D:\Documents\Fable2RE\ghidra_proj" Fable2_TU1 -process -noanalysis -readOnly -scriptPath "D:\Documents\Fable2RE\tools\ghidra_label" -postScript DecompFuncs.java 0xADDR …` (program=`default_tu1.xex`; ~30s/run).
+- Discovery: `FindStrHits.java <keywords…>` (string→xref), `DumpFuncsInRange.java lo hi`.
+- LuaQ: `python tools\lua_mod\script_index.py --bnk Fable2Recomp\assets\game\data\guiscripts.bnk {list|search|disasm <name>}`.
+- Whole-game PPC→C++ cross-ref: `Fable2Recomp/generated/Fable2_recomp.*.cpp` (299 MB; `sub_<addr>`).
+- Launch the REAL native frontend (not the black `--ui-only` placeholder): `f2native_frontend.exe --game-dir "D:\Documents\Fable2RE\Fable2Recomp\assets\game" --ui-root "D:\Documents\Fable2RE\ghidra_out\title_ui_re" --skip-intro [--start-menu]`. Screenshot flip-model window with `PrintWindow(hwnd,hdc,2)`, NOT GDI CopyFromScreen.
+
+**NEXT (open GAPs, all exe/PPC — see spec §11):**
+1. ✅ **DONE 2026-08-07** — movie player `0x823C0D90` full body decompiled (spec §3): one-at-a-time
+   `mgr+0x2c` guard, `mgr+0xc` state, movies at `GAME:\videos\<name>` (fallbacks `game:\data\`,`epi:\`),
+   player obj `*(*(DAT_83496ab8+0xc)+0x8c)` activated via `822C3F50`+`82182C30`. **Sub-gaps CLOSED
+   2026-08-07** (`frontend_movie_statemachine.txt`): state `mgr+0x2c` `0→1→2→3→4→5→0`; GetState
+   9=PLAYING/10=FINISHING; duration=`.bik` frames/30; skip=`setter(mgr,5)`; serialized one-at-a-time queue.
+2. ✅ **DONE 2026-08-07 (incl. literal names)** — frontend menu **sound**: fired via `82371E80(out,
+   sndmgr, &slot)`→`82265220`→`82c028e8`(lvl3)→`82C05EF8`; slots are `lh_string`s filled at boot with
+   `SE_GUI_*` names. Nav-up=`SE_GUI_SLIDE_MENU_UP`(DD8), nav-down=`SE_GUI_SLIDE_MENU_DOWN`(DDC),
+   select-A=`SE_GUI_MENU_BOX_SELECT`(E50), cancel-B=`SE_GUI_MENU_BOX_CANCEL`(E4C); full `SE_GUI_*`
+   table @`0x820B0700` (spec §8). No runtime breakpoint needed — recovered statically.
+3. ✅ **DONE 2026-08-07** — CFrontEndManager map: `frontend_mgr_funcs.txt` + real bodies decompiled
+   (`frontend_mgr_bodies.txt`): dispatch table `826D8008` (stride 0x18, key +0x10), input `826D5480`,
+   accept `826D5AF0`, save/load `826D9620`/`826DA038`, gender `826E0D60`, OUTRO-swap `826E13F0` (spec §1).
+4. ✅ **DONE 2026-08-07** — `QuitToFrontEnd`: trampoline `823BB790` → real body `0x82312530` (sets
+   `subsystem+0x104=1`, resets gameflow) (`frontend_quit_real.txt`).
+5. ✅ **DONE 2026-08-07** — `gui.adb` format reversed + `tools/parse_gui_adb.py` (`gui_adb_format.txt`);
+   event→wav not closable from adb+bnk alone (sample GUIDs). CFrontEndManager full method map
+   (`frontend_mgr_methodmap.txt`).
+
+**Reusable tooling added:** `tools/ghidra_label/ClearNoReturn.java` + `ReformDecomp.java` — recover
+frontend functions Ghidra truncated via a `savegprlr` helper mis-flagged noReturn. Recipe:
+`ClearNoReturn.java 0x<helper>` then `ReformDecomp.java 0x<start> 0x<end>` in **write mode (no `-readOnly`)**.
+
+New raw dumps: `ghidra_out/frontend_{mgr_funcs,mgr_bodies,movie_player_decomp,movie_realbody_decomp,movie_tramp_disasm,movie_reform,movie_strings,sound_callers,sound_globals,sound_init,sound_ctor,sound_slotfill,sound_names,quit}.txt`.
+2026-08-07 additions: `ghidra_out/frontend_movie_statemachine.txt` (+ `movie_tick_reform`, `movie_elem_reform`
+= the reformed tick/driver), `frontend_quit_real.txt` (real quit body `0x82312530`), `frontend_mgr_methodmap.txt`
+(full `0x826D4000–0x826E2000` map) + `frontend_mgr_bodies2.txt`, `gui_adb_format.txt` + `tools/parse_gui_adb.py`.
+
+### NATIVE FRONTEND — asset pipeline DONE (2026-08-07)
+- **GUI audio wired + base-game-cooked** (spec §8, memory `fable2-native-asset-cook-pipeline`):
+  `NativeFrontendSound` keyed to `SE_GUI_*`; `tools/cook_gui_audio.py` decodes the user's `gui.bnk`
+  XMA2 → PCM (48 kHz) into `native_audio/` + manifest. Runtime default audio-root = `<ui-root>/native_audio`.
+- **Cookers wired into the installer**: `f2native_installer --iso <iso> --out <dir>` OR
+  `--game <extracted-dir> [--package <dir>]` extracts+validates then runs the offline cookers
+  (`native_cook.cpp` → `cook_videos.py` + `cook_gui_audio.py`) → user-local package
+  (`videos/` + `native_audio/`). Launch runtime with `--ui-root <package>`. Ships no assets.
+
+### ▶ NATIVE FRONTEND — REMAINING decomp/auto-RE to FINISH (tracked so it's not forgotten)
+Evidence layers: Ghidra headless (`DecompFuncs`/`ReformDecomp`), the 299 MB generated PPC→C++, the
+recomp oracle, and the `auto-re-agent/` (AI+Ghidra) for bulk method sweeps.
+1. ✅ **DONE 2026-08-07** — Movie sub-gaps (§3, `ghidra_out/frontend_movie_statemachine.txt`): reformed
+   the tick `MoviePlayer_FrameUpdate@0x823C1658` + driver `0x822A9D60` + setter `0x823C1CB0`. Manager
+   state `mgr+0x2c` = `0 IDLE→1 QUEUED→2 START→3 PLAYING→4 FINISHED→5 STOP→0`. **GetState 9=PLAYING /
+   10=FINISHING** (the GUI movie element, matching manager 3 / 4→5; 10 is literally the stop code).
+   **Duration** = `.bik` numFrames/30. **Skip** = forced `setter(mgr,5)` (`0x822A9F18`). **Sequence** =
+   serialized one-at-a-time queue (PlayMovie refuses while `mgr+0x2c!=0`; order in caller). Native wiring
+   already matches.
+2. ✅ **DONE 2026-08-07** — `QuitToFrontEnd` (`ghidra_out/frontend_quit_real.txt`): `823BB790` is a
+   trampoline → **real body `0x82312530`** (logs `QuitToFrontEnd(%s)`, flushes Live stats, dismisses the
+   current screen, **sets `subsystem+0x104=1`** = return-to-frontend request, resets gameflow via
+   `82312DD0`; optional target name stashed at `*(*(DAT_83496ab8+8)+0x24)+0x10`).
+3. ✅ **DONE 2026-08-07** — `gui.adb` parsed (`tools/parse_gui_adb.py` + `ghidra_out/gui_adb_format.txt`):
+   format reversed (18-byte event records `[FNV1(event)][sampleDefHash][type]`, name table, `Waveforms`
+   section); 97 events + all frontend-6 resolved. **LIMIT (measured):** `sampleDefHash` is a sound-build
+   GUID, not a `.wav`-name hash → event→wav not closable from adb+bnk alone; cooker map stays as the
+   working approximation. Correction noted: the 4 move events have 4 distinct defs (recommendation only,
+   `cook_gui_audio.py` NOT edited).
+4. **Options page population/apply** (§6) — native owners for each setting; Resolution/AA → real
+   swapchain/renderer backend (currently memory-only labels).
+5. ✅ **DONE 2026-08-07** — CFrontEndManager method map complete (`ghidra_out/frontend_mgr_methodmap.txt`,
+   spec §1): every real body in `0x826D4000–0x826E2000` decompiled + role-labelled (confirm `826D5914`,
+   cancel `826D5A60`, screen tick `826D5D00`, hash-insert `826D6AF8`, dtors, singleton bind `826D9FC8`,
+   screen-ready `826E1C50`, sound LUT `826D4808`). Remaining `0x8` entries are tail-call thunks.
+6. **Save/Load card-fan + new-game gender** (§7) — native behavior parity + verify against the RE.
+7. **Frontend music** (`menu_interlude`) — identify its base-game bank + add a cooker step.
+8. **Visual/BGF cooker** (the big visual-parity piece): textures from `gui_textures.bnk` + layout/effects
+   from the BGF hierarchy & PM4 draw-truth (`RETAIL_FRONTEND_DRAW_TRUTH.md`, `TITLE_SCREEN_FIDELITY.md`)
+   → one authoritative render path, verified numerically vs `resources/options/*.png` + title captures.
+
+---
+
+## ▶▶ NATIVE RENDERER TRACK (2026-08-01 midday) — black loaded world (recomp oracle; paused behind frontend work)
 **Bug:** native (`--gpu_plugin native`) loaded world renders BLACK (UI+bloom only); xenos renders it fully lit.
 **Frontier (evidence-locked this session):** the ~232 material draws WRITE a dark HDR (`0x19C67000` peak 1.06/mean 0.08); inputs (textures, float constants, coverage) + resolve + compositor + exposure/LUT are ALL proven fine. **#1 lead: native's Xenos→DXBC PREDICATE/control-flow translation likely leaves the exported color register `r8` at its `l(0,0,0,0)` init → black** (the lit color is written only inside `(p0)` blocks; ucode `setp_ne_push`/`setp_gt_push`/`kill_gt`/`(!p0) jmp L19`). Details: RESULT block below + memory `fable2-blackworld-compositor-exposure` UPDATE 16 + ADDENDUM.
 
@@ -3741,3 +3832,11 @@ coverage, and color-write acceptance, preserving the existing default-off diagno
   `rexgpu-native.dll` SHA-256 is
   `2E5CD6A344C215C7E6954C9113AE5B21B7071A238ED6A001B827EC5791E6C56F`. No Fable process or debugger
   remains running.
+
+## Frontend full-pass handoff — 2026-08-05
+
+Read [`FRONTEND_FULL_PASS_NEXT_SESSION.md`](FRONTEND_FULL_PASS_NEXT_SESSION.md) before touching
+the frontend. It defines the required start-to-finish parity pass: retail BGF/Lua/decompilation
+and ReXGlue tracing first, one authoritative native render path, then deterministic capture and
+input validation. The current Resolution and Anti-Aliasing entries are UI/state only until the
+PC swapchain/backend is wired; do not call them complete.

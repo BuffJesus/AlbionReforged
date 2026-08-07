@@ -20,6 +20,24 @@ Reproducible recipes. Paths assume this repo at `D:\Documents\Fable2RE`.
 XDVDFS parser (game partition base `0xFD90000`). See `scripts` in session history; extracts
 `default.xex` and the full `/data` tree to `Fable2Recomp/assets/game`. STFS extractor pulls
 `tu1_data.bnk` + `default.xexp` from the TU package `716F0A0D/TU_...`.
+Reusable single-file XDVDFS extractor: `tools/xdvdfs_extract_file.py` (scans XGD offsets for the
+`MICROSOFT*XBOX*MEDIA` magic, walks the root dir tree, extracts one file — used for the integrity check below).
+
+## ★ Source provenance / integrity (VERIFIED 2026-08-07 — sha256)
+The decomp/recomp binary is confirmed the pristine, canonical TU1 exe — NOT altered by our workflow
+(Ghidra imports a copy into `ghidra_proj`; the recomp reads but never writes the `.xex`; all files
+untouched since the Jul-12 setup). Verified chain against the user's originals
+(`Fable 2 PLT.iso`, `Fable II (World) (v1) (1.2).zip`):
+- **Gold `default.xex`** (pre-patch, 21 217 280 B) `88c4ef2e18e65409444d1b068eff921d1f7e180a5ae64edc64ba6b0872372662`
+  — byte-identical to the file extracted directly from the ISO (partition base `0xFD90000`).
+- **TU package** `716F0A0D/TU_16L61VH_...` (3 166 208 B) `b36eb38ce1db9e1195dea494c8e75d5ab4be737dcef10565ef16a415de27524c`
+  — byte-identical to the title-update zip member.
+- **Patch** `default.xexp` (2 992 128 B) `046a05693b4da4437083c784000a850858b3bf992955c7db30d518fb3e53e41c` — genuine `XEX2` delta (flag `0x50`).
+- **TU1 exe** `default_tu1.xex` == `Fable2Recomp/assets/game/default.xex` (21 282 816 B)
+  `a21c284b96c8a551e70ae61769e3660b36cf17442a319ab5d041aebb8e711c02`. Gold→TU1 delta = exactly `0x10000` (64 KB).
+Note: the CLI `xextool.exe` is NOT on disk (only `xexgui/XeXGUI.2.1/XexToolGUI.exe`); re-run the patch
+step below only if you obtain XexTool 6.3 CLI. Given pristine inputs + an internally-consistent,
+runnable/decompilable output, re-applying is not required for integrity.
 
 ## Apply the TU1 patch  (★ produces the correct executable)
 ```
