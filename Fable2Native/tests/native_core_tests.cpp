@@ -4,6 +4,7 @@
 #include "f2/native_texture.h"
 #include "f2/native_ui.h"
 #include "f2/render/null_render_backend.h"
+#include "f2/render/ui_draw_list.h"
 
 #include <cassert>
 #include <array>
@@ -204,6 +205,21 @@ int main() {
         assert(backend.texture_count() == 1);
         backend.resize(1920, 1080);
         assert(backend.width() == 1920);
+
+        // The backend-neutral scene (UiDrawList) is what a shared scene builder produces and any
+        // backend consumes — exercise that path end-to-end.
+        f2::render::UiDrawList scene;
+        scene.add_sprite(tex, 0, 0, 640, 480);
+        scene.add_rect(tex, 0, 0, 10, 10, 0xff0000ffu);
+        scene.add_detail_sprite(tex, tex, 0, 0, 128, 128, 0, 0, 1, 1, 0, 0, 1, 1, 0xffffffffu, true);
+        scene.set_last_rotation(1.5f);
+        assert(scene.size() == 3);
+        assert(scene.quads()[2].combine_detail && scene.quads()[2].key_black_matte);
+        assert(scene.quads()[2].rotation_radians == 1.5f);
+        backend.begin_frame();
+        backend.draw_ui(scene.quads(), 1920, 1080);
+        backend.present();
+        assert(backend.last_quad_count() == 3 && backend.frames_presented() == 2);
     }
 
     std::filesystem::remove(path);
