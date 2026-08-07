@@ -1389,7 +1389,6 @@ private:
             std::uint32_t color = 0;
         };
         std::vector<RetailDrawRow> draw_rows;
-        menu_hitboxes_.clear();  // rebuilt each frame for native cursor hit-testing
         // For the Options state the rows are the submenu tabs (options_items), not the main menu.
         const auto& displayed_items = game_.frontend.state() == f2::FrontendState::Options
                                           ? game_.frontend.options_items()
@@ -1417,8 +1416,6 @@ private:
             const auto& item = displayed_items[index];
             draw_rows.push_back({item.label, x, y, draw_width, draw_height,
                                  slot_scale, row_color});
-            // Record the on-screen rect for native cursor hit-testing (mouse selection).
-            menu_hitboxes_.push_back({item.id, x, y, x + draw_width, y + draw_height});
             if (selected && input_.using_controller_prompts() &&
                 frame_elements.texture) {
                 selected_prompt_ready = true;
@@ -1571,21 +1568,7 @@ private:
             };
             add_card(f2::NativeUiAsset::CardBoy, 349.0f, 410.0f, -12.0f, -0.14f);
             add_card(f2::NativeUiAsset::CardGirl, 654.0f, 250.0f, -3.0f, 0.105f);
-
-            // The retail card images are the pointer targets as well as the
-            // visual choice. Keep these hit boxes tied to the measured draw
-            // rectangles; selection itself remains in the controller so the
-            // D3D12 and Vulkan front ends cannot diverge.
-            const auto add_card_hitbox = [&](bool girl, float x0, float draw_width, float y_offset) {
-                const float card_height = 398.0f * menu_unit_scale;
-                const float left = x0 * menu_unit_scale;
-                const float top = height_ * 0.502f + y_offset * menu_unit_scale -
-                                  card_height * 0.5f;
-                menu_hitboxes_.push_back({girl ? "card_girl" : "card_boy", left, top,
-                                          left + draw_width * menu_unit_scale, top + card_height});
-            };
-            add_card_hitbox(false, 349.0f, 410.0f, -12.0f);
-            add_card_hitbox(true, 654.0f, 250.0f, -3.0f);
+            // Card choice is keyboard/controller: Left/Right selects boy/girl, Enter/A confirms.
         }
         // Native (ImGui-free) Options screen: the title/footer chrome always, the settings panel when
         // a submenu is open. The legacy ImGui Options rendering is gated off (native_menu_visuals now
@@ -1843,9 +1826,13 @@ private:
             const std::string prompt_text = "Press " + prompt + " to start";
             constexpr float prompt_font_size = 22.0f;
             constexpr float legal_font_size = 18.0f;
-            const float prompt_in = std::clamp((title_time - 0.12f) / 0.38f, 0.0f, 1.0f);
-            const float prompt_out = 1.0f - std::clamp((title_time - 4.75f) / 0.45f, 0.0f, 1.0f);
-            const std::uint32_t prompt_a = alpha(prompt_in * prompt_out);
+            // The "Press ENTER to start" prompt fades in, then SLOWLY FLASHES (pulses) forever while
+            // the title idles — matching retail. Period ~2.6 s, brightness ~0.25..1.0 (never fully
+            // off so it reads as a pulse, not a blink).
+            const float prompt_in = std::clamp((title_time - 0.5f) / 0.7f, 0.0f, 1.0f);
+            const float prompt_pulse =
+                0.25f + 0.75f * (0.5f + 0.5f * std::sin(title_time * 2.4f - 1.5708f));
+            const std::uint32_t prompt_a = alpha(prompt_in * prompt_pulse);
             const float prompt_y = height_ * 0.56f;
             const auto& accept_texture = ui_textures_[ui_slot(f2::NativeUiAsset::Accept)];
             const bool use_accept_glyph = input_.using_controller_prompts() &&
@@ -1927,49 +1914,9 @@ private:
             play_sound(f2::NativeFrontendSound::Back);
         }
         if (input_.pressed(Action::Skip)) game_.frontend.dispatch(f2::FrontendAction::Skip);
-
-        // Native cursor hit-testing over the menu/option rows (replaces ImGui::InvisibleButton).
-        // Hover selects the row; a left-click edge activates it. Mouse-only so it never fights the
-        // controller/keyboard cursor.
-        const bool left_mouse = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-        const auto ms = game_.frontend.state();
-        const bool menu_state = ms == f2::FrontendState::MainMenu ||
-                                ms == f2::FrontendState::ChooseCard ||
-                                ms == f2::FrontendState::Options;
-        const bool left_click_edge = left_mouse && !prev_left_mouse_;
-        if (menu_state && native_ui_renderer_.ready() && !input_.using_controller_prompts() &&
-            window_ && !menu_hitboxes_.empty()) {
-            // Mouse drives the menu on CLICK only: a click selects AND activates the item under the
-            // cursor. Hover is deliberately inert — this is a centered-wheel menu, so hover-select
-            // would re-center the clicked row and scroll it out from under the cursor (the erratic
-            // jumping). Keyboard/controller still own the animated cursor.
-            if (left_click_edge) {
-                POINT cursor{};
-                if (GetCursorPos(&cursor) && ScreenToClient(window_, &cursor)) {
-                    const float mx = static_cast<float>(cursor.x);
-                    const float my = static_cast<float>(cursor.y);
-                    for (const auto& hb : menu_hitboxes_) {
-                        if (mx >= hb.x0 && mx < hb.x1 && my >= hb.y0 && my < hb.y1) {
-                            if (hb.id == "card_boy" || hb.id == "card_girl") {
-                                game_.frontend.select_card(hb.id == "card_girl");
-                            } else {
-                                game_.frontend.select_menu_item(hb.id);
-                                game_.frontend.dispatch(f2::FrontendAction::Accept);
-                            }
-                            play_sound(f2::NativeFrontendSound::Accept);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        // Title: a click anywhere advances (the old ImGui full-screen ##title_accept button).
-        if (ms == f2::FrontendState::Title && left_click_edge &&
-            !input_.using_controller_prompts()) {
-            game_.frontend.dispatch(f2::FrontendAction::Accept);
-            play_sound(f2::NativeFrontendSound::Accept);
-        }
-        prev_left_mouse_ = left_mouse;
+        // The front end is controller/keyboard driven BY DESIGN (a centered animated cursor). No
+        // mouse hit-testing: on a centered-wheel menu, hover/click re-centers rows and reads as
+        // erratic. Arrows/stick move the cursor; Enter/A activates; Esc/B backs out.
     }
 
     void draw() {
@@ -2083,13 +2030,6 @@ private:
     f2::NativeFont native_font_;
     UiGpuTexture font_texture_;
     UINT font_descriptor_index_ = 0;
-    // Native cursor hit-testing (replaces ImGui::InvisibleButton for mouse menu/option selection).
-    struct MenuHitbox {
-        std::string id;
-        float x0 = 0.0f, y0 = 0.0f, x1 = 0.0f, y1 = 0.0f;
-    };
-    std::vector<MenuHitbox> menu_hitboxes_;
-    bool prev_left_mouse_ = false;
     f2::NativeFrontendAudio audio_;
     std::filesystem::path active_video_path_;
     f2::NativeVideoDecoder video_decoder_;

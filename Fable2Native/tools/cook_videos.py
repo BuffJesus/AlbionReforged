@@ -10,11 +10,11 @@ import subprocess
 from pathlib import Path
 
 
+# Clips the native front end references: the two boot logos + the title-idle attract movie.
 DEFAULT_CLIPS = (
     "microsoft_logo",
     "lionhead_logo",
-    "middlewarelogos",
-    "intro",
+    "attract_mode",
 )
 
 

@@ -51,11 +51,11 @@ FrontendController::FrontendController() {
         {"controls", "Controls"},
         {"audio", "Audio"},
     };
+    // Boot sequence is just the two publisher/developer logos, then the title screen. The long
+    // "intro" cinematic + attract_mode play as the title-idle attract movie (attract_videos_).
     intro_videos_.set_sequence({
         {"microsoft_logo", "videos/microsoft_logo.mp4", 8.808809, true},
         {"lionhead_logo", "videos/lionhead_logo.mp4", 8.320000, true},
-        {"middlewarelogos", "videos/middlewarelogos.mp4", 6.506507, true},
-        {"intro", "videos/intro.mp4", 76.366590, true},
     });
     attract_videos_.set_sequence({
         {"attract_mode", "videos/attract_mode.mp4", 29.966637, true},
