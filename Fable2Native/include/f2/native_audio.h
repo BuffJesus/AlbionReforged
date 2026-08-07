@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct IXAudio2;
@@ -13,12 +14,35 @@ struct IXAudio2SourceVoice;
 
 namespace f2 {
 
+// Frontend sound identities are keyed to the RETAIL sound-event names recovered from the
+// XEX (docs/RETAIL_FRONTEND_SPEC.md §8; ghidra_out/frontend_sound_names.txt). The retail
+// frontend fires these via 82371E80(out, sound-mgr, &SE_GUI_* lh_string). Each entry below
+// maps 1:1 to the proven retail event; se_gui_event_name() returns that event string so the
+// audio manifest and any future soundbank bridge can resolve by the real name.
 enum class NativeFrontendSound : std::uint8_t {
-    Music,
-    Navigate,
-    Accept,
-    Back,
+    Music,           // frontend music bed (retail plays a menu ambience; native: menu_interlude)
+    NavigateUp,      // SE_GUI_SLIDE_MENU_UP   — stick/keys move selection up
+    NavigateDown,    // SE_GUI_SLIDE_MENU_DOWN — stick/keys move selection down
+    SelectionLeft,   // SE_GUI_SELECTION_LEFT  — value/option decreased (options pages)
+    SelectionRight,  // SE_GUI_SELECTION_RIGHT — value/option increased (options pages)
+    Accept,          // SE_GUI_MENU_BOX_SELECT — A / confirm
+    Back,            // SE_GUI_MENU_BOX_CANCEL — B / cancel
+    Count,
 };
+
+// The retail SE_GUI_* event name each native sound stands in for (empty for Music, which is a
+// bespoke ambience rather than a fired SE_GUI event).
+[[nodiscard]] constexpr std::string_view se_gui_event_name(NativeFrontendSound sound) noexcept {
+    switch (sound) {
+        case NativeFrontendSound::NavigateUp: return "SE_GUI_SLIDE_MENU_UP";
+        case NativeFrontendSound::NavigateDown: return "SE_GUI_SLIDE_MENU_DOWN";
+        case NativeFrontendSound::SelectionLeft: return "SE_GUI_SELECTION_LEFT";
+        case NativeFrontendSound::SelectionRight: return "SE_GUI_SELECTION_RIGHT";
+        case NativeFrontendSound::Accept: return "SE_GUI_MENU_BOX_SELECT";
+        case NativeFrontendSound::Back: return "SE_GUI_MENU_BOX_CANCEL";
+        default: return {};
+    }
+}
 
 class NativeFrontendAudio {
 public:
@@ -53,7 +77,7 @@ private:
 
     IXAudio2* engine_ = nullptr;
     IXAudio2MasteringVoice* mastering_voice_ = nullptr;
-    std::array<std::shared_ptr<Clip>, 4> clips_{};
+    std::array<std::shared_ptr<Clip>, static_cast<std::size_t>(NativeFrontendSound::Count)> clips_{};
     std::vector<Voice> voices_;
     std::filesystem::path root_;
     bool music_enabled_ = true;

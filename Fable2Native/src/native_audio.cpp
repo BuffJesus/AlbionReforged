@@ -101,12 +101,39 @@ bool NativeFrontendAudio::initialise(const std::filesystem::path& root, std::str
         return false;
     }
 
-    std::array<std::filesystem::path, 4> paths = {
-        root_ / "menu_interlude.wav",
-        root_ / "guislide-scroll_01_alt.wav",
-        root_ / "guiclick-scroll_01.wav",
-        root_ / "guiexitsubmenu_01_alt.wav",
+    // Audio identities are keyed to the retail SE_GUI event names (native_audio.h). The runtime
+    // NEVER ships a sound: it consumes a user-local cooked audio package produced from the user's
+    // own game data (data/audio/gui.bnk + gui.adb → XMA → WAV). Each clip is resolved from
+    // audio_manifest.ini in the cooked root, keyed by the SE_GUI event name (or a friendly alias).
+    // Anything missing simply stays silent — there is no bundled fallback asset.
+    constexpr std::size_t kCount = static_cast<std::size_t>(NativeFrontendSound::Count);
+    std::array<std::filesystem::path, kCount> paths{};
+    paths[static_cast<std::size_t>(NativeFrontendSound::Music)] = "menu_interlude.wav";
+    paths[static_cast<std::size_t>(NativeFrontendSound::NavigateUp)] = "SE_GUI_SLIDE_MENU_UP.wav";
+    paths[static_cast<std::size_t>(NativeFrontendSound::NavigateDown)] = "SE_GUI_SLIDE_MENU_DOWN.wav";
+    paths[static_cast<std::size_t>(NativeFrontendSound::SelectionLeft)] = "SE_GUI_SELECTION_LEFT.wav";
+    paths[static_cast<std::size_t>(NativeFrontendSound::SelectionRight)] = "SE_GUI_SELECTION_RIGHT.wav";
+    paths[static_cast<std::size_t>(NativeFrontendSound::Accept)] = "SE_GUI_MENU_BOX_SELECT.wav";
+    paths[static_cast<std::size_t>(NativeFrontendSound::Back)] = "SE_GUI_MENU_BOX_CANCEL.wav";
+
+    // Map a manifest key (lowercased) to a clip slot. Accepts the canonical SE_GUI event name, a
+    // friendly alias, and legacy category keys (navigate/scroll → both up & down, etc.).
+    const auto slot_for_key = [](const std::string& key) -> std::vector<std::size_t> {
+        using S = NativeFrontendSound;
+        auto idx = [](S s) { return static_cast<std::size_t>(s); };
+        if (key == "music") return {idx(S::Music)};
+        if (key == "navigate_up" || key == "se_gui_slide_menu_up") return {idx(S::NavigateUp)};
+        if (key == "navigate_down" || key == "se_gui_slide_menu_down") return {idx(S::NavigateDown)};
+        if (key == "selection_left" || key == "se_gui_selection_left") return {idx(S::SelectionLeft)};
+        if (key == "selection_right" || key == "se_gui_selection_right") return {idx(S::SelectionRight)};
+        if (key == "accept" || key == "select" || key == "se_gui_menu_box_select") return {idx(S::Accept)};
+        if (key == "back" || key == "exit" || key == "cancel" || key == "se_gui_menu_box_cancel")
+            return {idx(S::Back)};
+        if (key == "navigate" || key == "scroll") return {idx(S::NavigateUp), idx(S::NavigateDown)};
+        if (key == "selection") return {idx(S::SelectionLeft), idx(S::SelectionRight)};
+        return {};
     };
+
     const auto manifest = root_ / "audio_manifest.ini";
     std::ifstream input(manifest);
     std::string line;
@@ -117,14 +144,10 @@ bool NativeFrontendAudio::initialise(const std::filesystem::path& root, std::str
         if (separator == std::string::npos) continue;
         const auto key = lower(trim(line.substr(0, separator)));
         const auto value = trim(line.substr(separator + 1));
-        std::size_t index = 4;
-        if (key == "music") index = 0;
-        else if (key == "navigate" || key == "scroll") index = 1;
-        else if (key == "accept" || key == "select") index = 2;
-        else if (key == "back" || key == "exit") index = 3;
-        if (index < paths.size()) paths[index] = value;
+        for (const auto index : slot_for_key(key)) paths[index] = value;
     }
     for (std::size_t index = 0; index < paths.size(); ++index) {
+        if (paths[index].empty()) continue;
         const auto path = paths[index].is_absolute() ? paths[index] : root_ / paths[index].filename();
         if (!std::filesystem::is_regular_file(path)) continue;
         clips_[index] = load_clip(path, error);
