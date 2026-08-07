@@ -205,3 +205,79 @@ That probe produced the recovered mapping above. For each `frames_elements`
 draw, the first vertex's VFDATA UV pair and the group's object-space bounds
 are sufficient to identify the layer; the exact `rim_and_red` pass precedes
 the two green-top passes in the native renderer.
+
+## Menu body material + panorama clip (2026-08-07)
+
+Full evidence dossier: `ghidra_out/title_capture/menu_body_material_RE.txt`.
+
+### Row body material — the solid brown interior
+
+The menu row draws (`title_geometry_dump_20260804_shader.txt` seq `151263..151306`)
+all use the **same** shader as the title reveal: VS `6D15306961102F7D`, PS
+`4B61E208208F3F5B`. The inner-brown draws bind `tf13` (MAIN) = `0FCA7000`
+(`ability_elements`) and `tf14`/`tf15` (DETAIL) = a **1x1 placeholder** at `1FC40000`
+(fmt 6) — not a real detail atlas. Decoded PSC constants for those draws (dump line
+103414): `c30=(1,1,1,1) c31=(0,0,0,0) c46=(1,0,0,0) c47=(1,0,0,0) c77=(0,0,0,0)
+c255=(1,0,0,0)` (identical to the reveal).
+
+Tracing `ps_4B61E208208F3F5B_ucode.txt` with those constants: `c31=0` makes the
+predicate `p0=false`, so instruction `2.0 (!p0) jmp L7` **skips the entire `tf14`
+detail-combine block**. Therefore the retail menu-row material reduces to:
+
+- `out.rgb = ability_elements.rgb` (folded by the interpolated `r2` vertex tint);
+- `out.a  = ability_elements.a * vertexColor.a`;
+- RT0 blend `0x07060706` (SrcAlpha / InvSrcAlpha).
+
+**The solid interior comes from the ability_elements texture itself carrying two
+vertically-stacked row features** (measured on `live_0FCA7000..._bc3.png`):
+
+- `v 0.000-0.164` = the pill **RIM** only — two thin opaque strips with a **transparent
+  interior** (interior alpha ~6, 86% below 20; interior RGB is leather brown ~78,65,42);
+- `v 0.188-0.297` = a **SOLID WHITE OPAQUE MASK** (RGB 255,255,255; alpha 255 in the
+  core `v 0.20-0.28`). This band is the row **fill/shape mask**.
+
+So the row is: inner-brown/fill layer (ability_elements MAIN sampled at the **opaque
+mask band `v≈0.188-0.297`**, giving a solid body) drawn first, then the
+`frames_elements` (`0FC47000`) rim second — consistent with the "inner brown first,
+rim second" order already recorded above.
+
+**Native translucent-button root cause:** `native_frontend_app.cpp add_body_three_slice`
+already samples the mask band (`v 96/512=0.1875 .. 152/512=0.2969`) and does
+`out.a = color.a * sampled.a` — the intent is right. But that exact band straddles the
+mask's alpha **ramp edges** (`v0.1875` still ramping from 0; `v0.290`=154; `v0.297`≈0),
+so linear filtering across the short row pulls transparent top/bottom edges into the
+whole body → translucent. **Fix (spec only):** inset to the fully-opaque core
+`v0 = 104/512 (0.203)`, `v1 = 143/512 (0.279)` (measured alpha 255). RGB source
+(`menu_surface` leather via detail, or `ability_elements.rgb`) is fine; only the sample
+band needs the inset. `menu_surface.png` is fully opaque leather (alpha 255 everywhere).
+
+### Panorama clip / occlusion — no scissor, panel-alpha occlusion
+
+There is **no scissor anywhere** — `grep -ci scissor|PA_SC` = 0 in both
+`title_geometry_dump_20260804_shader.txt` and `title_capture/reveal_exact_dump.txt`.
+The panorama is a **full-width tiled strip** of many 512x512 tiles (the `0E36_7000..
+0E5A_7000` series, each ~5.1 obj-units wide, laid edge-to-edge across x — seq
+`155629/155639/155646/155653/155643/155650...`), drawn first. It is contained purely by
+**alpha occlusion**: the side panels (seq `155724`=`0FD67000` L-lower, `155725`=
+`0FD07000` L-upper; right mirror `0FEE7000`/`0FF47000`) are drawn on top, opaque from
+the screen edge inward to a **curved inner edge**. Measured opaque inner edge (alpha>128)
+on the panel textures: L-upper opaque `u 0.000 → ~0.445 (top) / ~0.482 (mid) / ~0.477
+(bottom)`; R-upper mirror `u ~0.03/0.09 → 0.529`. Mapping through the draw-truth panel
+projection (L panel screen `x=-3..272`, width 275): the panorama's visible inner window
+is roughly `x ∈ [~128, ~1152]` at mid-height, **curving inward toward top and bottom** —
+a barrel window, not a straight rect.
+
+**Fix (spec only):** draw the panorama full-frame, then composite the four serialized
+panel crops (`0FD07000/0FD67000` L, `0FEE7000/0FF47000` R) OVER it with their **real
+curved alpha** — that crops the panorama exactly as retail, no scissor. The overflow bug
+means the panels are not being drawn over the panorama with their authored alpha (or the
+panorama is drawn wider than they cover).
+
+### GAPs
+- The 2026-08-04 capture caught the menu mid-fade (row vertex-alpha `0x00` on nearly all
+  draws), so it has no fully-opaque settled-menu frame; the "solid body" result is
+  derived from the material equation + the ability_elements mask band, not an opaque-frame
+  screenshot. A settled-menu capture (rows at opacity 100 → vertex alpha `0xFF`) would
+  visually confirm. Not required to implement either fix.
+- Curved panel inner-edge screen-x values assume linear-u across the panel quad; for
+  sub-pixel border fidelity read the seq `155724/155725` VFDATA UV0 rect directly.

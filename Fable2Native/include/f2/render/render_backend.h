@@ -16,6 +16,10 @@ namespace f2::render {
 using TextureId = std::uint32_t;
 inline constexpr TextureId kInvalidTexture = 0;
 
+// How a quad blends over what is already in the target. Alpha = the default source-over UI blend;
+// Additive = SrcAlpha/One accumulation for the title sparkle burst + glow (bright cores blow to white).
+enum class BlendMode : std::uint8_t { Alpha, Additive };
+
 // One backend-neutral UI draw command. Coordinates are in pixels of the current viewport; UVs are
 // 0..1. `detail_texture` + `combine_detail` express the retail title/menu two-layer material
 // (out.rgb = detail.rgb*k + detail.a*main.rgb); `key_black_matte` keys pure black to transparent.
@@ -29,6 +33,8 @@ struct UiQuad {
     float detail_u0 = 0.0f, detail_v0 = 0.0f, detail_u1 = 1.0f, detail_v1 = 1.0f;
     bool combine_detail = false;
     bool key_black_matte = false;
+    bool alpha_mask = false;  // RGB from `color`, coverage from texture alpha (white sparkles)
+    BlendMode blend_mode = BlendMode::Alpha;
 };
 
 // What a backend can do. The Options AA setting consults msaa/max_msaa_samples; an unsupported

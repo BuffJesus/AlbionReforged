@@ -129,3 +129,8 @@ scratch_gui_extract/
 /_research/
 /_research_skate3recomp/
 /third_party/
+
+# Retail reference screenshots (copyrighted — never commit)
+/resources/
+# Local research binary
+Fable2Native/tools/decode_large_ring.exe

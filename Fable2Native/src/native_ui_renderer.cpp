@@ -11,7 +11,9 @@ namespace f2 {
 
 namespace {
 
-constexpr std::size_t kVertexCapacity = 2048;
+// Headroom for the title sparkle field (up to ~160 particles x 2 additive quads) on top of the
+// base UI scene. 8192 verts = ~1365 quads at 40 bytes/vertex (~320 KB upload buffer).
+constexpr std::size_t kVertexCapacity = 8192;
 
 float channel(std::uint32_t color, unsigned shift) {
     return static_cast<float>((color >> shift) & 0xffu) / 255.0f;
@@ -53,7 +55,7 @@ cbuffer Viewport : register(b0) { float2 viewport; };
 Texture2D ui_texture : register(t0);
 Texture2D detail_texture : register(t1);
 SamplerState ui_sampler : register(s0);
-cbuffer UiMaterial : register(b1) { uint combine_detail; uint key_black_matte; };
+cbuffer UiMaterial : register(b1) { uint combine_detail; uint key_black_matte; uint alpha_mask; };
 struct VSInput { float2 position : POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; float2 detail_uv : TEXCOORD1; };
 struct PSInput { float4 position : SV_POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; float2 detail_uv : TEXCOORD1; };
 PSInput vs_main(VSInput input) {
@@ -72,6 +74,12 @@ float4 ps_main(PSInput input) : SV_TARGET {
     // leather body cannot show through the rim.
     if (key_black_matte != 0 && max(sampled.r, max(sampled.g, sampled.b)) < 0.10) {
         return float4(0.0, 0.0, 0.0, 0.0);
+    }
+    // Alpha-mask mode: take RGB from the vertex color, coverage from the texture alpha. Turns any
+    // colored sprite (the pink star sparkles) into a pure tint — used white + additive for the
+    // title sparkle burst so it reads "essentially white" as in the retail boot.
+    if (alpha_mask != 0) {
+        return float4(input.color.rgb, input.color.a * sampled.a);
     }
     if (combine_detail != 0) {
         const float4 detail = detail_texture.Sample(ui_sampler, input.detail_uv);
@@ -103,7 +111,7 @@ float4 ps_main(PSInput input) : SV_TARGET {
     root_parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     root_parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     root_parameters[1].Constants.ShaderRegister = 1;
-    root_parameters[1].Constants.Num32BitValues = 2;
+    root_parameters[1].Constants.Num32BitValues = 3;
     root_parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     root_parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     root_parameters[2].DescriptorTable.NumDescriptorRanges = 1;
@@ -182,6 +190,18 @@ float4 ps_main(PSInput input) : SV_TARGET {
         error = "The native UI pipeline could not be created.";
         return false;
     }
+
+    // Additive variant for the title sparkle burst + glow: SrcAlpha/One so bright particle
+    // cores accumulate toward white over the background (the retail burst is visually additive).
+    D3D12_BLEND_DESC additive = blend;
+    additive.RenderTarget[0].DestBlend = D3D12_BLEND_ONE;
+    additive.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ONE;
+    pipeline.BlendState = additive;
+    if (FAILED(device->CreateGraphicsPipelineState(
+            &pipeline, IID_PPV_ARGS(&additive_pipeline_state_)))) {
+        error = "The native UI additive pipeline could not be created.";
+        return false;
+    }
     vertex_view_.BufferLocation = vertex_buffer_->GetGPUVirtualAddress();
     vertex_view_.SizeInBytes = static_cast<UINT>(sizeof(Vertex) * vertex_capacity_);
     vertex_view_.StrideInBytes = sizeof(Vertex);
@@ -210,6 +230,8 @@ void NativeUiRenderer::render(ID3D12GraphicsCommandList* command_list,
             n.combine_detail = true;
         }
         n.key_black_matte = q.key_black_matte;
+        n.alpha_mask = q.alpha_mask;
+        n.blend_mode = q.blend_mode;
         native_quads.push_back(n);
     }
     render(command_list, width, height, native_quads);
@@ -254,7 +276,6 @@ void NativeUiRenderer::render(ID3D12GraphicsCommandList* command_list,
         vertex_index += std::size(vertices);
     }
 
-    command_list->SetPipelineState(pipeline_state_.Get());
     command_list->SetGraphicsRootSignature(root_signature_.Get());
     const float viewport[] = {static_cast<float>(width), static_cast<float>(height)};
     command_list->SetGraphicsRoot32BitConstants(0, 2, viewport, 0);
@@ -267,11 +288,22 @@ void NativeUiRenderer::render(ID3D12GraphicsCommandList* command_list,
     command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     command_list->IASetVertexBuffers(0, 1, &vertex_view_);
     std::size_t first_vertex = 0;
+    // Bind the alpha PSO up front and only flip to the additive PSO when a quad needs it, so the
+    // common all-alpha scene issues a single SetPipelineState.
+    auto current_blend = f2::render::BlendMode::Alpha;
+    command_list->SetPipelineState(pipeline_state_.Get());
     for (const auto& quad : quads) {
+        if (quad.blend_mode != current_blend) {
+            current_blend = quad.blend_mode;
+            command_list->SetPipelineState(current_blend == f2::render::BlendMode::Additive
+                                               ? additive_pipeline_state_.Get()
+                                               : pipeline_state_.Get());
+        }
         const std::uint32_t material[] = {
             quad.combine_detail ? 1u : 0u,
-            quad.key_black_matte ? 1u : 0u};
-        command_list->SetGraphicsRoot32BitConstants(1, 2, material, 0);
+            quad.key_black_matte ? 1u : 0u,
+            quad.alpha_mask ? 1u : 0u};
+        command_list->SetGraphicsRoot32BitConstants(1, 3, material, 0);
         command_list->SetGraphicsRootDescriptorTable(2, quad.texture);
         command_list->SetGraphicsRootDescriptorTable(3,
                                                        quad.combine_detail ? quad.detail_texture

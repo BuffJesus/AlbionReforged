@@ -1,4 +1,5 @@
 #include "f2/native_audio.h"
+#include "f2/native_font.h"
 #include "f2/native_game.h"
 #include "f2/native_install.h"
 #include "f2/native_texture.h"
@@ -233,6 +234,39 @@ int main() {
         assert(registry.handle(id_b) == 0);                       // unset
         assert(registry.handle(f2::render::kInvalidTexture) == 0);  // invalid
         assert(registry.size() == 2);
+    }
+
+    {
+        // NativeFont: rasterize a real TTF into an RGBA8 atlas + ImGui-compatible glyph metrics.
+        // Uses a Windows system font (this is a win32-only frontend); skips cleanly if none exist.
+        const std::array<const char*, 3> candidates = {
+            "C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf",
+            "C:/Windows/Fonts/tahoma.ttf"};
+        std::filesystem::path font_path;
+        for (const char* c : candidates) {
+            if (std::filesystem::exists(c)) { font_path = c; break; }
+        }
+        if (!font_path.empty()) {
+            f2::NativeFont font;
+            std::string font_error;
+            assert(font.load(font_path, 48.0f, font_error));
+            assert(font.ready());
+            assert(font.pixel_height() == 48.0f);
+            assert(font.atlas_width() == 1024 && font.atlas_height() == 1024);
+            assert(font.atlas_rgba8().size() == 1024u * 1024u * 4u);
+            // 'A' must be a valid glyph with a positive advance and a non-degenerate UV rect.
+            const auto& glyph_a = font.glyph(static_cast<std::uint32_t>('A'));
+            assert(glyph_a.valid);
+            assert(glyph_a.advance > 0.0f);
+            assert(glyph_a.u1 > glyph_a.u0 && glyph_a.v1 > glyph_a.v0);
+            // Space advances but draws nothing; out-of-range codepoints are invalid.
+            assert(font.glyph(static_cast<std::uint32_t>(' ')).advance > 0.0f);
+            assert(!font.glyph(0u).valid && !font.glyph(300u).valid);  // out of Latin-1 range
+            // measure() scales advances by size/pixel_height and sums; wider text => wider measure.
+            assert(font.measure("A", 48.0f) > 0.0f);
+            assert(font.measure("AA", 48.0f) > font.measure("A", 48.0f));
+            assert(font.measure("A", 96.0f) > font.measure("A", 48.0f));
+        }
     }
 
     std::filesystem::remove(path);

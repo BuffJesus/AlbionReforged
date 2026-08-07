@@ -32,6 +32,8 @@ struct NativeUiQuad {
     float detail_v1 = 1.0f;
     bool combine_detail = false;
     bool key_black_matte = false;
+    bool alpha_mask = false;
+    f2::render::BlendMode blend_mode = f2::render::BlendMode::Alpha;
 };
 
 class NativeUiRenderer {
@@ -68,6 +70,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> vertex_buffer_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_state_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> additive_pipeline_state_;
     D3D12_VERTEX_BUFFER_VIEW vertex_view_{};
     Vertex* mapped_vertices_ = nullptr;
     std::size_t vertex_capacity_ = 0;

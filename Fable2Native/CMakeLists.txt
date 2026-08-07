@@ -19,11 +19,14 @@ add_library(f2native_core STATIC
     src/native_input.cpp
     src/native_audio.cpp
     src/native_ui.cpp
+    src/native_font.cpp
     src/native_iso.cpp
     src/native_video.cpp
 )
 
 target_include_directories(f2native_core PUBLIC include)
+# Vendored public-domain stb_truetype for the native font atlas (ImGui-free UI text).
+target_include_directories(f2native_core PRIVATE third_party)
 
 # Dev builds locate the offline cookers (tools/cook_*.py) at the source tree; a shipped
 # installer bundles them next to the executable (see default_tools_dir()).

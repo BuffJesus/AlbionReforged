@@ -5,6 +5,46 @@ matched against the user's local Fable II capture and the extracted UI scene.
 The runtime may remain a native PC implementation, but visual decisions must
 come from these sources rather than hand-tuned substitutes.
 
+## Reveal geometry captured 2026-08-07 (exact)
+
+The sparkle/blue-mist reveal burst was captured with an **UNFILTERED** PM4
+geometry dump (`FABLE2_PM4_GEOMETRY_DUMP` + `FABLE2_PM4_CAPTURE_GEOMETRY=1`, and
+crucially **NOT** `FABLE2_PM4_GEOMETRY_DUMP_SHADER`). Dump:
+`ghidra_out/title_capture/reveal_exact_dump.txt` (335 MB, 557 SWAP frames,
+36,912 draws). Full parsed result: `ghidra_out/title_capture/title_reveal_effect_EXACT.json`.
+
+- **The prior negative results were wrong.** Both earlier dumps (and
+  `title_reveal_effect_CLEAN.json`, result `REVEAL_FX_ATLAS_NOT_CAPTURED`) were
+  filtered to VS `6D15306961102F7D` / atlas `0x0FBE7000`, so the burst was
+  excluded. The sparkle burst is a **separate GPU particle shader**, and it DID
+  render this run (confirmed by the timeline below matching the peak/text-lit
+  frames `t020693.png` / `t021882.png`).
+- **Sparkle burst shader = VS `8AF41A0CCCCD95CC`, PS `A820293DEE9C9A2D`.**
+  `prim=13` quad/point sprites, `source_select=2` (no index buffer), 12-dword
+  per-particle vertex stride (dw0..2 = small world-space particle offset, dw4..5
+  = size, dw6 = rotation, dw7 = ramping lifetime/depth; screen placement is from
+  the VS transform, not baked into verts).
+- **BLUE BURST RESOLVED.** Color is procedural in the pixel shader, not a vertex
+  RGBA8 stream. Pixel-shader constants at peak: `c0 = (0.5,0.5,0.5,1.0)` grey
+  modulate, **`c1 = (0.0, 0.25, 1.0, 0.0)` = RGB(0,64,255) blue tint**, `c2 =
+  (4.0, 1.333, 0, 0)`. White atlas cores blow out to white; edges/mist carry the
+  blue. Blend is additive/screen (bright cores accumulate to white).
+- **Sparkle atlases** are `fmt=20` (k_8_8_8_8) star/mist sprites, DISTINCT from
+  the `0FBE7000`/`fe_f2logo` wordmark: 128x128 + 256x256 **mist puffs**
+  (run bases `0D37/0D38/0E5C/0E5E7000`) and the **star-burst pair**
+  (`0D3D7000` 128px + `0E627000` 256px). The star-burst pair is the ONLY sprite
+  that persists into the settled blue glow around the lit wordmark.
+- **Keyframed timeline (SWAP frame -> t_s -> particle mass):** ignition f489
+  (~19.5s, 3 draws / 172 verts) -> build f501 (~20.1s, 33 draws / ~2200 verts,
+  atlas grows 128->256px) -> **wordmark ignites f521** (logo VS jumps 1->31
+  draws) -> **PEAK f524-535** (~20.7-21.2s, 58-59 sparkle draws, star-burst pair
+  joins, ~6400 verts max) -> fade f541 (~21.6s, mist drops out, 28 draws,
+  star-burst-only glow) -> settled f557 (~24.8s, residual blue glow, "Press A").
+- **Screen anchor:** the small (~+/-0.1) particle cloud projects through VS
+  transform `c0=(6.30,..)`, `c1.z=11.20`, `c2.w=4033`, `c3.w=4000` into a WIDE
+  HORIZONTAL BAND over the wordmark region (center band, ~middle third of
+  1280x720, vertically ~centered), matching the peak screenshot.
+
 ## Confirmed evidence
 
 - `ghidra_out/title_ui_re/frontendstartupscreen.bgf` names the three logo
@@ -195,9 +235,111 @@ the missing reveal instant: `ghidra_out/title_capture/`.
    radial slice × a blue vertex color, not a separate texture — **UNRESOLVED**
    until a reveal-moment capture confirms the slice + color.
 
+## Reveal capture 2026-08-07
+
+A live in-engine PM4 geometry capture was run against the recomp
+(`Fable2Recomp/out/build/win-amd64-nightly/Fable2.exe`) using the built-in
+sidecar dump filtered to the reveal VS. This is the definitive negative result
+for the panorama-reveal FX atlas from the recomp's own title path.
+
+- **Run:** `--gpu_plugin xenos`, env
+  `FABLE2_PM4_GEOMETRY_DUMP=ghidra_out/title_capture/reveal_dump_20260807.txt`
+  and `FABLE2_PM4_GEOMETRY_DUMP_SHADER=6D15306961102F7D`. No input driven.
+  Dump: 37.7 MB, **1285 SWAP frames, 20,416 reveal-VS draws**.
+- **Timeline (by swap frame):** the reveal VS first draws at frame 490. Frames
+  **490–613 = the title-card hold**: exactly 1 draw/frame binding ONLY
+  `fe_f2logo` (`11867000`, 1024×512 fmt20) at a static UI slice
+  `u[0.820..0.828] v[0.656..0.672]`, RGBA8 `FFFFFFFF`, identical every frame.
+  At frame **613→614 there is a HARD CUT** to the 30–31-draw
+  `FrontEndMainMenu` ExpandableMenu block (28× 512×512 fmt18 leather/parchment
+  detail-as-atlas + logo + a 64×64 fmt6 corner); frames 614–1285 = that menu.
+- **The panorama-reveal FX atlas was NOT emitted.** Across all 20,416 draws
+  there is **no 512×512 fmt20 atlas** (the `0x0FBE7000` reveal-atlas signature)
+  — `grep '512x512x1 fmt=20' = 0`. tf14 is the 1×1 no-detail dummy
+  (`1FC40000`) for **every** draw. So the starburst/ring/radial-sphere reveal
+  slices never rendered; there was no gradual atlas-FX fade between the logo
+  hold and the menu.
+- **Cause:** the log shows `[modbridge] fireEvent name='OnPressA'` +
+  `MMDBG_SPT_FrontEndMainMenu_0` at 10:11:48.752 — the game left the title card
+  into the main menu (an OnPressA fired, likely from the mod bridge / autostart)
+  **before/without** the panorama reveal FX playing. This reproduces the prior
+  captures' failure mode: the recomp's title path goes logo-hold → menu and does
+  not render the `0FBE7000`-family reveal sprites into a capturable frame.
+- **Blue bubble-burst: STILL A GAP** — unchanged. No blue-tinted draw and no
+  reveal atlas appears; the burst source cannot be resolved from this capture.
+- **Artifacts:** `ghidra_out/title_capture/reveal_dump_20260807.txt` (raw),
+  `title_reveal_effect.json` (machine-readable spec + negative result),
+  `logo_summary_11867000.txt`, `logo_verts_all.txt`,
+  `reveal_summary_0FBE7000.txt` (empty — 0 matches, proof).
+- **Remaining for a human:** the reveal FX must be captured while it is actually
+  on screen. Since the recomp fires OnPressA and skips the reveal, the human
+  should either (a) prevent the auto-OnPressA (disable the modbridge autostart)
+  so the ~5.9 s hold → 1.1 s panorama fade plays and re-run this same
+  env-var capture, or (b) grab the reveal via RenderDoc per the harness below.
+  Confirm success by a nonzero `reveal_summary` for the run's actual reveal
+  atlas base (a 512×512 fmt20 tf13 with tf14 ≠ 1×1 dummy).
+
 6. **What the user must capture to finish it:** a RenderDoc `.rdc` of the
    black→panorama reveal instant (the 1.1 s fade after the 5.9 s hold), under
    `--gpu_plugin xenos`. Turnkey harness + step-by-step:
    `ghidra_out/title_capture/README_CAPTURE_STEPS.md` and
    `extract_title_reveal.py` (dumps each reveal draw's VB/IB + bound textures,
    filtered by VS `6D15306961102F7D` / PS `4B61E208208F3F5B`).
+
+## Reveal capture 2026-08-07 (clean bnk)
+
+Follow-up to the negative above. The prior run's stated cause was that the
+MODDED `guiscripts.bnk`/`gamescripts_r.bnk` fire an auto-`OnPressA`
+(`gui_expandablemenuinput_hook.lua`) that skips the title. We SAFE-swapped in
+the clean gold bnks (`*.orig_backup`), re-ran the same env-var capture, and
+**restored the modded bnks afterward** (verified sizes 2346668 / 2284967).
+This tests that hypothesis directly.
+
+- **Run:** clean gold bnks active (`guiscripts.bnk`=2340673,
+  `gamescripts_r.bnk`=2264956). `--gpu_plugin xenos`, env
+  `FABLE2_PM4_GEOMETRY_DUMP=ghidra_out/title_capture/reveal_dump_clean_20260807.txt`
+  + `FABLE2_PM4_GEOMETRY_DUMP_SHADER=6D15306961102F7D`. No input driven; waited
+  ~70 s (2 intros + title + into menu). Dump: **117.0 MB, 608,165 lines**,
+  draw-bearing frames 462–3464.
+- **The reveal FX atlas STILL did NOT render.** Exhaustive scan of the whole
+  dump: `512x512 fmt20` count = **0**; `0FBE7000` count = **0**; any `0F*`
+  reveal-family base = **0**; tf14 ≠ `1FC40000` 1×1 dummy = **0** (the dummy is
+  bound for all 60,470 draws). tf13 set is only `fe_f2logo` (`11867000`
+  1024×512 fmt20), the 14 menu detail-as-atlas surfaces
+  (`0E367000..0E527000` 512×512 fmt18), and the 64×64 fmt6 corner
+  (`0D367000`).
+- **Timeline (by swap frame):** 462–532 = title-card hold (1 draw/frame, only
+  `fe_f2logo` at slice `u[0.820..0.828] v[0.656..0.672]`, RGBA8 `FFFFFFFF`);
+  **533–574 = a logo cross-fade** — 2 draws/frame: a main `fe_f2logo` layer
+  whose grey vertex color **ramps `FFD4D4D4`→`FFD2D2D2`** (alpha stays `FF`) and
+  a second `fe_f2logo` layer held at `00FFFFFF` (alpha 0, inactive); 575–610 =
+  31-draw menu fade-in; 611–3464+ = the 30-draw `FrontEndMainMenu`. This
+  cross-fade is the ONLY reveal-adjacent animation the recomp emits, and it
+  binds nothing but `fe_f2logo` — no atlas, no detail texture.
+- **HYPOTHESIS REFUTED — the auto-`OnPressA` is NATIVE, not the mod bnk.** In
+  the clean run `Fable2_1558.log` STILL logs `[modbridge] fireEvent
+  name='OnPressA'` at 10:24:02.354 (plus a one-shot pass of
+  `onDirtyHighlight/onAddChild/onRemoveChild/OnPressA/OnPressB/OnEnter/OnExit`,
+  each fired EXACTLY once). The source is the recomp's own `[modbridge]`
+  (`Fable2Recomp/src/ConsoleInjector.cpp` fireEvent hook + `modbridge ARMED
+  (default)`), compiled into the exe — NOT the swapped `.bnk`. So removing the
+  mod did not remove the skip. The recomp's title path itself goes
+  logo-hold → logo cross-fade → menu and never renders the `0FBE7000`-family
+  reveal sprites into a capturable frame.
+- **Blue bubble-burst: STILL A GAP.** No `0FBE7000`-family atlas rendered and
+  **no blue-tinted vertex color anywhere** — the only animated title draws bind
+  `fe_f2logo` with grey (`FFD4D4D4`→`FFD2D2D2`) or transparent (`00FFFFFF`)
+  colors. The burst source cannot be resolved from any recomp capture because
+  the recomp never plays the panorama reveal.
+- **Artifacts:** `ghidra_out/title_capture/reveal_dump_clean_20260807.txt`
+  (raw, 117 MB), `title_reveal_effect_CLEAN.json` (machine-readable spec +
+  refutation), log `Fable2_1558.log`.
+- **Remaining for a human:** the skip is a native-runtime behavior, so a bnk
+  swap alone will not unlock the reveal. Either (a) gate/disable the native
+  `[modbridge]` `OnPressA` autostart AND the recomp's logo→menu title-state
+  transition so the ~5.9 s hold → 1.1 s panorama fade actually plays, then
+  re-run this env-var capture; or (b) grab the reveal via RenderDoc against a
+  build/config where the title reveal is on the rendered path
+  (`ghidra_out/title_capture/README_CAPTURE_STEPS.md`). The reveal FX
+  (`0FBE7000` 512×512 fmt20 tf13 with a real, non-dummy tf14) is simply not on
+  the recomp's current rendered title path.

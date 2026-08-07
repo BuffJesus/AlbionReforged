@@ -77,6 +77,16 @@ public:
         if (!quads_.empty()) quads_.back().key_black_matte = key;
     }
 
+    // Set the blend mode of the most recently appended quad (additive for sparkles/glow).
+    void set_last_blend(BlendMode mode) {
+        if (!quads_.empty()) quads_.back().blend_mode = mode;
+    }
+
+    // Use the texture alpha as a white/tint mask on the most recent quad (RGB comes from its color).
+    void set_last_alpha_mask(bool mask) {
+        if (!quads_.empty()) quads_.back().alpha_mask = mask;
+    }
+
 private:
     std::vector<UiQuad> quads_;
 };
