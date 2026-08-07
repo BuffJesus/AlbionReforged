@@ -14,6 +14,8 @@ add_library(f2native_core STATIC
     src/native_game.cpp
     src/native_frontend.cpp
     src/native_install.cpp
+    src/native_cook.cpp
+    src/native_frontend_config.cpp
     src/native_input.cpp
     src/native_audio.cpp
     src/native_ui.cpp
@@ -22,6 +24,11 @@ add_library(f2native_core STATIC
 )
 
 target_include_directories(f2native_core PUBLIC include)
+
+# Dev builds locate the offline cookers (tools/cook_*.py) at the source tree; a shipped
+# installer bundles them next to the executable (see default_tools_dir()).
+target_compile_definitions(f2native_core PRIVATE
+    F2NATIVE_TOOLS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tools")
 
 if(WIN32)
     target_link_libraries(f2native_core PUBLIC xinput9_1_0 windowscodecs)
@@ -108,9 +115,14 @@ if(WIN32)
         "${F2NATIVE_IMGUI_SOURCE}"
         "${F2NATIVE_IMGUI_SOURCE}/backends")
 
+    # One executable hosts BOTH backends; the active backend is selected at launch (restart-applied)
+    # by frontend_main.cpp via resolve_render_backend(). The Vulkan sources/libs are only compiled in
+    # when the Vulkan SDK is available (F2NATIVE_HAS_VULKAN); otherwise the toggle resolves to D3D12.
     add_executable(f2native_frontend WIN32
+        src/frontend_main.cpp
         src/native_frontend_app.cpp
         src/native_logo_effects.cpp
+        src/native_ui_renderer.cpp
         src/native_world_renderer.cpp)
     target_link_libraries(f2native_frontend PRIVATE
         f2native_core
@@ -121,8 +133,9 @@ if(WIN32)
         dxgi
         ole32
         shell32
-        user32)
-    target_link_libraries(f2native_frontend PRIVATE xinput9_1_0 xaudio2)
+        user32
+        xinput9_1_0
+        xaudio2)
     target_include_directories(f2native_frontend PRIVATE
         "${F2NATIVE_IMGUI_SOURCE}"
         "${F2NATIVE_IMGUI_SOURCE}/backends")
@@ -154,30 +167,17 @@ if(WIN32)
             VERBATIM)
         add_custom_target(f2native_vulkan_shaders DEPENDS ${F2NATIVE_VULKAN_SHADER_OUTPUTS})
 
-        add_executable(f2native_frontend_vulkan WIN32
-            src/native_frontend_vulkan_app.cpp
-            src/native_logo_effects.cpp
-            src/native_vulkan_video_texture.cpp
-            src/native_vulkan_world_renderer.cpp)
-        target_link_libraries(f2native_frontend_vulkan PRIVATE
-            f2native_core
-            f2native_video
-            f2native_imgui
-            Vulkan::Vulkan
-            ole32
-            shell32
-            user32)
-        target_link_libraries(f2native_frontend_vulkan PRIVATE xinput9_1_0 xaudio2)
-        target_include_directories(f2native_frontend_vulkan PRIVATE
-            "${F2NATIVE_IMGUI_SOURCE}"
-            "${F2NATIVE_IMGUI_SOURCE}/backends")
         file(TO_CMAKE_PATH "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
              F2NATIVE_VULKAN_SHADER_DIR_DEFINE)
-        target_compile_definitions(f2native_frontend_vulkan PRIVATE
-            WIN32_LEAN_AND_MEAN
-            NOMINMAX
+        target_sources(f2native_frontend PRIVATE
+            src/native_frontend_vulkan_app.cpp
+            src/native_vulkan_video_texture.cpp
+            src/native_vulkan_world_renderer.cpp)
+        target_link_libraries(f2native_frontend PRIVATE Vulkan::Vulkan)
+        target_compile_definitions(f2native_frontend PRIVATE
+            F2NATIVE_HAS_VULKAN
             F2NATIVE_VULKAN_SHADER_DIR="${F2NATIVE_VULKAN_SHADER_DIR_DEFINE}")
-        add_dependencies(f2native_frontend_vulkan f2native_vulkan_shaders)
+        add_dependencies(f2native_frontend f2native_vulkan_shaders)
     endif()
 endif()
 

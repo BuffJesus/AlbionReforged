@@ -57,18 +57,25 @@ build\RelWithDebInfo\f2native_frontend.exe
 ```
 
 Use `--skip-intro` for the title screen or add `--start-menu` to begin directly at the main menu
-while working on front-end art and input.
+while working on front-end art and input. Use `--controller-prompts` to preview the captured
+Xbox-style A prompt without a connected pad. `--ui-only` runs the visual front-end harness
+without a full extracted game tree; it is for UI iteration only and does not enable gameplay.
+The D3D12 frontend's title and main-menu image layers use the native UI quad renderer. ImGui
+remains temporarily for glyphs and input hit regions while the native text atlas is completed.
 
-The Vulkan frontend is available when the Vulkan SDK and `glslc` are installed:
+There is now a **single** frontend executable that hosts both presentation backends. The active
+backend is selected at launch (restart-applied) — most robustly by a `--backend` flag, otherwise by
+the persisted Options setting (`%LOCALAPPDATA%\Fable2Native\renderer.txt`), falling back to D3D12:
 
 ```powershell
-cmake -S . -B build -DF2NATIVE_ENABLE_VULKAN=ON
+cmake -S . -B build -DF2NATIVE_ENABLE_VULKAN=ON   # Vulkan needs the Vulkan SDK + glslc
 cmake --build build --config RelWithDebInfo
-build\RelWithDebInfo\f2native_frontend_vulkan.exe
+build\RelWithDebInfo\f2native_frontend.exe --backend d3d12    # or: --backend vulkan
 ```
 
-Both frontends use the same native scene package and user-selected game source. D3D12 and Vulkan
-are presentation backends for the native runtime; neither backend runs the Xbox 360 renderer.
+If the build has no Vulkan support, the selection always resolves to D3D12. The Options page exposes
+the same choice (Video → Renderer); it persists and applies on the next launch. D3D12 and Vulkan
+are presentation backends for the native runtime; neither runs the Xbox 360 renderer.
 The frontend state and gameplay clock use fixed 60 Hz simulation steps, so uncapped rendering does
 not accelerate menus, loading, or future game logic.
 
@@ -94,13 +101,13 @@ build\RelWithDebInfo\f2native_frontend.exe --game-dir path\to\Fable2NativeGame -
 The same scene can be viewed through Vulkan:
 
 ```powershell
-build\RelWithDebInfo\f2native_frontend_vulkan.exe --game-dir path\to\Fable2NativeGame --scene cooked\model.f2scene
+build\RelWithDebInfo\f2native_frontend.exe --backend vulkan --game-dir path\to\Fable2NativeGame --scene cooked\model.f2scene
 ```
 
 For a first local-art validation, an extracted DDS can be supplied explicitly:
 
 ```powershell
-build\RelWithDebInfo\f2native_frontend_vulkan.exe `
+build\RelWithDebInfo\f2native_frontend.exe --backend vulkan `
   --game-dir path\to\Fable2NativeGame `
   --scene cooked\model.f2scene `
   --texture path\to\data\pubgames\common\bar_focus.dds
@@ -130,7 +137,7 @@ build\RelWithDebInfo\f2native_frontend.exe `
   --game-dir path\to\Fable2NativeGame `
   --video-root cooked
 
-build\RelWithDebInfo\f2native_frontend_vulkan.exe `
+build\RelWithDebInfo\f2native_frontend.exe --backend vulkan `
   --game-dir path\to\Fable2NativeGame `
   --video-root cooked
 ```
@@ -170,7 +177,26 @@ main_background=main_background.dds
 logo=logo.dds
 button_accept=button_accept.dds
 button_back=button_back.dds
+ambient_atlas=ambient_atlas.png
+ambient_baseline=ambient_baseline.png
+ambient_detail=ambient_detail.png
+# Or use a deterministic comma-separated detail sequence:
+# ambient_detail_frames=ambient_detail_000.png,ambient_detail_001.png
+title_font=title_font.ttf
 ```
+
+`ambient_atlas` is optional. When supplied, the title uses the recovered
+source-alpha three-slice geometry and timing from the live PM4 evidence; when
+absent, it keeps the procedural fallback. `ambient_detail` is an optional
+same-sized user export of the captured detail sampler; when present, the
+runtime applies the recovered `detail.rgb + detail.a * main.rgb` material
+equation to the atlas. The retail animation streams changing detail textures,
+so a single supplied detail snapshot is static-frame parity. For animation,
+`ambient_detail_frames` accepts a comma-separated sequence and advances it at
+the measured 60 Hz cadence after the title reveal boundary. `ambient_baseline` is also optional and may be a user-owned transparent composite of the 18 static
+format-18 draws; it is shown from the measured 5.90-second boundary.
+`title_font` optionally points to a user-converted TTF/OTF export of the
+Maiandra GD Fable font and becomes the native UI default when valid.
 
 Launch either frontend with `--ui-root path\to\cooked-ui`. Missing UI files use the procedural
 bring-up layout, so the runtime remains testable before the full front-end cooker is complete.

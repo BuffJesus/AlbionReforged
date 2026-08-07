@@ -29,8 +29,10 @@ video presentation is paced from each decoded movie's frame rate.
 
 Title-screen fidelity is currently an evidence gate. The extracted BGF scene identifies the authored
 logo components, and the PM4 title capture identifies the source-alpha sprite block used by the
-reveal. The native effect remains an explicitly marked approximation until its captured vertex/index
-geometry and shader constants are recovered. See [the title-screen fidelity gate](docs/TITLE_SCREEN_FIDELITY.md)
+reveal. The captured geometry and timing are available through an optional user-owned
+`ambient_atlas` input; an optional same-sized `ambient_detail` input applies the recovered
+dual-texture equation for a supplied detail snapshot, while animated detail streaming remains open.
+See [the title-screen fidelity gate](docs/TITLE_SCREEN_FIDELITY.md)
 and the [next-session research handoff](docs/TITLE_SCREEN_HANDOFF_2026-08-03.md).
 
 The frontends can also consume a user-local `ui_manifest.ini` containing cooked exports of the real
@@ -44,6 +46,12 @@ main_background=main_background.dds
 logo=logo.dds
 button_accept=button_accept.dds
 button_back=button_back.dds
+ambient_atlas=ambient_atlas.png
+ambient_baseline=ambient_baseline.png
+ambient_detail=ambient_detail.png
+# Or use a deterministic comma-separated detail sequence:
+# ambient_detail_frames=ambient_detail_000.png,ambient_detail_001.png
+title_font=title_font.ttf
 ```
 
 For example, place that manifest and the user-cooked textures in
