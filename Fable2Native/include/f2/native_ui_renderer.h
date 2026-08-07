@@ -1,9 +1,13 @@
 #pragma once
 
+#include "f2/render/render_backend.h"
+
 #include <d3d12.h>
 #include <wrl/client.h>
 
 #include <cstdint>
+#include <functional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -37,6 +41,15 @@ public:
     void render(ID3D12GraphicsCommandList* command_list,
                 std::uint32_t width, std::uint32_t height,
                 const std::vector<NativeUiQuad>& quads);
+
+    // Backend-neutral overload: draw a shared UiScene (f2::render::UiQuad list) by resolving each
+    // opaque TextureId to a D3D12 descriptor. This is the seam the render-backend migration uses so
+    // the D3D12 backend can draw the same scene the Vulkan backend does (docs/FRONTEND_ARCHITECTURE.md).
+    using TextureResolver = std::function<D3D12_GPU_DESCRIPTOR_HANDLE(f2::render::TextureId)>;
+    void render(ID3D12GraphicsCommandList* command_list,
+                std::uint32_t width, std::uint32_t height,
+                std::span<const f2::render::UiQuad> quads,
+                const TextureResolver& resolve);
 
 private:
     struct Vertex {

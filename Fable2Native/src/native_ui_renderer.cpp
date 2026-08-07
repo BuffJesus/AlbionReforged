@@ -190,6 +190,33 @@ float4 ps_main(PSInput input) : SV_TARGET {
 
 void NativeUiRenderer::render(ID3D12GraphicsCommandList* command_list,
                               std::uint32_t width, std::uint32_t height,
+                              std::span<const f2::render::UiQuad> quads,
+                              const TextureResolver& resolve) {
+    if (!command_list || !ready() || width == 0 || height == 0 || quads.empty() || !resolve) return;
+    // Resolve the backend-neutral scene into the D3D12 draw command, then reuse the same path.
+    std::vector<NativeUiQuad> native_quads;
+    native_quads.reserve(quads.size());
+    for (const auto& q : quads) {
+        NativeUiQuad n;
+        n.texture = resolve(q.texture);
+        n.x0 = q.x0; n.y0 = q.y0; n.x1 = q.x1; n.y1 = q.y1;
+        n.u0 = q.u0; n.v0 = q.v0; n.u1 = q.u1; n.v1 = q.v1;
+        n.color = q.color;
+        n.rotation_radians = q.rotation_radians;
+        if (q.combine_detail) {
+            n.detail_texture = resolve(q.detail_texture);
+            n.detail_u0 = q.detail_u0; n.detail_v0 = q.detail_v0;
+            n.detail_u1 = q.detail_u1; n.detail_v1 = q.detail_v1;
+            n.combine_detail = true;
+        }
+        n.key_black_matte = q.key_black_matte;
+        native_quads.push_back(n);
+    }
+    render(command_list, width, height, native_quads);
+}
+
+void NativeUiRenderer::render(ID3D12GraphicsCommandList* command_list,
+                              std::uint32_t width, std::uint32_t height,
                               const std::vector<NativeUiQuad>& quads) {
     if (!command_list || !ready() || width == 0 || height == 0 || quads.empty()) return;
     const std::size_t vertices_needed = quads.size() * 6;
