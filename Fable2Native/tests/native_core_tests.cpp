@@ -4,6 +4,7 @@
 #include "f2/native_texture.h"
 #include "f2/native_ui.h"
 #include "f2/render/null_render_backend.h"
+#include "f2/render/texture_registry.h"
 #include "f2/render/ui_draw_list.h"
 
 #include <cassert>
@@ -220,6 +221,18 @@ int main() {
         backend.draw_ui(scene.quads(), 1920, 1080);
         backend.present();
         assert(backend.last_quad_count() == 3 && backend.frames_presented() == 2);
+
+        // TextureRegistry: stable key -> TextureId -> backend handle (the resolver indirection).
+        f2::render::TextureRegistry registry;
+        const auto id_a = registry.id_for_key(7);
+        const auto id_b = registry.id_for_key(42);
+        assert(id_a != f2::render::kInvalidTexture && id_b != id_a);
+        assert(registry.id_for_key(7) == id_a);  // stable
+        registry.set_handle(id_a, 0xDEADBEEFull);
+        assert(registry.handle(id_a) == 0xDEADBEEFull);
+        assert(registry.handle(id_b) == 0);                       // unset
+        assert(registry.handle(f2::render::kInvalidTexture) == 0);  // invalid
+        assert(registry.size() == 2);
     }
 
     std::filesystem::remove(path);
