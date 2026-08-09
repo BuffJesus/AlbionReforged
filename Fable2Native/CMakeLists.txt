@@ -151,7 +151,9 @@ if(WIN32)
             "${CMAKE_CURRENT_BINARY_DIR}/vulkan_shaders")
         set(F2NATIVE_VULKAN_SHADER_OUTPUTS
             "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.vert.spv"
-            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.frag.spv")
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.frag.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_ui.vert.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_ui.frag.spv")
         add_custom_command(
             OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.vert.spv"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
@@ -168,12 +170,29 @@ if(WIN32)
                     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world.frag"
             DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world.frag"
             VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_ui.vert.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_ui.vert.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_ui.vert"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_ui.vert"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_ui.frag.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_ui.frag.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_ui.frag"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_ui.frag"
+            VERBATIM)
         add_custom_target(f2native_vulkan_shaders DEPENDS ${F2NATIVE_VULKAN_SHADER_OUTPUTS})
 
         file(TO_CMAKE_PATH "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
              F2NATIVE_VULKAN_SHADER_DIR_DEFINE)
         target_sources(f2native_frontend PRIVATE
             src/native_frontend_vulkan_app.cpp
+            src/native_vulkan_ui_renderer.cpp
             src/native_vulkan_video_texture.cpp
             src/native_vulkan_world_renderer.cpp)
         target_link_libraries(f2native_frontend PRIVATE Vulkan::Vulkan)
