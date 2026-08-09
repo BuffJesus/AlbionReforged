@@ -232,6 +232,51 @@ void NativeFrontendAudio::play(NativeFrontendSound sound) {
 #endif
 }
 
+void NativeFrontendAudio::play_video_audio(const std::vector<std::uint8_t>& pcm,
+                                           std::uint16_t channels, std::uint32_t sample_rate) {
+#ifdef _WIN32
+    stop_video_audio();
+    if (!engine_ || pcm.empty() || channels == 0 || sample_rate == 0) return;
+    // Own the PCM for the voice's lifetime — XAudio2 reads the buffer asynchronously.
+    auto clip = std::make_shared<Clip>();
+    clip->bytes = pcm;
+    clip->channels = channels;
+    clip->sample_rate = sample_rate;
+    clip->bits_per_sample = 16;
+    WAVEFORMATEX format{WAVE_FORMAT_PCM, channels, sample_rate,
+                        static_cast<DWORD>(sample_rate * channels * 2),
+                        static_cast<WORD>(channels * 2), 16, 0};
+    IXAudio2SourceVoice* voice = nullptr;
+    if (FAILED(engine_->CreateSourceVoice(&voice, &format))) return;
+    XAUDIO2_BUFFER buffer{};
+    buffer.AudioBytes = static_cast<UINT32>(clip->bytes.size());
+    buffer.pAudioData = clip->bytes.data();
+    buffer.Flags = XAUDIO2_END_OF_STREAM;
+    if (FAILED(voice->SubmitSourceBuffer(&buffer)) || FAILED(voice->Start())) {
+        voice->DestroyVoice();
+        return;
+    }
+    video_voice_ = voice;
+    video_clip_ = std::move(clip);
+#else
+    (void)pcm;
+    (void)channels;
+    (void)sample_rate;
+#endif
+}
+
+void NativeFrontendAudio::stop_video_audio() {
+#ifdef _WIN32
+    if (video_voice_) {
+        video_voice_->Stop();
+        video_voice_->FlushSourceBuffers();
+        video_voice_->DestroyVoice();
+        video_voice_ = nullptr;
+    }
+    video_clip_.reset();
+#endif
+}
+
 void NativeFrontendAudio::tick() {
 #ifdef _WIN32
     for (auto it = voices_.begin(); it != voices_.end();) {
@@ -253,6 +298,7 @@ void NativeFrontendAudio::tick() {
 
 void NativeFrontendAudio::shutdown() {
 #ifdef _WIN32
+    stop_video_audio();
     for (auto& voice : voices_) {
         if (voice.voice) {
             voice.voice->Stop();

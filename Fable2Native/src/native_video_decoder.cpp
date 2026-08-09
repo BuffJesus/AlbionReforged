@@ -99,6 +99,13 @@ bool NativeVideoDecoder::open(const std::filesystem::path& path, std::string& er
                                  static_cast<double>(frame_rate_numerator);
     }
 
+    // Decode the whole first audio stream to interleaved 16-bit PCM. Best-effort: a missing or
+    // undecodable audio stream just leaves the clip silent (as it was before), never fails open().
+    audio_pcm_.clear();
+    audio_channels_ = 0;
+    audio_sample_rate_ = 0;
+    decode_audio_stream(reader.Get());
+
     reader_ = reader.Detach();
     path_ = path;
     width_ = width;
@@ -108,6 +115,56 @@ bool NativeVideoDecoder::open(const std::filesystem::path& path, std::string& er
     frame_duration_seconds_ = frame_duration_seconds;
     serial_ = 0;
     return true;
+}
+
+void NativeVideoDecoder::decode_audio_stream(void* reader_value) {
+    auto* reader = reader_from(reader_value);
+
+    ComPtr<IMFMediaType> pcm_type;
+    if (FAILED(MFCreateMediaType(&pcm_type))) return;
+    pcm_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    pcm_type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
+    pcm_type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+    if (FAILED(reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, nullptr,
+                                           pcm_type.Get()))) {
+        return;  // no audio stream, or PCM output unsupported
+    }
+
+    ComPtr<IMFMediaType> actual_type;
+    if (FAILED(reader->GetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, &actual_type))) return;
+    UINT32 channels = 0;
+    UINT32 sample_rate = 0;
+    if (FAILED(actual_type->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &channels)) || channels == 0 ||
+        FAILED(actual_type->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, &sample_rate)) ||
+        sample_rate == 0) {
+        return;
+    }
+
+    std::vector<std::uint8_t> pcm;
+    while (true) {
+        DWORD stream_index = 0;
+        DWORD flags = 0;
+        LONGLONG timestamp = 0;
+        ComPtr<IMFSample> sample;
+        if (FAILED(reader->ReadSample(MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, &stream_index, &flags,
+                                      &timestamp, &sample))) {
+            return;  // give up on audio; leave the clip silent
+        }
+        if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) break;
+        if (!sample) continue;
+        ComPtr<IMFMediaBuffer> buffer;
+        if (FAILED(sample->ConvertToContiguousBuffer(&buffer))) continue;
+        BYTE* data = nullptr;
+        DWORD length = 0;
+        if (FAILED(buffer->Lock(&data, nullptr, &length))) continue;
+        pcm.insert(pcm.end(), data, data + length);
+        buffer->Unlock();
+    }
+
+    if (pcm.empty()) return;
+    audio_pcm_ = std::move(pcm);
+    audio_channels_ = static_cast<std::uint16_t>(channels);
+    audio_sample_rate_ = sample_rate;
 }
 
 bool NativeVideoDecoder::read_next_frame(NativeVideoFrame& frame, std::string& error) {
@@ -193,6 +250,9 @@ void NativeVideoDecoder::close() {
     pixel_format_ = PixelFormat::Argb32;
     frame_duration_seconds_ = 1.0 / 30.0;
     serial_ = 0;
+    audio_pcm_.clear();
+    audio_channels_ = 0;
+    audio_sample_rate_ = 0;
 }
 
 }  // namespace f2

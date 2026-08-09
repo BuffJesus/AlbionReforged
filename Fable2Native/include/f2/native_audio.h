@@ -55,6 +55,13 @@ public:
     void play(NativeFrontendSound sound);
     void set_music_enabled(bool enabled);
 
+    // Play the soundtrack of an intro/attract movie (interleaved 16-bit PCM decoded by
+    // NativeVideoDecoder). Replaces any movie audio already playing; stop_video_audio() ends it
+    // when the movie is skipped or finishes. Independent of the SE_GUI one-shot/music voices.
+    void play_video_audio(const std::vector<std::uint8_t>& pcm, std::uint16_t channels,
+                          std::uint32_t sample_rate);
+    void stop_video_audio();
+
     [[nodiscard]] bool ready() const noexcept { return engine_ != nullptr; }
 
 private:
@@ -77,6 +84,8 @@ private:
 
     IXAudio2* engine_ = nullptr;
     IXAudio2MasteringVoice* mastering_voice_ = nullptr;
+    IXAudio2SourceVoice* video_voice_ = nullptr;
+    std::shared_ptr<Clip> video_clip_;
     std::array<std::shared_ptr<Clip>, static_cast<std::size_t>(NativeFrontendSound::Count)> clips_{};
     std::vector<Voice> voices_;
     std::filesystem::path root_;

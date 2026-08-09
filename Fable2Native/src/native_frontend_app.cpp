@@ -501,6 +501,7 @@ private:
         const bool video_state = state == f2::FrontendState::IntroVideo ||
                                   state == f2::FrontendState::AttractVideo;
         if (!video_state || video_root_.empty()) {
+            audio_.stop_video_audio();
             video_decoder_.close();
             active_video_path_.clear();
             video_frame_ = {};
@@ -525,7 +526,15 @@ private:
             active_video_path_ = path;
             video_frame_ = {};
             video_next_frame_time_ = 0.0;
+            audio_.stop_video_audio();
             if (!video_decoder_.open(path, video_error_)) return;
+            // Start the movie soundtrack in lock-step with its first frame. The video timeline is
+            // wall-clock driven, so real-time XAudio2 playback stays in sync for these short clips.
+            if (video_decoder_.has_audio() && game_.frontend.sound_enabled()) {
+                audio_.play_video_audio(video_decoder_.audio_pcm(),
+                                        video_decoder_.audio_channels(),
+                                        video_decoder_.audio_sample_rate());
+            }
         }
         const double target_time = state == f2::FrontendState::IntroVideo
                                        ? game_.frontend.intro_videos().current_time()
