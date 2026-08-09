@@ -20,6 +20,7 @@ add_library(f2native_core STATIC
     src/native_audio.cpp
     src/native_ui.cpp
     src/native_font.cpp
+    src/frontend_scene_builder.cpp
     src/native_iso.cpp
     src/native_video.cpp
 )

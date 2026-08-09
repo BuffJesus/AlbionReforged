@@ -4,6 +4,7 @@
 #include "f2/native_install.h"
 #include "f2/native_input.h"
 #include "f2/native_font.h"
+#include "f2/frontend_scene_builder.h"
 #include "f2/native_logo_effects.h"
 #include "f2/native_ui.h"
 #include "f2/native_ui_renderer.h"
@@ -670,6 +671,30 @@ private:
         D3D12_GPU_DESCRIPTOR_HANDLE handle{};
         handle.ptr = texture_registry_.handle(id);
         return handle;
+    }
+
+    // The shared, backend-neutral scene builder (docs/FRONTEND_ARCHITECTURE.md). Lazily constructed so
+    // its refs to native_font_/ui_assets_ are valid; the texture-access adapter bridges logical assets
+    // to this app's D3D12-backed TextureIds (id 0 when uncreated, shader_ready gating the strict draws).
+    f2::FrontendSceneBuilder& scene_builder() {
+        if (!scene_builder_) {
+            f2::FrontendSceneBuilder::TextureAccess access;
+            access.id = [this](f2::NativeUiAsset asset) -> f2::render::TextureId {
+                return ui_textures_[ui_slot(asset)].texture.Get() != nullptr
+                           ? ui_texture_id(asset)
+                           : f2::render::kInvalidTexture;
+            };
+            access.shader_ready = [this](f2::NativeUiAsset asset) {
+                const auto& texture = ui_textures_[ui_slot(asset)];
+                return texture.texture.Get() != nullptr && texture.shader_read;
+            };
+            access.font_id = [this]() { return texture_id_for(kFontTextureKey, font_texture_.gpu); };
+            access.font_ready = [this]() {
+                return font_texture_.texture.Get() != nullptr && font_texture_.shader_read;
+            };
+            scene_builder_.emplace(native_font_, ui_assets_, std::move(access));
+        }
+        return *scene_builder_;
     }
 
     bool ensure_ui_texture(f2::NativeUiAsset asset) {
@@ -1677,219 +1702,24 @@ private:
     void render_native_loading(ID3D12GraphicsCommandList* command_list) {
         if (!native_ui_renderer_.ready()) return;
         f2::render::UiDrawList scene;
-        const char* text = "Loading native world...";
-        const float size = 26.0f * (width_ / 1280.0f);
-        emit_text(scene, text, (static_cast<float>(width_) - text_width(text, size)) * 0.5f,
-                  height_ * 0.5f - size * 0.5f, size, 0xffffffffu);
+        scene_builder().build_loading(scene, static_cast<float>(width_), static_cast<float>(height_));
         native_ui_renderer_.render(command_list, width_, height_, scene.quads(),
                                    [this](f2::render::TextureId id) { return resolve_ui_texture(id); });
     }
 
     void render_native_title(ID3D12GraphicsCommandList* command_list) {
         if (!native_ui_renderer_.ready()) return;
-        // Migrated to the backend-neutral scene: build an f2::render::UiDrawList referencing textures
-        // by TextureId, then render through the resolver overload (docs/FRONTEND_ARCHITECTURE.md).
+        // Migrated onto the SHARED backend-neutral scene builder (docs/FRONTEND_ARCHITECTURE.md) so the
+        // Vulkan frontend renders the identical title. The app just resolves TextureIds -> descriptors.
         f2::render::UiDrawList scene;
-        const auto add = [&](f2::NativeUiAsset asset, float x0, float y0, float x1, float y1,
-                             float u0, float v0, float u1, float v1, std::uint32_t color) {
-            const auto& texture = ui_textures_[ui_slot(asset)];
-            if (!texture.texture) return;
-            scene.add_sprite(ui_texture_id(asset), x0, y0, x1, y1, u0, v0, u1, v1, color);
-        };
-        const auto alpha = [](float value) {
-            return static_cast<std::uint32_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f);
-        };
-        const auto rgba = [](std::uint32_t r, std::uint32_t g, std::uint32_t b,
-                             std::uint32_t a) {
-            return r | (g << 8u) | (b << 16u) | (a << 24u);
-        };
-        const float title_time = static_cast<float>(game_.frontend.state_time());
-        const auto& background = ui_textures_[ui_slot(f2::NativeUiAsset::TitleBackground)];
-        if (background.texture) {
-            const float fade = std::clamp((title_time - 5.90f) / 1.10f, 0.0f, 1.0f);
-            const float scale = height_ / static_cast<float>(background.height);
-            const float image_width = background.width * scale;
-            const float offset = std::fmod(title_time * 29.0f, image_width);
-            const auto background_id = ui_texture_id(f2::NativeUiAsset::TitleBackground);
-            for (float x = -offset; x < static_cast<float>(width_); x += image_width) {
-                scene.add_sprite(background_id, x, 0.0f, x + image_width,
-                                 static_cast<float>(height_), 0.0f, 0.0f, 1.0f, 1.0f,
-                                 rgba(255, 255, 255, alpha(fade)));
-            }
-        }
-        const float logo_fade = std::clamp((title_time - 0.86f) / 0.75f, 0.0f, 1.0f);
-        const auto& logo = ui_textures_[ui_slot(f2::NativeUiAsset::Logo)];
-        if (logo.texture && logo_fade > 0.0f) {
-            const float logo_scale = width_ / (logo.width * 1.8f);
-            const float logo_width = logo.width * logo_scale;
-            const float logo_height = logo.height * logo_scale;
-            const float logo_x = (width_ - logo_width) * 0.5f;
-            const float logo_y = height_ * 0.47f - logo_height * 0.5f;
-            add(f2::NativeUiAsset::Logo, logo_x, logo_y,
-                logo_x + logo_width, logo_y + logo_height,
-                0.0f, 0.0f, 1.0f, 1.0f, rgba(255, 255, 255, alpha(logo_fade)));
-
-            // Continuous title sparkle burst over the wordmark. Retail runs a GPU particle system
-            // (VS 8AF41A0CCCCD95CC) reading white star/mist sprites, ~0.5 grey modulate + faint
-            // blue tint, visually additive so cores blow to white (title_reveal_effect_EXACT.json).
-            // We approximate with the recovered sparkle_* sprites, additive, white-dominant, seeded
-            // from the logo mask; it never one-shots to nothing (user: "the sparkles keep going").
-            if (title_sparkles_.empty()) build_title_sparkles();
-            const float spark_appear = std::clamp((title_time - 0.86f) / 0.9f, 0.0f, 1.0f);
-            const float unit = width_ / 1280.0f;
-            for (const auto& s : title_sparkles_) {
-                const auto& tex = ui_textures_[ui_slot(sparkle_asset(s.texture))];
-                if (!tex.texture) continue;
-                const float phase = std::fmod(title_time * 0.9f + s.delay * s.life, s.life);
-                const float t = phase / s.life;
-                const float life_alpha = t < 0.5f ? t * 2.0f : (1.0f - t) * 2.0f;
-                const float a = life_alpha * spark_appear;
-                if (a <= 0.02f) continue;
-                const float px = logo_x + s.x * logo_width;
-                const float py = logo_y + s.y * logo_height;
-                const float sz = s.size * unit;
-                const auto sparkle_id = ui_texture_id(sparkle_asset(s.texture));
-                // The sparkle sprites are pink stars; alpha_mask takes only their shape (alpha) and
-                // paints it white so the burst reads "essentially white" like the retail boot, with
-                // a faint cool-white halo. Additive so overlapping cores bloom out to white.
-                scene.add_sprite(sparkle_id, px - sz * 0.95f, py - sz * 0.95f, px + sz * 0.95f,
-                                 py + sz * 0.95f, 0.0f, 0.0f, 1.0f, 1.0f,
-                                 rgba(210, 225, 255, alpha(a * 0.40f)));
-                scene.set_last_blend(f2::render::BlendMode::Additive);
-                scene.set_last_alpha_mask(true);
-                scene.add_sprite(sparkle_id, px - sz * 0.5f, py - sz * 0.5f, px + sz * 0.5f,
-                                 py + sz * 0.5f, 0.0f, 0.0f, 1.0f, 1.0f,
-                                 rgba(255, 255, 255, alpha(a * 1.0f)));
-                scene.set_last_blend(f2::render::BlendMode::Additive);
-                scene.set_last_alpha_mask(true);
-            }
-        }
-        const auto& baseline = ui_textures_[ui_slot(f2::NativeUiAsset::AmbientBaseline)];
-        if (baseline.texture && title_time >= 5.90f) {
-            add(f2::NativeUiAsset::AmbientBaseline, 0.0f, 0.0f,
-                static_cast<float>(width_), static_cast<float>(height_),
-                0.0f, 0.0f, 1.0f, 1.0f, rgba(255, 255, 255, 255));
-        }
-        const auto& ambient_atlas = ui_textures_[ui_slot(f2::NativeUiAsset::AmbientAtlas)];
-        if (ambient_atlas.texture && ambient_atlas.shader_read &&
-            title_time >= 5.90f + 2.0f / 60.0f) {
-            // This is the native equivalent of the recovered 12-draw sidecar
-            // block. Keep the frame-relative interpolation identical to the
-            // Vulkan/ImGui path so D3D12 does not introduce a second timing
-            // interpretation for the same retail geometry.
-            constexpr std::array<float, 10> slide_left_ndc = {
-                -1.8962f, -1.6970f, -1.3355f, -1.1485f, -1.0475f,
-                -0.9409f, -0.8442f, -0.7700f, -0.7247f, -0.7152f,
-            };
-            constexpr std::array<float, 4> row_bottom_ndc = {
-                -0.1018f, 0.0605f, 0.2229f, 0.3936f,
-            };
-            constexpr std::array<float, 4> row_top_ndc = {
-                0.0236f, 0.1859f, 0.3483f, 0.5190f,
-            };
-            constexpr std::array<float, 3> u0 = {0.740f, 0.871f, 0.875f};
-            constexpr std::array<float, 3> u1 = {0.865f, 0.873f, 1.000f};
-            constexpr float start_time = 5.90f + 2.0f / 60.0f;
-            constexpr float final_left = -0.7152f;
-            constexpr float middle_right = -0.0746f;
-            constexpr float right_edge = -0.0371f;
-            if (title_time >= start_time) {
-                const float sample = std::clamp((title_time - start_time) * 60.0f,
-                                                0.0f,
-                                                static_cast<float>(slide_left_ndc.size() - 1));
-                const auto lower = static_cast<std::size_t>(std::floor(sample));
-                const auto upper = std::min(lower + 1, slide_left_ndc.size() - 1);
-                const float fraction = sample - static_cast<float>(lower);
-                const float left_ndc = std::lerp(slide_left_ndc[lower],
-                                                 slide_left_ndc[upper], fraction);
-                const float shift_ndc = left_ndc - final_left;
-                const float middle_left = final_left + 0.0375f + shift_ndc;
-                const float right_left = middle_right + shift_ndc;
-                const std::array<float, 3> x0 = {left_ndc, middle_left, right_left};
-                const std::array<float, 3> x1 = {
-                    middle_left, right_left, right_edge + shift_ndc,
-                };
-                const auto to_x = [this](float ndc) {
-                    return (ndc + 1.0f) * static_cast<float>(width_) * 0.5f;
-                };
-                const auto to_y = [this](float ndc) {
-                    return (1.0f - ndc) * static_cast<float>(height_) * 0.5f;
-                };
-                for (std::size_t row = 0; row < row_bottom_ndc.size(); ++row) {
-                    for (std::size_t column = 0; column < x0.size(); ++column) {
-                        add(f2::NativeUiAsset::AmbientAtlas,
-                            to_x(x0[column]), to_y(row_top_ndc[row]),
-                            to_x(x1[column]), to_y(row_bottom_ndc[row]),
-                            u0[column], 0.250f, u1[column], 0.500f,
-                            rgba(255, 255, 255, 255));
-                    }
-                }
-            }
-        }
-
-        // Native prompt + legal text (ported off ImGui; the legacy ImGui block now draws these only
-        // when the native renderer is unavailable). emit_text positions by the text top-left, so the
-        // pixel coordinates below match the retired ImGui::AddText calls one-for-one.
-        {
-            const auto prompt = input_.prompt(f2::NativeInputAction::Accept);
-            const std::string prompt_text = "Press " + prompt + " to start";
-            constexpr float prompt_font_size = 22.0f;
-            constexpr float legal_font_size = 18.0f;
-            // The "Press ENTER to start" prompt fades in, then SLOWLY FLASHES (pulses) forever while
-            // the title idles — matching retail. Period ~2.6 s, brightness ~0.25..1.0 (never fully
-            // off so it reads as a pulse, not a blink).
-            const float prompt_in = std::clamp((title_time - 0.5f) / 0.7f, 0.0f, 1.0f);
-            const float prompt_pulse =
-                0.25f + 0.75f * (0.5f + 0.5f * std::sin(title_time * 2.4f - 1.5708f));
-            const std::uint32_t prompt_a = alpha(prompt_in * prompt_pulse);
-            const float prompt_y = height_ * 0.56f;
-            const auto& accept_texture = ui_textures_[ui_slot(f2::NativeUiAsset::Accept)];
-            const bool use_accept_glyph = input_.using_controller_prompts() &&
-                                          accept_texture.texture && accept_texture.shader_read;
-            const auto text_col = rgba(235, 235, 235, prompt_a);
-            const auto shadow_col = rgba(0, 0, 0, prompt_a * 3 / 5);
-            if (use_accept_glyph && prompt == "A") {
-                const float icon_size = 28.0f;
-                const float prefix_w = text_width("Press ", prompt_font_size);
-                const float prompt_w = prefix_w + icon_size + text_width(" to start", prompt_font_size);
-                const float prompt_x = (static_cast<float>(width_) - prompt_w) * 0.5f;
-                emit_text(scene, "Press ", prompt_x + 2.0f, prompt_y + 2.0f, prompt_font_size,
-                          shadow_col);
-                emit_text(scene, "Press ", prompt_x, prompt_y, prompt_font_size, text_col);
-                add(f2::NativeUiAsset::Accept, prompt_x + prefix_w, prompt_y - 1.0f,
-                    prompt_x + prefix_w + icon_size, prompt_y - 1.0f + icon_size, 0.0f, 0.0f, 0.25f,
-                    0.25f, text_col);
-                emit_text(scene, " to start", prompt_x + prefix_w + icon_size + 2.0f, prompt_y + 2.0f,
-                          prompt_font_size, shadow_col);
-                emit_text(scene, " to start", prompt_x + prefix_w + icon_size, prompt_y,
-                          prompt_font_size, text_col);
-            } else {
-                const float prompt_x =
-                    (static_cast<float>(width_) - text_width(prompt_text, prompt_font_size)) * 0.5f;
-                emit_text(scene, prompt_text, prompt_x + 2.0f, prompt_y + 2.0f, prompt_font_size,
-                          shadow_col);
-                emit_text(scene, prompt_text, prompt_x, prompt_y, prompt_font_size, text_col);
-            }
-            const float legal_in = std::clamp((title_time - 0.20f) / 0.45f, 0.0f, 1.0f);
-            const float legal_out = 1.0f - std::clamp((title_time - 5.90f) / 0.65f, 0.0f, 1.0f);
-            const std::uint32_t legal_a = alpha(legal_in * legal_out);
-            const auto legal_col = rgba(242, 242, 242, legal_a);
-            const auto legal_shadow = rgba(0, 0, 0, legal_a * 3 / 5);
-            const auto legal_line = [&](std::string_view text, float y) {
-                const float x = (static_cast<float>(width_) - text_width(text, legal_font_size)) * 0.5f;
-                emit_text(scene, text, x + 2.0f, y + 2.0f, legal_font_size, legal_shadow);
-                emit_text(scene, text, x, y, legal_font_size, legal_col);
-            };
-            legal_line(
-                "\xC2\xA9 & \xC2\xAE 2008 Microsoft Corporation. All rights reserved. Developed by",
-                height_ * 0.73f);
-            legal_line("Lionhead Studios.", height_ * 0.79f);
-            legal_line("Online Interactions Not Rated by the ESRB", height_ * 0.87f);
-        }
-
+        scene_builder().build_title(scene, static_cast<float>(width_), static_cast<float>(height_),
+                                    game_.frontend.state_time(),
+                                    input_.prompt(f2::NativeInputAction::Accept),
+                                    input_.using_controller_prompts());
         native_ui_renderer_.render(command_list, width_, height_, scene.quads(),
                                    [this](f2::render::TextureId id) { return resolve_ui_texture(id); });
     }
+
 
     void handle_input() {
         using Action = f2::NativeInputAction;
@@ -2060,6 +1890,7 @@ private:
     f2::NativeWorldRenderer world_renderer_;
     f2::NativeUiRenderer native_ui_renderer_;
     f2::render::TextureRegistry texture_registry_;  // maps ui slots -> stable TextureIds (neutral scene)
+    std::optional<f2::FrontendSceneBuilder> scene_builder_;  // shared backend-neutral scene builder
     f2::NativeGame game_;
     f2::NativeInputRouter input_;
     ComPtr<ID3D12Device> device_;
