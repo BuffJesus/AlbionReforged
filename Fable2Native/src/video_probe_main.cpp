@@ -30,6 +30,21 @@ int main(int argc, char** argv) {
                   << "  rgba_bytes: " << frame.rgba8.size() << "\n"
                   << "  serial: " << frame.serial << "\n";
     }
+    if (opened) {
+        if (decoder.has_audio()) {
+            const double seconds =
+                static_cast<double>(decoder.audio_pcm().size()) /
+                (static_cast<double>(decoder.audio_channels()) * 2.0 *
+                 static_cast<double>(decoder.audio_sample_rate()));
+            std::cout << "decoded audio stream\n"
+                      << "  channels: " << decoder.audio_channels() << "\n"
+                      << "  sample_rate: " << decoder.audio_sample_rate() << "\n"
+                      << "  pcm_bytes: " << decoder.audio_pcm().size() << "\n"
+                      << "  seconds: " << seconds << "\n";
+        } else {
+            std::cout << "no audio stream decoded\n";
+        }
+    }
     decoder.close();
     f2::stop_native_video_runtime();
     if (SUCCEEDED(com_result)) CoUninitialize();
