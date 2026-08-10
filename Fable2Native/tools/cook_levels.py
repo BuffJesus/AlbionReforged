@@ -359,7 +359,10 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             return None
         try:
             glued = extract(header_bnk, he, "h.bin") + extract(body_bnk, be, "b.bin")
-            _, geoms = mdl.parse(glued, log=lambda m: None)
+            # Pass the model path so the MDL parser can gate the foliage buffer layout
+            # (grass/trees use strides 48/36 the common paths can't read) — see
+            # ghidra_out/foliage_system_re.txt.
+            _, geoms = mdl.parse(glued, log=lambda m: None, file_path=model_path)
         except Exception as exc:  # noqa: BLE001 - want to skip-and-continue
             log(f"  skip ({type(exc).__name__}): {model_path}")
             model_geoms[key] = None

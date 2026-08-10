@@ -161,12 +161,22 @@ Verify: run on the extracted `chapter2slums.engine_level`, then World `--scene` 
     repeated `--textures-bnk`; searched in order.
   - Repro: `cook_levels.py … --textures-bnk <globals_textures.bnk> --textures-bnk <1024mip0_textures.bnk>
     --textures-bnk <level textures.bnk>` (default `--tex-cook` = build/RelWithDebInfo/f2native_cook_lh_tex.exe).
-- REMAINING (NEXT SESSION, priority order): (b-cont) the last 5 albedos (`esa_facade_window_{green,red,blue}`,
-  `fc_rooftiles`, `fc_window_arched`) are in NONE of the searched containers (not globals_textures,
-  1024mip0_textures, level textures.bnk, or streaming.bnk top-level) — likely tinted variants of a shared
-  base texture (the green/red/blue windows) or in a per-building nested bnk inside streaming.bnk. Needs a
-  deeper container hunt / material-tint RE. (c) sample the normal map (renderer PS ignores t1). (d)
-  foliage MDL strides (type-21 skip). (e) terrain
+- ✅ ALL 43 ALBEDOS COOK (2026-08-10) — the last missing textures (`esa_facade_window_*`, `fc_rooftiles`,
+  `fc_window_arched`) live in the level's per-region SHARED banks `worlds\albion\shared\shared_6281.bnk`
+  + `shared_2445.bnk` (nested in `data/levels.bnk`, mounted via the level's `level.vfsconfig`) — RE'd in
+  `ghidra_out/texture_resolution_re.txt`. Extract both from levels.bnk and pass as `--textures-bnk` sources
+  (resolution order: shared_6281 → shared_2445 → level textures.bnk → 1024mip0 → globals_textures). With
+  types 2,21 the cook now resolves 43/43 distinct albedos. General fix (TODO): parse level.vfsconfig to
+  collect the shared-bank paths instead of hard-coding.
+- ✅ FOLIAGE RENDERS (2026-08-10) — grass + trees now decode (was: type-21 + tree LODs skipped with
+  MdlParseError). Root-caused + fixed per `ghidra_out/foliage_system_re.txt`: taught the MDL parser
+  (`Fable2AssetBrowser/source/addons/fable_mdl_format.py`, ⚠ that tree is gitignored — local only) the
+  foliage buffer layout — 3 strides (48 = full-f32 pos/normal/uv grass; 36 = half tree; 20 = bw, unported),
+  the IsTree/NewTree material realign, an is_foliage gate (path OR tree-tag OR fallback-on-desync for
+  `\Global\` grass). `cook_levels.py` passes `file_path=model_path` so the gate fires. chapter2slums with
+  `--types 2,21` now cooks 84 meshes / 5496 instances / 147 blocks (was 43/14/5), zero skips; green oak
+  canopies + grass scatter render. REMAINING: (c) sample the normal map (renderer PS ignores t1); foliage
+  LOD = model-swap by distance (draws near model now); wind = GDB weather-theme shader sway (not decoded). (e) terrain
   heightfield. (f) VULKAN world-renderer parity — behind D3D12 (old origin-orbit camera, no scene-AABB fit,
   no depth attachment in its render pass, no lighting, no textures).
 
