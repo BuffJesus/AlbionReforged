@@ -907,7 +907,16 @@ private:
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         if (vkBeginCommandBuffer(command_buffers_[image_index], &begin) != VK_SUCCESS) return;
         VkClearValue clear{};
-        clear.color = {{game_.scene.sky_color[0], game_.scene.sky_color[1], game_.scene.sky_color[2], 1.0f}};
+        if (game_.frontend.state() == f2::FrontendState::Title) {
+            // BLACK behind the title wordmark before the panorama fades in (matches D3D12; the
+            // Vulkan clear previously used sky_color, which showed as blue here).
+            clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+        } else if (game_.frontend.state() == f2::FrontendState::World) {
+            clear.color = {{game_.scene.sky_color[0], game_.scene.sky_color[1],
+                            game_.scene.sky_color[2], 1.0f}};
+        } else {
+            clear.color = {{0.015f, 0.02f, 0.035f, 1.0f}};
+        }
         VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         pass.renderPass = render_pass_;
         pass.framebuffer = framebuffers_[image_index];

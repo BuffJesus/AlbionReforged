@@ -1163,6 +1163,8 @@ private:
         barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
         barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
         command_list_->ResourceBarrier(1, &barrier);
+        // The title wordmark reveals over BLACK before the winter panorama fades/scrolls in
+        // (build_title fades the background in from ~5.9s).
         const std::array<float, 4> clear = state == f2::FrontendState::Title
                                                 ? std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}
                                                 : std::array<float, 4>{0.015f, 0.02f, 0.035f, 1.0f};
