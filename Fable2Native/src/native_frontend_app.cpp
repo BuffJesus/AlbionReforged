@@ -265,6 +265,7 @@ public:
                 game_.frontend.dispatch(f2::FrontendAction::Accept);
             }
         }
+        if (command_line_flag(L"--show-fps")) game_.frontend.set_fps_display_enabled(true);
         if (com_initialized) CoUninitialize();
         if (!create_device()) return false;
         std::string renderer_error;
