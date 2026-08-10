@@ -67,24 +67,9 @@ private:
     void build_options_page(f2::render::UiDrawList& scene, float width, float height,
                             const NativeGame& game) const;
 
-    // Title reveal sparkle field: normalized (0..1) positions within the wordmark rect, seeded once
-    // from the logo alpha mask so sparkles cluster on the FABLE II glyphs; emitted continuously.
-    struct TitleSparkle {
-        float x = 0.5f;
-        float y = 0.5f;
-        float delay = 0.0f;
-        float life = 1.0f;
-        float size = 12.0f;
-        std::uint8_t texture = 0;
-    };
-
-    void ensure_title_sparkles();
-    static NativeUiAsset sparkle_asset(std::uint8_t index);
-
     const NativeFont& font_;
     const NativeUiAssets& assets_;
     TextureAccess access_;
-    std::vector<TitleSparkle> title_sparkles_;
 };
 
 }  // namespace f2

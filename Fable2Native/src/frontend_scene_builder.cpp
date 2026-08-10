@@ -52,14 +52,6 @@ FrontendSceneBuilder::FrontendSceneBuilder(const NativeFont& font, const NativeU
                                            TextureAccess access)
     : font_(font), assets_(assets), access_(std::move(access)) {}
 
-NativeUiAsset FrontendSceneBuilder::sparkle_asset(std::uint8_t index) {
-    constexpr std::array<NativeUiAsset, 8> kSparkles = {
-        NativeUiAsset::Sparkle1, NativeUiAsset::Sparkle2, NativeUiAsset::Sparkle3,
-        NativeUiAsset::Sparkle4, NativeUiAsset::Sparkle5, NativeUiAsset::Sparkle6,
-        NativeUiAsset::Sparkle7, NativeUiAsset::Sparkle8};
-    return kSparkles[index % kSparkles.size()];
-}
-
 void FrontendSceneBuilder::emit_text(f2::render::UiDrawList& scene, std::string_view text, float x,
                                      float y, float size, std::uint32_t color) const {
     if (!access_.font_ready || !access_.font_ready() || !font_.ready() ||
@@ -111,43 +103,6 @@ void FrontendSceneBuilder::build_loading(f2::render::UiDrawList& scene, float wi
               0xffffffffu);
 }
 
-void FrontendSceneBuilder::ensure_title_sparkles() {
-    if (!title_sparkles_.empty()) return;
-    constexpr std::size_t kCount = 160;
-    title_sparkles_.reserve(kCount);
-    const NativeTexture* logo = assets_.texture(NativeUiAsset::Logo);
-    const bool have_mask = logo && logo->width > 0 && logo->height > 0 &&
-                           logo->rgba8.size() >=
-                               static_cast<std::size_t>(logo->width) * logo->height * 4;
-    std::uint32_t seed = 0xF2A11CEu;
-    const auto rnd = [&seed]() {
-        seed = seed * 1664525u + 1013904223u;
-        return static_cast<float>(seed & 0x00ffffffu) / 16777215.0f;
-    };
-    for (std::size_t i = 0; i < kCount; ++i) {
-        float sx = rnd();
-        float sy = rnd();
-        if (have_mask) {
-            for (int attempt = 0; attempt < 48; ++attempt) {
-                sx = rnd();
-                sy = rnd();
-                const auto px = (static_cast<std::size_t>(sy * logo->height) * logo->width +
-                                 static_cast<std::size_t>(sx * logo->width)) *
-                                4;
-                if (px + 3 < logo->rgba8.size() && logo->rgba8[px + 3] > 24) break;
-            }
-        }
-        TitleSparkle s;
-        s.x = std::clamp(sx + (rnd() - 0.5f) * 0.05f, 0.0f, 1.0f);
-        s.y = std::clamp(sy + (rnd() - 0.5f) * 0.05f, 0.0f, 1.0f);
-        s.delay = rnd();
-        s.life = 0.8f + rnd() * 1.4f;
-        s.size = 8.0f + rnd() * 12.0f;
-        s.texture = static_cast<std::uint8_t>(rnd() * 8.0f);
-        title_sparkles_.push_back(s);
-    }
-}
-
 void FrontendSceneBuilder::build_title(f2::render::UiDrawList& scene, float width, float height,
                                        double state_time, std::string_view accept_prompt,
                                        bool using_controller_prompts) {
@@ -183,35 +138,44 @@ void FrontendSceneBuilder::build_title(f2::render::UiDrawList& scene, float widt
         add(NativeUiAsset::Logo, logo_x, logo_y, logo_x + logo_width, logo_y + logo_height, 0.0f,
             0.0f, 1.0f, 1.0f, rgba(255, 255, 255, alpha_byte(logo_fade)));
 
-        // Continuous title sparkle burst over the wordmark (retail's GPU particle system): white
-        // star/mist sprites, additive so cores blow to white, seeded from the logo mask. Never
-        // one-shots to nothing (user: "the sparkles keep going … essentially white").
-        ensure_title_sparkles();
-        const float spark_appear = std::clamp((title_time - 0.86f) / 0.9f, 0.0f, 1.0f);
-        const float unit = width / 1280.0f;
-        for (const auto& s : title_sparkles_) {
-            const auto sparkle_id = access_.id(sparkle_asset(s.texture));
-            if (!sparkle_id) continue;
-            const float phase = std::fmod(title_time * 0.9f + s.delay * s.life, s.life);
-            const float t = phase / s.life;
-            const float life_alpha = t < 0.5f ? t * 2.0f : (1.0f - t) * 2.0f;
-            const float a = life_alpha * spark_appear;
-            if (a <= 0.02f) continue;
-            const float px = logo_x + s.x * logo_width;
-            const float py = logo_y + s.y * logo_height;
-            const float sz = s.size * unit;
-            // Sparkle sprites are pink stars; alpha_mask takes only their shape (alpha) and paints it
-            // white so the burst reads "essentially white" like retail, with a faint cool-white halo.
-            scene.add_sprite(sparkle_id, px - sz * 0.95f, py - sz * 0.95f, px + sz * 0.95f,
-                             py + sz * 0.95f, 0.0f, 0.0f, 1.0f, 1.0f,
-                             rgba(210, 225, 255, alpha_byte(a * 0.40f)));
-            scene.set_last_blend(f2::render::BlendMode::Additive);
-            scene.set_last_alpha_mask(true);
-            scene.add_sprite(sparkle_id, px - sz * 0.5f, py - sz * 0.5f, px + sz * 0.5f,
-                             py + sz * 0.5f, 0.0f, 0.0f, 1.0f, 1.0f,
-                             rgba(255, 255, 255, alpha_byte(a * 1.0f)));
-            scene.set_last_blend(f2::render::BlendMode::Additive);
-            scene.set_last_alpha_mask(true);
+        // Title "burst" + "sparkles" — the retail effect is NOT a particle system. It is an Anark
+        // (BGF) timeline animating THREE material layers over the SAME fe_f2logo texture, alpha-
+        // blended (NOT additive): L1 solid wordmark (drawn above), L2 a one-shot ignition flare
+        // ("burst"), L3 a looping idle shimmer ("sparkles"). Evidence: ghidra_out/title_sparkle_
+        // burst_re.txt (frontendstartupscreen.bgf has FXGUI_Logomain / _Fadein / _Ambient, no
+        // star/particle/emitter element; measured reveal blend = SRC_ALPHA/INV_SRC_ALPHA).
+        //
+        // The layers are the logo quad re-drawn white with an opacity ENVELOPE. Curve constants
+        // marked (*) are ESTIMATES from the reference video / state timing (spec §6) pending a
+        // reveal-instant capture or an Anark-timeline parse (spec GAP 1/3) — grouped here to tune.
+        const float kLogoFullTime = 0.86f + 0.75f;  // title_time at which L1 reaches full opacity
+        // L2 BURST: fast attack to a bright white flare as the wordmark completes, then decays. One shot.
+        constexpr float kBurstAttack = 0.10f;        // (*) rise to peak
+        constexpr float kBurstDecay = 0.60f;         // (*) falloff to 0
+        constexpr float kBurstPeak = 0.85f;          // (*) peak alpha (high-alpha white, not additive)
+        const float burst_t = title_time - kLogoFullTime;
+        float burst_a = 0.0f;
+        if (burst_t >= 0.0f && burst_t < kBurstAttack + kBurstDecay) {
+            burst_a = burst_t < kBurstAttack ? (burst_t / kBurstAttack)
+                                             : (1.0f - (burst_t - kBurstAttack) / kBurstDecay);
+            burst_a = std::clamp(burst_a, 0.0f, 1.0f) * kBurstPeak;
+        }
+        if (burst_a > 0.004f) {
+            add(NativeUiAsset::Logo, logo_x, logo_y, logo_x + logo_width, logo_y + logo_height, 0.0f,
+                0.0f, 1.0f, 1.0f, rgba(255, 255, 255, alpha_byte(burst_a)));
+        }
+        // L3 AMBIENT: gentle looping shimmer on the settled wordmark (glyph-shaped, since it's the
+        // logo's own silhouette). Low-amplitude cool-white opacity pulse that never fully leaves.
+        constexpr float kAmbientPeriod = 2.5f;       // (*) shimmer period, seconds
+        constexpr float kAmbientBase = 0.06f;        // (*) never-off floor
+        constexpr float kAmbientAmp = 0.10f;         // (*) pulse amplitude
+        const float ambient_in = std::clamp((title_time - (kLogoFullTime + kBurstAttack)) / 0.5f,
+                                             0.0f, 1.0f);  // ramp in as the burst settles
+        if (ambient_in > 0.0f) {
+            const float pulse = 0.5f + 0.5f * std::sin(title_time * (6.2831853f / kAmbientPeriod));
+            const float ambient_a = ambient_in * (kAmbientBase + kAmbientAmp * pulse);
+            add(NativeUiAsset::Logo, logo_x, logo_y, logo_x + logo_width, logo_y + logo_height, 0.0f,
+                0.0f, 1.0f, 1.0f, rgba(226, 236, 255, alpha_byte(ambient_a)));
         }
     }
 
