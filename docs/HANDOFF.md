@@ -1,6 +1,22 @@
 # Handoff — resume here
 
-## ▶▶ ACTIVE TRACK (2026-08-06) — RETAIL FRONTEND DECOMP → Fable2Native fidelity ★ START HERE
+## ▶▶ NEWEST (2026-08-09) — Fable2Native renders REAL LEVEL GEOMETRY ★ START HERE
+**MILESTONE (screenshot-verified):** the cooked childhood level (`chapter2slums`) renders UPRIGHT
+buildings in the D3D12 World state. Full story + repro + next steps: memory
+`fable2native-level-cook-renders` + [`docs/NATIVE_LEVEL_COOK_PLAN.md`](NATIVE_LEVEL_COOK_PLAN.md).
+Commit `e16428d`.
+- **Cook:** extract the nested body bnk `worlds\albion\bwsslums\chapter2slums\chapter2slums_models.bnk`
+  from `data/streaming.bnk` (via BNKReader), then
+  `python Fable2Native/tools/cook_levels.py <chapter2slums.engine_level> --cook out.f2scene
+  --header-bnk Fable2Recomp/assets/game/data/Globals/globals_model_headers.bnk
+  --body-bnk <extracted chapter2slums_models.bnk> --types 2`. Glue recipe = `ghidra_out/model_glue_lmp_format.txt`.
+- **Run:** `f2native_frontend.exe --start-world --scene out.f2scene --game-dir <assets/game>`
+  (`--start-world` = new test flag). Debug layer: env `FABLE2NATIVE_D3D_DEBUG=1` → `d3d_debug.log`.
+- **NEXT (priority):** (a) DEPTH BUFFER (currently flat grey silhouette, no occlusion — biggest visual win),
+  (b) `.tex` texture decode, (c) lighting, (d) foliage MDL strides in fable_mdl_format, (e) terrain.
+- New decomp specs this session: `ghidra_out/{model_glue_lmp_format,gdb_component_schemas,worldmap_travel_minigames,ingame_menu_live_achievements}.txt`.
+
+## ▶▶ ACTIVE TRACK (2026-08-06) — RETAIL FRONTEND DECOMP → Fable2Native fidelity
 
 **Directive (user):** the Fable2Native frontend (UI setup/positioning, behaviour, animations,
 movies, effects, sounds) is being rebuilt from the **retail game decompilation FIRST**, not by
