@@ -7,7 +7,6 @@
 #include "f2/native_frontend_entry.h"
 #include "f2/native_install.h"
 #include "f2/native_input.h"
-#include "f2/native_logo_effects.h"
 #include "f2/native_ui.h"
 #include "f2/native_video_decoder.h"
 #include "f2/native_vulkan_ui_renderer.h"

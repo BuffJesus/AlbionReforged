@@ -5,7 +5,6 @@
 #include "f2/native_input.h"
 #include "f2/native_font.h"
 #include "f2/frontend_scene_builder.h"
-#include "f2/native_logo_effects.h"
 #include "f2/native_ui.h"
 #include "f2/native_ui_renderer.h"
 #include "f2/native_video_decoder.h"
@@ -1230,7 +1229,6 @@ private:
     f2::NativeUiAssets ui_assets_;
     std::array<UiGpuTexture, kUiTextureCount> ui_textures_;
     std::size_t ambient_detail_frame_uploaded_ = std::numeric_limits<std::size_t>::max();
-    f2::NativeLogoSparkles logo_sparkles_;
     // Native (ImGui-free) font atlas for UI text. Rasterized once from the retail title font (or a
     // system fallback) and uploaded to its own SRV slot; add_native_text samples it instead of
     // ImGui's font atlas (docs/FRONTEND_ARCHITECTURE.md ImGui removal).

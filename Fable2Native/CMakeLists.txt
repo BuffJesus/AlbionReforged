@@ -86,38 +86,8 @@ if(WIN32)
         endif()
     endif()
 
-    set(F2NATIVE_IMGUI_SOURCE "" CACHE PATH "Dear ImGui source directory")
-    if(NOT F2NATIVE_IMGUI_SOURCE AND EXISTS
-       "${CMAKE_CURRENT_SOURCE_DIR}/../Fable2AssetBrowser/source/build/_deps/imgui-src")
-        set(F2NATIVE_IMGUI_SOURCE
-            "${CMAKE_CURRENT_SOURCE_DIR}/../Fable2AssetBrowser/source/build/_deps/imgui-src"
-            CACHE PATH "Dear ImGui source directory" FORCE)
-    endif()
-    if(NOT F2NATIVE_IMGUI_SOURCE OR NOT EXISTS "${F2NATIVE_IMGUI_SOURCE}/imgui.cpp")
-        include(FetchContent)
-        FetchContent_Declare(imgui
-            GIT_REPOSITORY https://github.com/ocornut/imgui.git
-            GIT_TAG v1.91.5
-            GIT_SHALLOW TRUE)
-        FetchContent_MakeAvailable(imgui)
-        set(F2NATIVE_IMGUI_SOURCE "${imgui_SOURCE_DIR}")
-    endif()
-
-    add_library(f2native_imgui STATIC
-        "${F2NATIVE_IMGUI_SOURCE}/imgui.cpp"
-        "${F2NATIVE_IMGUI_SOURCE}/imgui_draw.cpp"
-        "${F2NATIVE_IMGUI_SOURCE}/imgui_tables.cpp"
-        "${F2NATIVE_IMGUI_SOURCE}/imgui_widgets.cpp"
-        "${F2NATIVE_IMGUI_SOURCE}/backends/imgui_impl_win32.cpp"
-        "${F2NATIVE_IMGUI_SOURCE}/backends/imgui_impl_dx12.cpp")
-    if(F2NATIVE_ENABLE_VULKAN)
-        target_sources(f2native_imgui PRIVATE
-            "${F2NATIVE_IMGUI_SOURCE}/backends/imgui_impl_vulkan.cpp")
-        target_link_libraries(f2native_imgui PRIVATE Vulkan::Vulkan)
-    endif()
-    target_include_directories(f2native_imgui PUBLIC
-        "${F2NATIVE_IMGUI_SOURCE}"
-        "${F2NATIVE_IMGUI_SOURCE}/backends")
+    # The frontend is fully ImGui-free: both the D3D12 and Vulkan backends render the shared
+    # backend-neutral scene (FrontendSceneBuilder) through their own native UI renderers.
 
     # One executable hosts BOTH backends; the active backend is selected at launch (restart-applied)
     # by frontend_main.cpp via resolve_render_backend(). The Vulkan sources/libs are only compiled in
@@ -125,13 +95,11 @@ if(WIN32)
     add_executable(f2native_frontend WIN32
         src/frontend_main.cpp
         src/native_frontend_app.cpp
-        src/native_logo_effects.cpp
         src/native_ui_renderer.cpp
         src/native_world_renderer.cpp)
     target_link_libraries(f2native_frontend PRIVATE
         f2native_core
         f2native_video
-        f2native_imgui
         d3d12
         d3dcompiler
         dxgi
@@ -140,9 +108,6 @@ if(WIN32)
         user32
         xinput9_1_0
         xaudio2)
-    target_include_directories(f2native_frontend PRIVATE
-        "${F2NATIVE_IMGUI_SOURCE}"
-        "${F2NATIVE_IMGUI_SOURCE}/backends")
     target_compile_definitions(f2native_frontend PRIVATE
         WIN32_LEAN_AND_MEAN
         NOMINMAX)
