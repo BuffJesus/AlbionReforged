@@ -1,5 +1,6 @@
 #include "f2/native_audio.h"
 #include "f2/native_font.h"
+#include "f2/native_frontend_config.h"
 #include "f2/native_game.h"
 #include "f2/native_install.h"
 #include "f2/native_texture.h"
@@ -7,6 +8,8 @@
 #include "f2/render/null_render_backend.h"
 #include "f2/render/texture_registry.h"
 #include "f2/render/ui_draw_list.h"
+
+#include <windows.h>
 
 #include <cassert>
 #include <array>
@@ -334,6 +337,44 @@ int main() {
         fc.dispatch(A::Left);  // row 0 = Subtitles -> Off
         assert(fc.subtitles_enabled() == false);
         (void)subs0;
+    }
+
+    {
+        // Options persistence: save_options/read_options round-trip + FrontendController reload,
+        // isolated to a temp config dir (FABLE2NATIVE_CONFIG_DIR) so the real options.ini is untouched.
+        const auto cfg = std::filesystem::temp_directory_path() / "f2native_cfg_test";
+        std::filesystem::create_directories(cfg);
+        SetEnvironmentVariableW(L"FABLE2NATIVE_CONFIG_DIR", cfg.wstring().c_str());
+        std::filesystem::remove(cfg / "options.ini");
+        f2::FrontendOptions written;
+        written.subtitles = false;
+        written.anti_aliasing_index = 3;
+        written.resolution_index = 2;
+        written.gamma_percent = 73;
+        written.sounds_volume = 42;
+        written.music_volume = 17;
+        written.fps_display = true;
+        f2::save_options(written);
+        const f2::FrontendOptions read_back = f2::read_options();
+        assert(read_back.subtitles == false);
+        assert(read_back.anti_aliasing_index == 3);
+        assert(read_back.resolution_index == 2);
+        assert(read_back.gamma_percent == 73);
+        assert(read_back.sounds_volume == 42);
+        assert(read_back.music_volume == 17);
+        assert(read_back.fps_display == true);
+        // A controller picks the persisted options up on reset().
+        f2::FrontendController fc;
+        fc.reset();
+        assert(fc.anti_aliasing_index() == 3);
+        assert(fc.resolution_index() == 2);
+        assert(fc.gamma_percent() == 73);
+        assert(fc.sounds_volume() == 42);
+        assert(fc.fps_display_enabled() == true);
+        assert(fc.subtitles_enabled() == false);
+        SetEnvironmentVariableW(L"FABLE2NATIVE_CONFIG_DIR", nullptr);
+        std::filesystem::remove(cfg / "options.ini");
+        std::filesystem::remove(cfg / "renderer.txt");
     }
 
     std::filesystem::remove(path);

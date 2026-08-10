@@ -13,11 +13,28 @@ namespace f2 {
 namespace {
 
 #ifdef _WIN32
-std::filesystem::path renderer_config_path() {
+std::filesystem::path config_dir() {
+    // FABLE2NATIVE_CONFIG_DIR overrides the location (portable config; also isolates unit tests).
+    wchar_t override_dir[MAX_PATH];
+    const DWORD override_length =
+        GetEnvironmentVariableW(L"FABLE2NATIVE_CONFIG_DIR", override_dir, MAX_PATH);
+    if (override_length > 0 && override_length < MAX_PATH) {
+        return std::filesystem::path(override_dir);
+    }
     wchar_t local_app_data[MAX_PATH];
     const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", local_app_data, MAX_PATH);
     if (length == 0 || length >= MAX_PATH) return {};
-    return std::filesystem::path(local_app_data) / "Fable2Native" / "renderer.txt";
+    return std::filesystem::path(local_app_data) / "Fable2Native";
+}
+
+std::filesystem::path renderer_config_path() {
+    const auto dir = config_dir();
+    return dir.empty() ? std::filesystem::path{} : dir / "renderer.txt";
+}
+
+std::filesystem::path options_config_path() {
+    const auto dir = config_dir();
+    return dir.empty() ? std::filesystem::path{} : dir / "options.ini";
 }
 #endif
 
@@ -77,6 +94,69 @@ RenderBackend resolve_render_backend(const wchar_t* command_line) {
         }
     }
     return read_render_backend_preference();
+}
+
+FrontendOptions read_options() {
+    FrontendOptions options;
+#ifdef _WIN32
+    const auto path = options_config_path();
+    if (path.empty()) return options;
+    std::ifstream input(path);
+    std::string line;
+    while (std::getline(input, line)) {
+        const auto separator = line.find('=');
+        if (separator == std::string::npos) continue;
+        const std::string key = line.substr(0, separator);
+        int value = 0;
+        try {
+            value = std::stoi(line.substr(separator + 1));
+        } catch (...) {
+            continue;
+        }
+        if (key == "subtitles") options.subtitles = value != 0;
+        else if (key == "tutorials") options.tutorials = value != 0;
+        else if (key == "multiplayer_orbs") options.multiplayer_orbs = value != 0;
+        else if (key == "auto_joinable") options.auto_joinable = value != 0;
+        else if (key == "invert_aim") options.invert_aim = value != 0;
+        else if (key == "breadcrumb_size") options.breadcrumb_size = value;
+        else if (key == "gamma_percent") options.gamma_percent = value;
+        else if (key == "resolution_index") options.resolution_index = value;
+        else if (key == "anti_aliasing_index") options.anti_aliasing_index = value;
+        else if (key == "fps_display") options.fps_display = value != 0;
+        else if (key == "sounds_volume") options.sounds_volume = value;
+        else if (key == "music_volume") options.music_volume = value;
+        else if (key == "voice_volume") options.voice_volume = value;
+        else if (key == "speaker_mode") options.speaker_mode = value;
+    }
+#endif
+    return options;
+}
+
+void save_options(const FrontendOptions& options) {
+#ifdef _WIN32
+    const auto path = options_config_path();
+    if (path.empty()) return;
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    std::ofstream output(path);
+    if (!output) return;
+    output << "subtitles=" << (options.subtitles ? 1 : 0) << '\n'
+           << "tutorials=" << (options.tutorials ? 1 : 0) << '\n'
+           << "multiplayer_orbs=" << (options.multiplayer_orbs ? 1 : 0) << '\n'
+           << "auto_joinable=" << (options.auto_joinable ? 1 : 0) << '\n'
+           << "invert_aim=" << (options.invert_aim ? 1 : 0) << '\n'
+           << "breadcrumb_size=" << options.breadcrumb_size << '\n'
+           << "gamma_percent=" << options.gamma_percent << '\n'
+           << "resolution_index=" << options.resolution_index << '\n'
+           << "anti_aliasing_index=" << options.anti_aliasing_index << '\n'
+           << "fps_display=" << (options.fps_display ? 1 : 0) << '\n'
+           << "sounds_volume=" << options.sounds_volume << '\n'
+           << "music_volume=" << options.music_volume << '\n'
+           << "voice_volume=" << options.voice_volume << '\n'
+           << "speaker_mode=" << options.speaker_mode << '\n';
+#else
+    (void)options;
+#endif
 }
 
 }  // namespace f2

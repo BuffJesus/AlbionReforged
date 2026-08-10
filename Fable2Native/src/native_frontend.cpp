@@ -88,8 +88,43 @@ void FrontendController::reset() {
     music_volume_ = 80;
     voice_volume_ = 80;
     speaker_mode_ = 0;
+    // Override the defaults with the persisted Options settings (options.ini) so they stick.
+    const FrontendOptions options = read_options();
+    subtitles_enabled_ = options.subtitles;
+    tutorial_boxes_enabled_ = options.tutorials;
+    multiplayer_orbs_enabled_ = options.multiplayer_orbs;
+    auto_joinable_enabled_ = options.auto_joinable;
+    invert_aim_enabled_ = options.invert_aim;
+    breadcrumb_size_ = options.breadcrumb_size;
+    gamma_percent_ = options.gamma_percent;
+    resolution_index_ = options.resolution_index;
+    anti_aliasing_index_ = options.anti_aliasing_index;
+    fps_display_enabled_ = options.fps_display;
+    sounds_volume_ = options.sounds_volume;
+    music_volume_ = options.music_volume;
+    voice_volume_ = options.voice_volume;
+    speaker_mode_ = options.speaker_mode;
     intro_videos_.reset();
     attract_videos_.reset();
+}
+
+void FrontendController::persist_options() const {
+    FrontendOptions options;
+    options.subtitles = subtitles_enabled_;
+    options.tutorials = tutorial_boxes_enabled_;
+    options.multiplayer_orbs = multiplayer_orbs_enabled_;
+    options.auto_joinable = auto_joinable_enabled_;
+    options.invert_aim = invert_aim_enabled_;
+    options.breadcrumb_size = breadcrumb_size_;
+    options.gamma_percent = gamma_percent_;
+    options.resolution_index = resolution_index_;
+    options.anti_aliasing_index = anti_aliasing_index_;
+    options.fps_display = fps_display_enabled_;
+    options.sounds_volume = sounds_volume_;
+    options.music_volume = music_volume_;
+    options.voice_volume = voice_volume_;
+    options.speaker_mode = speaker_mode_;
+    save_options(options);
 }
 
 void FrontendController::tick(double delta_seconds) {
@@ -211,6 +246,7 @@ void FrontendController::dispatch(FrontendAction action) {
                             break;
                     }
                 }
+                persist_options();  // an Options value changed -> persist to options.ini
             }
             break;
         case FrontendAction::Back:
@@ -254,6 +290,7 @@ void FrontendController::dispatch(FrontendAction action) {
                     else if (id == "game" && option_row_ == 4) auto_joinable_enabled_ = !auto_joinable_enabled_;
                     else if (id == "controls") invert_aim_enabled_ = !invert_aim_enabled_;
                     else if (id == "video" && option_row_ == 3) fps_display_enabled_ = !fps_display_enabled_;
+                    persist_options();  // an Options toggle changed -> persist to options.ini
                 }
             }
             break;

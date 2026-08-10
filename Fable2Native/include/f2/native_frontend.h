@@ -115,6 +115,7 @@ public:
 private:
     void enter(FrontendState next);
     void move_selection(int direction);
+    void persist_options() const;  // write the Options settings to options.ini
 
     FrontendState state_ = FrontendState::Boot;
     double state_time_ = 0.0;
