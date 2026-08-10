@@ -55,6 +55,10 @@ public:
     void play(NativeFrontendSound sound);
     void set_music_enabled(bool enabled);
 
+    // Apply the Options audio volumes (0..100). sounds = SE_GUI one-shots, music = the menu music
+    // bed, voice = movie/dialogue audio. Updates live voices and is applied to new voices too.
+    void set_volumes(int sounds, int music, int voice);
+
     // Play the soundtrack of an intro/attract movie (interleaved 16-bit PCM decoded by
     // NativeVideoDecoder). Replaces any movie audio already playing; stop_video_audio() ends it
     // when the movie is skipped or finishes. Independent of the SE_GUI one-shot/music voices.
@@ -82,6 +86,9 @@ private:
     void start_music();
     void stop_music();
 
+    float sfx_volume_ = 1.0f;    // SE_GUI one-shots (Options "Sounds")
+    float music_volume_ = 1.0f;  // menu music bed (Options "Music")
+    float voice_volume_ = 1.0f;  // movie/dialogue audio (Options "Voice")
     IXAudio2* engine_ = nullptr;
     IXAudio2MasteringVoice* mastering_voice_ = nullptr;
     IXAudio2SourceVoice* video_voice_ = nullptr;

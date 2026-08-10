@@ -181,6 +181,7 @@ void NativeFrontendAudio::start_music() {
         voice->DestroyVoice();
         return;
     }
+    voice->SetVolume(music_volume_);
     voices_.push_back({voice, clip, true});
 #endif
 }
@@ -226,6 +227,7 @@ void NativeFrontendAudio::play(NativeFrontendSound sound) {
         voice->DestroyVoice();
         return;
     }
+    voice->SetVolume(sfx_volume_);
     voices_.push_back({voice, clip, false});
 #else
     (void)sound;
@@ -256,6 +258,7 @@ void NativeFrontendAudio::play_video_audio(const std::vector<std::uint8_t>& pcm,
         voice->DestroyVoice();
         return;
     }
+    voice->SetVolume(voice_volume_);
     video_voice_ = voice;
     video_clip_ = std::move(clip);
 #else
@@ -274,6 +277,23 @@ void NativeFrontendAudio::stop_video_audio() {
         video_voice_ = nullptr;
     }
     video_clip_.reset();
+#endif
+}
+
+void NativeFrontendAudio::set_volumes(int sounds, int music, int voice) {
+#ifdef _WIN32
+    const auto clamp01 = [](int v) { return std::clamp(v, 0, 100) / 100.0f; };
+    sfx_volume_ = clamp01(sounds);
+    music_volume_ = clamp01(music);
+    voice_volume_ = clamp01(voice);
+    for (auto& entry : voices_) {
+        if (entry.voice) entry.voice->SetVolume(entry.music ? music_volume_ : sfx_volume_);
+    }
+    if (video_voice_) video_voice_->SetVolume(voice_volume_);
+#else
+    (void)sounds;
+    (void)music;
+    (void)voice;
 #endif
 }
 

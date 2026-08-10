@@ -317,6 +317,8 @@ public:
             apply_resolution_setting();
             apply_aa_setting();
             audio_.tick();
+            audio_.set_volumes(game_.frontend.sounds_volume(), game_.frontend.music_volume(),
+                               game_.frontend.voice_volume());
             const auto state = game_.frontend.state();
             audio_.set_music_enabled(game_.frontend.frontend_music_active() &&
                                       game_.frontend.sound_enabled());
