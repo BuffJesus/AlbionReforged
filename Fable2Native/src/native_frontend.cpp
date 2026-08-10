@@ -162,6 +162,8 @@ void FrontendController::dispatch(FrontendAction action) {
                         resolution_index_ = std::clamp(resolution_index_ + (delta > 0 ? 1 : -1), 0, 2);
                     } else if (video_setting_row_ == 2) {
                         anti_aliasing_index_ = std::clamp(anti_aliasing_index_ + (delta > 0 ? 1 : -1), 0, 3);
+                    } else if (video_setting_row_ == 3) {
+                        fps_display_enabled_ = delta > 0;  // Right = On, Left = Off
                     } else {
                         // Renderer backend (restart-applied): persist so the launcher picks it up.
                         render_backend_index_ = std::clamp(render_backend_index_ + (delta > 0 ? 1 : -1), 0, 1);
@@ -207,7 +209,7 @@ void FrontendController::dispatch(FrontendAction action) {
                     options_page_open_ = true;
                 } else if (id == "game") subtitles_enabled_ = !subtitles_enabled_;
                 else if (id == "controls") invert_aim_enabled_ = !invert_aim_enabled_;
-                else if (id == "video") video_setting_row_ = (video_setting_row_ + 1) % 4;
+                else if (id == "video") video_setting_row_ = (video_setting_row_ + 1) % 5;
                 else if (id == "audio") speaker_mode_ = speaker_mode_ == 0 ? 1 : 0;
             }
             break;

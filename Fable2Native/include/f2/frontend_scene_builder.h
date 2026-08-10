@@ -41,6 +41,8 @@ public:
     void build_video(f2::render::UiDrawList& scene, float width, float height,
                      f2::render::TextureId video) const;
     void build_choose_card(f2::render::UiDrawList& scene, float width, float height) const;
+    // On-screen FPS counter overlay (top-right), drawn by both backends when the Video option is on.
+    void build_fps_overlay(f2::render::UiDrawList& scene, float width, float height, double fps) const;
     // Main menu + (when state==Options) the options chrome/page, and the ChooseCard modal veil+cards.
     void build_main_menu(f2::render::UiDrawList& scene, float width, float height,
                          const NativeGame& game, bool using_controller_prompts);

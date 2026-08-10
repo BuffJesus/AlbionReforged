@@ -307,6 +307,7 @@ public:
             const auto now = std::chrono::steady_clock::now();
             const double delta = std::chrono::duration<double>(now - previous).count();
             previous = now;
+            if (delta > 0.0) current_fps_ = current_fps_ * 0.9 + (1.0 / delta) * 0.1;
             game_.tick(delta);
             update_video();
             input_.poll();
@@ -1187,6 +1188,17 @@ private:
         } else if (state == f2::FrontendState::Loading) {
             render_native_loading(command_list_.Get());
         }
+        // Optional on-screen FPS counter (Video options toggle). Drawn over the frontend UI states,
+        // where the font atlas is guaranteed uploaded.
+        if (game_.frontend.fps_display_enabled() &&
+            (state == f2::FrontendState::Title || state == f2::FrontendState::MainMenu ||
+             state == f2::FrontendState::ChooseCard || state == f2::FrontendState::Options)) {
+            f2::render::UiDrawList scene;
+            scene_builder().build_fps_overlay(scene, static_cast<float>(width_),
+                                              static_cast<float>(height_), current_fps_);
+            native_ui_renderer_.render(command_list_.Get(), width_, height_, scene.quads(),
+                                       [this](f2::render::TextureId id) { return resolve_ui_texture(id); });
+        }
         std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
         command_list_->ResourceBarrier(1, &barrier);
         command_list_->Close();
@@ -1219,6 +1231,7 @@ private:
     HWND window_ = nullptr;
     UINT width_ = 1280;
     UINT height_ = 720;
+    double current_fps_ = 0.0;  // smoothed FPS for the optional on-screen counter
     int last_resolution_index_ = -1;  // tracks the applied Options "Resolution" value
     UINT rtv_stride_ = 0;
     UINT descriptor_stride_ = 0;

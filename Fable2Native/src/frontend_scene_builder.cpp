@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <string>
 
 namespace f2 {
@@ -372,6 +373,19 @@ void FrontendSceneBuilder::build_choose_card(f2::render::UiDrawList& scene, floa
     add_card(NativeUiAsset::CardGirl, 781.0f, 0.105f);
 }
 
+void FrontendSceneBuilder::build_fps_overlay(f2::render::UiDrawList& scene, float width, float height,
+                                             double fps) const {
+    (void)height;
+    const float unit = width / 1280.0f;
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "%.0f FPS", fps);
+    const float size = 20.0f * unit;
+    const float x = width - text_width(buffer, size) - 12.0f * unit;
+    const float y = 8.0f * unit;
+    emit_text(scene, buffer, x + 1.0f * unit, y + 1.0f * unit, size, rgba(0, 0, 0, 190));
+    emit_text(scene, buffer, x, y, size, rgba(80, 255, 80, 255));
+}
+
 void FrontendSceneBuilder::build_options_chrome(f2::render::UiDrawList& scene, float width,
                                                 float height) const {
     (void)height;
@@ -492,9 +506,11 @@ void FrontendSceneBuilder::build_options_page(f2::render::UiDrawList& scene, flo
         };
         const char* resolutions[] = {"1280 x 720", "1920 x 1080", "2560 x 1440"};
         const char* anti_aliasing[] = {"Off", "2x", "4x", "8x"};
-        display_value("Resolution", resolutions[game.frontend.resolution_index()], height * 0.835f, 1);
+        display_value("Resolution", resolutions[game.frontend.resolution_index()], height * 0.828f, 1);
         display_value("Anti-Aliasing", anti_aliasing[game.frontend.anti_aliasing_index()],
-                      height * 0.875f, 2);
+                      height * 0.858f, 2);
+        display_value("FPS Display", game.frontend.fps_display_enabled() ? "On" : "Off",
+                      height * 0.888f, 3);
     }
     const bool has_controller = access_.shader_ready(NativeUiAsset::Accept);
     const auto page_prompt = [&](std::string_view label, float y, float u0) {

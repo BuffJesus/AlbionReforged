@@ -77,6 +77,9 @@ public:
     // the unified launcher (frontend_main.cpp) reads it on next start. Initialized from the pref.
     [[nodiscard]] int render_backend_index() const noexcept { return render_backend_index_; }
     [[nodiscard]] int video_setting_row() const noexcept { return video_setting_row_; }
+    // On-screen FPS counter toggle (Video options row 3). A real native setting the app applies by
+    // drawing the counter each frame when enabled.
+    [[nodiscard]] bool fps_display_enabled() const noexcept { return fps_display_enabled_; }
     [[nodiscard]] int sounds_volume() const noexcept { return sounds_volume_; }
     [[nodiscard]] int music_volume() const noexcept { return music_volume_; }
     [[nodiscard]] int voice_volume() const noexcept { return voice_volume_; }
@@ -129,6 +132,7 @@ private:
     int anti_aliasing_index_ = 2;
     int render_backend_index_ = 0;
     int video_setting_row_ = 0;
+    bool fps_display_enabled_ = false;
     int sounds_volume_ = 80;
     int music_volume_ = 80;
     int voice_volume_ = 80;

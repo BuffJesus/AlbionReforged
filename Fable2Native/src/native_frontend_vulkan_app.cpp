@@ -280,6 +280,7 @@ public:
             const auto now = std::chrono::steady_clock::now();
             const double delta = std::chrono::duration<double>(now - previous).count();
             previous = now;
+            if (delta > 0.0) current_fps_ = current_fps_ * 0.9 + (1.0 / delta) * 0.1;
             game_.tick(delta);
             update_video();
             input_.poll();
@@ -882,6 +883,12 @@ private:
         } else if (state == f2::FrontendState::Loading) {
             scene_builder_->build_loading(scene, w, h);
         }
+        // Optional on-screen FPS counter (Video options toggle), over the font-ready frontend states.
+        if (game_.frontend.fps_display_enabled() &&
+            (state == f2::FrontendState::Title || state == f2::FrontendState::MainMenu ||
+             state == f2::FrontendState::ChooseCard || state == f2::FrontendState::Options)) {
+            scene_builder_->build_fps_overlay(scene, w, h, current_fps_);
+        }
     }
 
     void draw() {
@@ -1023,6 +1030,7 @@ private:
     HWND window_ = nullptr;
     UINT width_ = 1280;
     UINT height_ = 720;
+    double current_fps_ = 0.0;  // smoothed FPS for the optional on-screen counter
     bool framebuffer_resized_ = false;
     bool com_initialized_ = false;
     bool video_runtime_started_ = false;
