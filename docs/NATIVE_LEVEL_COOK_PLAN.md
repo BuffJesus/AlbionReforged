@@ -149,19 +149,23 @@ Verify: run on the extracted `chapter2slums.engine_level`, then World `--scene` 
     of `--textures-bnk` containers (repeatable arg), `f2tool extract` the `.tex`, run `--tex-cook`
     (f2native_cook_lh_tex) → DDS in `<scene>.textures/`, emit `albedo=<abs-dds>` (runtime `resolve_texture`
     loads absolute paths directly → ZERO renderer change). Uncooked albedo/normal/spec tokens are dropped
-    so the material shows its flat base colour instead of sampling white. Verified: 20/27 chapter2slums
-    albedos cook (with 3 source bnks) and the townhouses + Fairfax castle + rocky cliff base all render
-    textured.
+    so the material shows its flat base colour instead of sampling white. Verified: 22/27 chapter2slums
+    albedos cook (with 3 source bnks) and the townhouses + Fairfax castle + gatehouse walls + rocky cliff
+    base all render textured.
+  - ⚠ Space-name gotcha (fixed): some .tex entries are stored WITH SPACES ("bs_gatehouse_stone top.tex").
+    The cooker now resolves textures with the RAW model path (spaces preserved) — texture_token's
+    space->underscore was breaking those lookups — and sanitizes only the output DDS filename.
   - The source bnks (ALL comp-1 self-contained — 1024mip0 is NOT comp-7 as first assumed): shared bs_*
     in `Globals/globals_textures.bnk`; fairfax `fc_stone*`, `cliffg_*`, `bs_haunted_*` in
     `Globals/1024mip0_textures.bnk`; foliage/ground in the level's own `textures.bnk`. Pass each with a
     repeated `--textures-bnk`; searched in order.
   - Repro: `cook_levels.py … --textures-bnk <globals_textures.bnk> --textures-bnk <1024mip0_textures.bnk>
     --textures-bnk <level textures.bnk>` (default `--tex-cook` = build/RelWithDebInfo/f2native_cook_lh_tex.exe).
-- REMAINING (NEXT SESSION, priority order): (b-cont) the last 7 albedos (`esa_facade_window_*`,
-  `fc_rooftiles`, `fc_window_arched`, `bs_gatehouse_stone_*`) are in none of the 3 bnks searched — find
-  their container (maybe comp-7 tiled needing `globals_texture_headers.bnk`; `f2native_cook_lh_tex` already
-  supports comp-7 via `--pf/--width/--height`). (c) sample the normal map (renderer PS ignores t1). (d)
+- REMAINING (NEXT SESSION, priority order): (b-cont) the last 5 albedos (`esa_facade_window_{green,red,blue}`,
+  `fc_rooftiles`, `fc_window_arched`) are in NONE of the searched containers (not globals_textures,
+  1024mip0_textures, level textures.bnk, or streaming.bnk top-level) — likely tinted variants of a shared
+  base texture (the green/red/blue windows) or in a per-building nested bnk inside streaming.bnk. Needs a
+  deeper container hunt / material-tint RE. (c) sample the normal map (renderer PS ignores t1). (d)
   foliage MDL strides (type-21 skip). (e) terrain
   heightfield. (f) VULKAN world-renderer parity — behind D3D12 (old origin-orbit camera, no scene-AABB fit,
   no depth attachment in its render pass, no lighting, no textures).

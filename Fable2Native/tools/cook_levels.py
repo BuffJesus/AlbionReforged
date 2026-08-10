@@ -296,7 +296,9 @@ def _cook_textures(tokens, textures_bnks, tex_cook: Path, f2tool: Path,
         if not exact:
             log(f"  tex skip (not in any textures bnk): {token}")
             continue
-        stem = _norm(token).rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        # Sanitize the DDS filename (spaces -> _) so the absolute path emitted into the
+        # whitespace-delimited F2SCENE stays tokenizable, even for space-named .tex entries.
+        stem = _norm(token).rsplit("/", 1)[-1].rsplit(".", 1)[0].replace(" ", "_")
         raw = tmp / f"{stem}.tex"
         dds = out_dir / f"{stem}.dds"
         try:
@@ -387,7 +389,12 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                               ("specular_tex", "material")):
                 val = getattr(g, attr, "")
                 if val:
-                    opts.append(f"{tok}={texture_token(val)}")
+                    # Keep the RAW path (spaces preserved) for bnk resolution — some .tex
+                    # entries are stored with spaces ("bs_gatehouse_stone top.tex"), which
+                    # texture_token's space->underscore would break. These tokens never reach
+                    # the F2SCENE text: albedo is replaced by the cooked DDS path (or dropped),
+                    # and normal/material are dropped, so no space is emitted.
+                    opts.append(f"{tok}={val.replace(chr(92), '/')}")
             materials.append((f"mat_{mid}_{gi}", opts))
             positions = g.positions
             normals = g.normals or add_normals(positions, g.indices)
