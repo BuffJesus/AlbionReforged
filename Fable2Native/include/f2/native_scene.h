@@ -50,4 +50,11 @@ bool load_native_scene(const std::filesystem::path& path,
                        NativeScene& scene,
                        std::string& error);
 
+// Write a NativeScene as a text F2SCENE package (the output stage of the level cooker; the exact
+// format load_native_scene reads). Names (material/mesh) must be whitespace-free — the reader tokenizes
+// them with >>. Returns false + fills error on an invalid scene or write failure.
+bool save_native_scene(const std::filesystem::path& path,
+                       const NativeScene& scene,
+                       std::string& error);
+
 }  // namespace f2

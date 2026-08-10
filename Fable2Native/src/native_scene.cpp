@@ -1,6 +1,7 @@
 #include "f2/native_scene.h"
 
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 
 namespace f2 {
@@ -166,6 +167,46 @@ bool load_native_scene(const std::filesystem::path& path,
     if (!parsed.validate(&error)) return false;
     scene = std::move(parsed);
     return true;
+}
+
+bool save_native_scene(const std::filesystem::path& path,
+                       const NativeScene& scene,
+                       std::string& error) {
+    if (!scene.validate(&error)) return false;
+    std::ofstream output(path);
+    if (!output) return fail(&error, "unable to open scene for writing: " + path.string());
+    output << std::setprecision(9);  // round-trips 32-bit floats without loss
+    output << "F2SCENE 1\n";
+    output << "sun " << scene.sun_direction[0] << ' ' << scene.sun_direction[1] << ' '
+           << scene.sun_direction[2] << '\n';
+    output << "sky " << scene.sky_color[0] << ' ' << scene.sky_color[1] << ' ' << scene.sky_color[2]
+           << ' ' << scene.sky_color[3] << '\n';
+    for (const NativeMaterial& material : scene.materials) {
+        output << "material " << material.name << ' ' << material.base_color[0] << ' '
+               << material.base_color[1] << ' ' << material.base_color[2] << ' '
+               << material.base_color[3];
+        if (!material.albedo.empty()) output << " albedo=" << material.albedo;
+        if (!material.normal.empty()) output << " normal=" << material.normal;
+        if (!material.material.empty()) output << " material=" << material.material;
+        output << '\n';
+    }
+    for (const NativeMesh& mesh : scene.meshes) {
+        output << "mesh " << mesh.name << ' ' << mesh.vertices.size() << ' ' << mesh.indices.size()
+               << ' ' << mesh.material << '\n';
+        for (const NativeVertex& vertex : mesh.vertices) {
+            output << "vertex " << vertex.position[0] << ' ' << vertex.position[1] << ' '
+                   << vertex.position[2] << ' ' << vertex.normal[0] << ' ' << vertex.normal[1] << ' '
+                   << vertex.normal[2] << ' ' << vertex.uv[0] << ' ' << vertex.uv[1] << '\n';
+        }
+        for (std::uint32_t index : mesh.indices) output << "index " << index << '\n';
+    }
+    for (const NativeInstance& instance : scene.instances) {
+        output << "instance " << scene.meshes[instance.mesh].name << ' ' << instance.position[0]
+               << ' ' << instance.position[1] << ' ' << instance.position[2] << ' '
+               << instance.rotation[0] << ' ' << instance.rotation[1] << ' ' << instance.rotation[2]
+               << ' ' << instance.scale << '\n';
+    }
+    return static_cast<bool>(output);
 }
 
 }  // namespace f2

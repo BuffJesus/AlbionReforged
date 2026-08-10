@@ -12,6 +12,7 @@
 #include <windows.h>
 
 #include <cassert>
+#include <cmath>
 #include <array>
 #include <cstring>
 #include <cstdint>
@@ -375,6 +376,50 @@ int main() {
         SetEnvironmentVariableW(L"FABLE2NATIVE_CONFIG_DIR", nullptr);
         std::filesystem::remove(cfg / "options.ini");
         std::filesystem::remove(cfg / "renderer.txt");
+    }
+
+    {
+        // F2SCENE writer round-trip: the level cooker's output stage must reload identically.
+        f2::NativeScene written;
+        written.sun_direction = {0.1f, -0.9f, 0.4f};
+        written.sky_color = {0.2f, 0.3f, 0.4f, 1.0f};
+        f2::NativeMaterial mat;
+        mat.name = "wall_stone";
+        mat.base_color = {0.8f, 0.7f, 0.6f, 1.0f};
+        mat.albedo = "worlds/albion/bwsslums/wall.dds";
+        written.materials.push_back(mat);
+        f2::NativeMesh mesh;
+        mesh.name = "house_01";
+        mesh.material = 0;
+        mesh.vertices.push_back({{0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}});
+        mesh.vertices.push_back({{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}});
+        mesh.vertices.push_back({{0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}});
+        mesh.indices = {0, 1, 2};
+        written.meshes.push_back(mesh);
+        written.instances.push_back({0, {12.5f, 0.0f, -8.25f}, {0.0f, 1.5708f, 0.0f}, 2.0f});
+
+        const auto scene_path = std::filesystem::temp_directory_path() / "f2native_scene_roundtrip.f2scene";
+        std::string scene_error;
+        assert(f2::save_native_scene(scene_path, written, scene_error));
+        f2::NativeScene reloaded;
+        assert(f2::load_native_scene(scene_path, reloaded, scene_error));
+        assert(reloaded.materials.size() == 1);
+        assert(reloaded.materials[0].name == "wall_stone");
+        assert(reloaded.materials[0].albedo == "worlds/albion/bwsslums/wall.dds");
+        assert(reloaded.meshes.size() == 1);
+        assert(reloaded.meshes[0].name == "house_01");
+        assert(reloaded.meshes[0].vertices.size() == 3);
+        assert(reloaded.meshes[0].indices == std::vector<std::uint32_t>({0, 1, 2}));
+        assert(reloaded.instances.size() == 1);
+        assert(reloaded.instances[0].mesh == 0);
+        const auto approx = [](float a, float b) { return std::abs(a - b) < 1e-5f; };
+        assert(approx(reloaded.instances[0].position[0], 12.5f));
+        assert(approx(reloaded.instances[0].position[2], -8.25f));
+        assert(approx(reloaded.instances[0].rotation[1], 1.5708f));
+        assert(approx(reloaded.instances[0].scale, 2.0f));
+        assert(approx(reloaded.sun_direction[1], -0.9f));
+        assert(approx(reloaded.sky_color[2], 0.4f));
+        std::filesystem::remove(scene_path);
     }
 
     std::filesystem::remove(path);
