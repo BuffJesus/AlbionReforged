@@ -20,10 +20,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import math
 import struct
 from pathlib import Path
+
+# Terrain heightfield constants (ghidra_out/terrain_mesh_re.txt, validated byte-exact):
+# tile spacing is a FIXED engine constant (0.5 wu/cell), NOT the .ghf header float;
+# UV repeats every 8 wu (kUvRepeatsPerWu = 0.125).
+TERRAIN_TILE = 0.5
+TERRAIN_UV_PER_WU = 0.125
 
 
 class BeReader:
@@ -316,10 +323,67 @@ def _cook_textures(tokens, textures_bnks, tex_cook: Path, f2tool: Path,
     return cooked
 
 
+def _build_terrain(ghf_bytes: bytes, stride: int = 1):
+    """Decode a .ghf heightfield and build a render mesh (positions/normals/uvs/indices)
+    in RENDER axes. Faithful port of ghidra_out/terrain_mesh_re.txt §1-4 (validated
+    byte-exact on chapter2slums). Returns (positions, normals, uvs, indices) or None.
+
+    .ghf = gzip stream; raw = origin(3×be_f32) + wCells(be_u32 @0xC) + hCells(be_u32 @0x10)
+    + W*H cells of 14 bytes {f32 height, f32 water, u32 materialGUID, u8, u8}. Vertex per
+    cell at game(x*tile, y*tile, height); render = {x,z,y} swap = (x*tile, height, y*tile);
+    normal = central-difference (hl-hr, 2*tile, hd-hu); UV = (x*tile*0.125, y*tile*0.125).
+    """
+    raw = gzip.decompress(ghf_bytes)
+    if len(raw) < 0x14:
+        return None
+    ox, oy, oz = struct.unpack_from(">fff", raw, 0)
+    w, h = struct.unpack_from(">II", raw, 0xC)
+    if not (0 < w <= 8192 and 0 < h <= 8192) or 0x14 + w * h * 14 != len(raw):
+        return None
+    tile = TERRAIN_TILE
+    # Heights (full grid), then subsample by stride.
+    heights = [struct.unpack_from(">f", raw, 0x14 + i * 14)[0] for i in range(w * h)]
+
+    def hgt(cx, cy):
+        cx = 0 if cx < 0 else (w - 1 if cx >= w else cx)
+        cy = 0 if cy < 0 else (h - 1 if cy >= h else cy)
+        return heights[cy * w + cx]
+
+    s = max(1, int(stride))
+    xs = list(range(0, w, s))
+    ys = list(range(0, h, s))
+    gw, gh = len(xs), len(ys)
+    eff = tile * s  # effective spacing on the subsampled grid (for the normal)
+    # Emit in GAME space (X, Y, Z=height); the F2SCENE writer applies the same
+    # {x,z,y}->render swap it uses for prop meshes, so terrain lines up under buildings.
+    positions, normals, uvs = [], [], []
+    for cy in ys:
+        for cx in xs:
+            gx, gy, gz = cx * tile + ox, cy * tile + oy, hgt(cx, cy) + oz
+            positions.extend((gx, gy, gz))
+            hl, hr = hgt(cx - s, cy), hgt(cx + s, cy)
+            hd, hu = hgt(cx, cy - s), hgt(cx, cy + s)
+            # game-space normal (Z=up): (-dh/dx, -dh/dy, 1) ∝ (hl-hr, hd-hu, 2*eff).
+            nx, ny, nz = (hl - hr), (hd - hu), 2.0 * eff
+            nlen = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
+            normals.extend((nx / nlen, ny / nlen, nz / nlen))
+            uvs.extend((gx * TERRAIN_UV_PER_WU, gy * TERRAIN_UV_PER_WU))
+    indices = []
+    for j in range(gh - 1):
+        for i in range(gw - 1):
+            i00 = j * gw + i
+            i10 = j * gw + i + 1
+            i01 = (j + 1) * gw + i
+            i11 = (j + 1) * gw + i + 1
+            indices.extend((i00, i01, i10, i10, i01, i11))
+    return positions, normals, uvs, indices
+
+
 def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
                out_scene: Path, types=(2, 21), max_per_block=None, log=print,
                textures_bnks=None, tex_cook: Path = None,
-               tex_out_dir: Path = None) -> dict:
+               tex_out_dir: Path = None, terrain_ghf: Path = None,
+               terrain_stride: int = 1) -> dict:
     """Stage 2: glue every prop model (header++body) and merge instances into one F2SCENE.
 
     Data-driven from ghidra_out/model_glue_lmp_format.txt (the RE'd glue) — no guessing.
@@ -398,7 +462,7 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                     # the F2SCENE text: albedo is replaced by the cooked DDS path (or dropped),
                     # and normal/material are dropped, so no space is emitted.
                     opts.append(f"{tok}={val.replace(chr(92), '/')}")
-            materials.append((f"mat_{mid}_{gi}", opts))
+            materials.append((f"mat_{mid}_{gi}", opts, (0.72, 0.72, 0.72, 1.0)))
             positions = g.positions
             normals = g.normals or add_normals(positions, g.indices)
             name = f"m{mid}_{gi}"
@@ -424,10 +488,29 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                 instances.append((name, pos, yaw, scale))
             n_inst += 1
 
+    # Terrain: append the level heightfield as one ground mesh (flat earth-tone material,
+    # Phase T1 — ghidra_out/terrain_mesh_re.txt). Game-space verts flow through the same
+    # emit swap as props; identity instance (mesh is already world-placed).
+    if terrain_ghf:
+        try:
+            built = _build_terrain(Path(terrain_ghf).read_bytes(), stride=terrain_stride or 1)
+        except Exception as exc:  # noqa: BLE001
+            built = None
+            log(f"  terrain skip ({type(exc).__name__}: {exc})")
+        if built:
+            t_pos, t_nrm, t_uv, t_idx = built
+            t_mat = len(materials)
+            materials.append(("terrain", [], (0.33, 0.30, 0.24, 1.0)))
+            meshes.append(("terrain0", t_mat, t_pos, t_nrm, t_uv, t_idx))
+            instances.append(("terrain0", (0.0, 0.0, 0.0), 0.0, 1.0))
+            n_inst += 1
+            log(f"terrain: {len(t_pos)//3} verts / {len(t_idx)//3} tris "
+                f"(stride {terrain_stride or 1})")
+
     # Cook the referenced albedo textures (globals_textures.bnk .tex -> loose DDS). The runtime
     # only samples albedo (t0), so albedo is what turns the flat-grey buildings textured.
     albedo_tokens = []
-    for _name, opts in materials:
+    for _name, opts, _base in materials:
         for o in opts:
             if o.startswith("albedo="):
                 albedo_tokens.append(o[len("albedo="):])
@@ -446,7 +529,7 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
         out.write("F2SCENE 1\n")
         out.write("sun -0.4 -0.82 -0.4\n")
         out.write("sky 0.52 0.62 0.78 1\n")
-        for name, opts in materials:
+        for name, opts, base in materials:
             # Repoint albedo at the cooked loose DDS (absolute path; the runtime loads it
             # directly). Drop albedo tokens that didn't cook so the material shows its flat
             # base colour instead of the unresolved .tex name (which would sample white).
@@ -461,7 +544,8 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                     continue  # runtime samples albedo only; drop uncooked normal/spec tokens
                 else:
                     emit.append(o)
-            out.write(f"material {name} 0.72 0.72 0.72 1" + ("".join(" " + o for o in emit)) + "\n")
+            out.write(f"material {name} {base[0]:.4g} {base[1]:.4g} {base[2]:.4g} {base[3]:.4g}"
+                      + ("".join(" " + o for o in emit)) + "\n")
         for name, mat_idx, positions, normals, uvs, indices in meshes:
             out.write(f"mesh {name} {len(positions) // 3} {len(indices)} {mat_idx}\n")
             for vi in range(len(positions) // 3):
@@ -505,6 +589,10 @@ def main() -> int:
                     help="f2native_cook_lh_tex.exe (.tex -> DDS decoder)")
     ap.add_argument("--tex-out-dir", type=Path,
                     help="where to write cooked albedo DDS (default <scene>.textures/)")
+    ap.add_argument("--terrain-ghf", type=Path,
+                    help="the level's extracted .ghf heightfield -> emit a ground mesh")
+    ap.add_argument("--terrain-stride", type=int, default=1,
+                    help="terrain grid decimation (1=full-res 664K tris; 2/4 for lighter)")
     args = ap.parse_args()
 
     data = args.engine_level.read_bytes()
@@ -537,7 +625,8 @@ def main() -> int:
         cook_level(args.engine_level, args.header_bnk, args.body_bnk, args.f2tool,
                    args.cook, types=types, max_per_block=args.max_per_block,
                    textures_bnks=args.textures_bnk, tex_cook=tex_cook,
-                   tex_out_dir=args.tex_out_dir)
+                   tex_out_dir=args.tex_out_dir, terrain_ghf=args.terrain_ghf,
+                   terrain_stride=args.terrain_stride)
     return 0
 
 
