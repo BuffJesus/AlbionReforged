@@ -49,6 +49,35 @@ F2SCENE is human-readable text; cooked assets are loose files a mod overrides; s
 the edit-set/export-as-mod tooling (docs/MODDING_ENVIRONMENT.md). The cooker + schemas ARE the modding
 foundation — a mod supplies/edits an F2SCENE or the loose cooked assets, no recompile.
 
+## Cooker status + exact parse spec (2026-08-09)
+- ✅ DONE: the F2SCENE **writer** (`save_native_scene`, Fable2Native/src/native_scene.cpp) + round-trip
+  unit test. The cooker's output stage is complete.
+- ✅ Per-model cook EXISTS: `Fable2Native/tools/cook_mdl.py` already parses one MDL (via the pure-Python
+  `Fable2AssetBrowser/source/addons/fable_mdl_format.py` `parse()` → geoms{positions,indices,uvs,
+  specular_tex}) and emits F2SCENE (materials mat_N + meshes). REUSE this per prop model.
+- ✅ BNK read: `Fable2AssetBrowser/source/Archive/bnk_reader.py` `BNKReader.list_files()/extract_file()`.
+- REMAINING (the cook-level build): parse the engine_level → prop instances, cook each prop MDL, merge
+  into ONE F2SCENE with `instance` records from the prop transforms. Resolve model paths from the level's
+  own `_streaming.bnk`/`textures.bnk` + global model banks per `level.vfsconfig`.
+
+EXACT engine_level byte format (from AssetBrowser `LevelLoader.cpp` `ParseEngineLevel` — the byte-exact
+authority; reuse it verbatim, do NOT re-derive). BeReader is BIG-ENDIAN (Xbox 360): u8=1B; u32=BE 4B;
+u64=BE(hi<<32|lo); f32=BE u32 bit-cast; half=BE 16-bit float; cstr=NUL-terminated (≤4096). Layout:
+- Header: 17-byte magic `LevelGraphicsFile` (skip) + u32 version (11 or 12) + u32 entry_count.
+- Per entry: u32 type, then:
+  - type 2 (static props): cstr model_path, cstr shadow, cstr lod, cstr extra; u32 instance_count;
+    per inst: u8 flags[3], u64 hash, 20× f32 `values` (values[0..2]=pos, [6..7]=cos/sin yaw, [9..11]=scale).
+  - type 4/5/32: cstr str_a; type 4 also skip 8.
+  - type 21 (instanced scatter): cstr str_a, cstr str_b; skip 10 (u64+2×u8); u32 loop1_count; skip
+    (7*4+12+4+24); loop1: v11 = 4× f32 (values[0..3], set [7]=1,[9..11]=1); v12 = f32 pos[3] + 5× half
+    (qx,qy,qz,qw,scale) → values[0..2]=pos, [6]=2(qw*qz+qx*qy)/mag, [7]=(1-2(qy²+qz²))/mag, [9..11]=scale;
+    then u32 loop2_count; loop2: per rec 2× f32 + 2× vec3 f32 + … (decorators; can skip for geometry).
+  - default/other: bail (unknown type) — but types 2/4/5/21/32 cover the real levels.
+Recommended cooker impl: a small C++ tool (`f2native_cook_level`) or f2tool `cook-level` command with a
+VERBATIM copy of BeReader + ParseEngineLevel (self-contained; no UI deps) → prop_blocks → per prop:
+resolve+cook MDL (fable_mdl_format) → NativeMesh + `instance` per PropInstance transform → save_native_scene.
+Verify: run on the extracted `chapter2slums.engine_level`, then World `--scene` screenshot.
+
 ## Ground-truth references
 `ghidra_out/world_level_format.txt`, `newgame_handoff.txt`, `gdb_instantiation_re.txt`,
 `physics_collision_system.txt`, `hero_appearance_morph.txt`; `Fable2AssetBrowser/source/src/Level/
