@@ -399,17 +399,21 @@ PSInput vs_main(VSInput input) {
     return output;
 }
 float4 ps_main(PSInput input) : SV_TARGET {
-    float3 n = normalize(input.normal);
-    // Diffuse against the incoming sun direction; a hemisphere ambient term keeps
-    // faces in shadow readable (and lets depth-sorted surfaces separate visually).
-    float ndl = saturate(dot(n, -sun_direction.xyz));
-    float light = 0.35 + 0.65 * ndl;
     float4 base = input.color * albedo.Sample(albedo_sampler, input.uv);
     // Alpha-test cutout: foliage (leaves/grass) textures carry punch-through alpha (DXT1
     // 1-bit), so discard transparent texels — otherwise leaf quads render as solid cards.
     // Opaque building textures decode to alpha=1, so they are unaffected.
     clip(base.a - 0.5);
-    return float4(base.rgb * light, base.a);
+    // Light model (world_shading_model_re.txt §7, ladder step 1): a HEMISPHERE ambient
+    // (cool sky above, dim ground bounce below, by world-up N.y) plus an N·L sun diffuse
+    // — replaces the flat 0.35 that made everything read dark/flat. Normal/spec maps
+    // (steps 2-3) come once those textures are cooked + bound.
+    float3 N = normalize(input.normal);
+    float ndl = saturate(dot(N, -sun_direction.xyz));
+    float hemi = 0.5 + 0.5 * N.y;
+    float3 ambient = lerp(float3(0.18, 0.20, 0.24), float3(0.55, 0.58, 0.62), hemi);
+    float3 color = base.rgb * (ambient + ndl);
+    return float4(color, base.a);
 }
 )";
     const auto compile = [&](const char* entry, const char* target,
