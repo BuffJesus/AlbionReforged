@@ -405,6 +405,10 @@ float4 ps_main(PSInput input) : SV_TARGET {
     float ndl = saturate(dot(n, -sun_direction.xyz));
     float light = 0.35 + 0.65 * ndl;
     float4 base = input.color * albedo.Sample(albedo_sampler, input.uv);
+    // Alpha-test cutout: foliage (leaves/grass) textures carry punch-through alpha (DXT1
+    // 1-bit), so discard transparent texels — otherwise leaf quads render as solid cards.
+    // Opaque building textures decode to alpha=1, so they are unaffected.
+    clip(base.a - 0.5);
     return float4(base.rgb * light, base.a);
 }
 )";
