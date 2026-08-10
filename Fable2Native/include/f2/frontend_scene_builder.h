@@ -1,6 +1,7 @@
 #pragma once
 
 #include "f2/native_font.h"
+#include "f2/native_game.h"
 #include "f2/native_ui.h"
 #include "f2/render/render_backend.h"
 #include "f2/render/ui_draw_list.h"
@@ -35,15 +36,35 @@ public:
     void build_loading(f2::render::UiDrawList& scene, float width, float height) const;
     void build_title(f2::render::UiDrawList& scene, float width, float height, double state_time,
                      std::string_view accept_prompt, bool using_controller_prompts);
+    // Full-screen quad of the decoded intro/attract frame. `video` is the app's video TextureId (the
+    // app still owns the streaming texture + gates readiness before calling).
+    void build_video(f2::render::UiDrawList& scene, float width, float height,
+                     f2::render::TextureId video) const;
+    void build_choose_card(f2::render::UiDrawList& scene, float width, float height) const;
+    // Main menu + (when state==Options) the options chrome/page, and the ChooseCard modal veil+cards.
+    void build_main_menu(f2::render::UiDrawList& scene, float width, float height,
+                         const NativeGame& game, bool using_controller_prompts);
 
     // ---- Shared text helpers (used by every screen as it migrates) ----
     void emit_text(f2::render::UiDrawList& scene, std::string_view text, float x, float y, float size,
                    std::uint32_t color) const;
+    void emit_centered(f2::render::UiDrawList& scene, std::string_view text, float cx, float y,
+                       float size, std::uint32_t color) const;
     [[nodiscard]] float text_width(std::string_view text, float size) const {
         return font_.measure(text, size);
     }
 
 private:
+    // Solid-color rect (samples the font atlas' opaque white texel as a point).
+    void add_rect(f2::render::UiDrawList& scene, float x0, float y0, float x1, float y1,
+                  std::uint32_t color) const;
+    // A retail menu capsule (leather three-slice + frame-elements rim): Options title/footer pills.
+    void add_menu_capsule(f2::render::UiDrawList& scene, float x0, float y0, float x1, float y1,
+                          float width) const;
+    void build_options_chrome(f2::render::UiDrawList& scene, float width, float height) const;
+    void build_options_page(f2::render::UiDrawList& scene, float width, float height,
+                            const NativeGame& game) const;
+
     // Title reveal sparkle field: normalized (0..1) positions within the wordmark rect, seeded once
     // from the logo alpha mask so sparkles cluster on the FABLE II glyphs; emitted continuously.
     struct TitleSparkle {

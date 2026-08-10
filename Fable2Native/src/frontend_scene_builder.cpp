@@ -16,6 +16,35 @@ std::uint32_t alpha_byte(float value) {
     return static_cast<std::uint32_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f);
 }
 
+// Retail main-menu slot table (position/opacity/scale per carousel slot), from the captured 1280x720
+// front end. retail_menu_slot maps a display index to its slot given the selected index.
+struct RetailMenuSlot {
+    float x;
+    float y;
+    float opacity;
+    float scale;
+};
+
+constexpr std::array<RetailMenuSlot, 12> kRetailMenuSlots = {{
+    {0.0f, 85.0f, 0.0f, 0.65f},     {22.0f, 69.0f, 50.0f, 0.75f},
+    {42.0f, 15.0f, 75.0f, 0.85f},   {56.0f, -45.0f, 100.0f, 1.0f},
+    {56.0f, -106.0f, 100.0f, 1.0f}, {56.0f, -164.0f, 100.0f, 1.0f},
+    {56.0f, -222.0f, 100.0f, 1.0f}, {56.0f, -280.0f, 100.0f, 1.0f},
+    {50.0f, -338.0f, 100.0f, 1.0f}, {42.0f, -396.0f, 75.0f, 0.85f},
+    {22.0f, -454.0f, 50.0f, 0.75f}, {0.0f, -475.0f, 0.0f, 0.65f},
+}};
+
+constexpr int kRetailHighlightSlot = 4;
+constexpr float kRetailCenterSlotX = 56.0f;
+constexpr float kRetailCenterSlotY = -45.0f;
+
+const RetailMenuSlot* retail_menu_slot(std::size_t display_index, std::size_t selected_index) {
+    const int slot = kRetailHighlightSlot + static_cast<int>(display_index) -
+                     static_cast<int>(selected_index);
+    if (slot < 1 || slot > static_cast<int>(kRetailMenuSlots.size())) return nullptr;
+    return &kRetailMenuSlots[static_cast<std::size_t>(slot - 1)];
+}
+
 }  // namespace
 
 FrontendSceneBuilder::FrontendSceneBuilder(const NativeFont& font, const NativeUiAssets& assets,
@@ -279,6 +308,442 @@ void FrontendSceneBuilder::build_title(f2::render::UiDrawList& scene, float widt
                    height * 0.73f);
         legal_line("Lionhead Studios.", height * 0.79f);
         legal_line("Online Interactions Not Rated by the ESRB", height * 0.87f);
+    }
+}
+
+void FrontendSceneBuilder::emit_centered(f2::render::UiDrawList& scene, std::string_view text,
+                                         float cx, float y, float size, std::uint32_t color) const {
+    emit_text(scene, text, cx - text_width(text, size) * 0.5f, y, size, color);
+}
+
+void FrontendSceneBuilder::add_rect(f2::render::UiDrawList& scene, float x0, float y0, float x1,
+                                    float y1, std::uint32_t color) const {
+    if (!access_.font_ready || !access_.font_ready()) return;
+    const auto fid = access_.font_id ? access_.font_id() : f2::render::kInvalidTexture;
+    if (!fid) return;
+    const float su = font_.solid_u();
+    const float sv = font_.solid_v();
+    scene.add_sprite(fid, x0, y0, x1, y1, su, sv, su, sv, color);
+}
+
+void FrontendSceneBuilder::add_menu_capsule(f2::render::UiDrawList& scene, float x0, float y0,
+                                            float x1, float y1, float width) const {
+    const float slice = 52.0f * (width / 1280.0f);
+    const std::uint32_t white = 0xffffffffu;
+    if (const auto id = access_.id(NativeUiAsset::MenuSurface)) {
+        scene.add_sprite(id, x0, y0, x0 + slice, y1, 0.0f, 0.0f, 0.125f, 1.0f, white);
+        scene.add_sprite(id, x0 + slice, y0, x1 - slice, y1, 0.125f, 0.0f, 0.875f, 1.0f, white);
+        scene.add_sprite(id, x1 - slice, y0, x1, y1, 0.875f, 0.0f, 1.0f, 1.0f, white);
+    }
+    if (const auto id = access_.id(NativeUiAsset::FrameElements)) {
+        const float v0 = 4.0f / 512.0f, v1 = 84.0f / 512.0f;
+        const float xs[4] = {x0, x0 + slice, x1 - slice, x1};
+        const float us[4] = {0.0f, 0.125f, 0.820f, 0.945f};
+        for (int i = 0; i < 3; ++i) {
+            scene.add_sprite(id, xs[i], y0, xs[i + 1], y1, us[i], v0,
+                             (i == 0 ? 0.125f : i == 1 ? 0.813f : 0.945f), v1, white);
+            scene.set_last_key_black(true);
+        }
+    }
+}
+
+void FrontendSceneBuilder::build_video(f2::render::UiDrawList& scene, float width, float height,
+                                       f2::render::TextureId video) const {
+    if (!video) return;
+    scene.add_sprite(video, 0.0f, 0.0f, width, height, 0.0f, 0.0f, 1.0f, 1.0f, 0xffffffffu);
+}
+
+void FrontendSceneBuilder::build_choose_card(f2::render::UiDrawList& scene, float width,
+                                             float height) const {
+    const auto add_card = [&](NativeUiAsset asset, float center_x, float angle) {
+        const auto id = access_.id(asset);
+        if (!id) return;
+        const float scale = width / 1280.0f;
+        const float card_width = 256.0f * scale;
+        const float card_height = 384.0f * scale;
+        const float center_y = height * 0.502f;
+        scene.add_sprite(id, center_x * scale - card_width * 0.5f, center_y - card_height * 0.5f,
+                         center_x * scale + card_width * 0.5f, center_y + card_height * 0.5f, 0.0f,
+                         0.0f, 1.0f, 1.0f, 0xffffffffu);
+        scene.set_last_rotation(angle);
+    };
+    // Measured retail card centers/tilts from the captured choosecard screen at 1280x720.
+    add_card(NativeUiAsset::CardBoy, 470.0f, -0.14f);
+    add_card(NativeUiAsset::CardGirl, 781.0f, 0.105f);
+}
+
+void FrontendSceneBuilder::build_options_chrome(f2::render::UiDrawList& scene, float width,
+                                                float height) const {
+    (void)height;
+    const float scale = width / 1280.0f;
+    // Title pill.
+    const float tx = 220.0f * scale, ty = 53.0f * scale, tw = 390.0f * scale, th = 47.0f * scale;
+    add_menu_capsule(scene, tx, ty, tx + tw, ty + th, width);
+    emit_centered(scene, "Options", tx + tw * 0.5f, ty + 8.0f * scale, 27.0f * scale,
+                  rgba(238, 238, 238, 255));
+    // Footer pill: [B] Back .... (coin) 5400
+    const float fx = 220.0f * scale, fy = 594.0f * scale, fw = 390.0f * scale, fh = 47.0f * scale;
+    add_menu_capsule(scene, fx, fy, fx + fw, fy + fh, width);
+    if (access_.shader_ready(NativeUiAsset::Accept)) {
+        scene.add_sprite(access_.id(NativeUiAsset::Accept), fx + 7.0f * scale, fy + 0.5f * scale,
+                         fx + 53.0f * scale, fy + 46.5f * scale, 0.25f, 0.0f, 0.50f, 0.25f,
+                         rgba(255, 255, 255, 255));
+    }
+    emit_text(scene, "Back", fx + 58.0f * scale, fy + 10.0f * scale, 22.0f * scale,
+              rgba(238, 238, 238, 255));
+    if (access_.shader_ready(NativeUiAsset::GoldCoin)) {
+        scene.add_sprite(access_.id(NativeUiAsset::GoldCoin), fx + 247.0f * scale, fy + 7.0f * scale,
+                         fx + 279.0f * scale, fy + 39.0f * scale, 0.0f, 0.0f, 1.0f, 1.0f,
+                         rgba(255, 255, 255, 255));
+    }
+    emit_text(scene, "5400", fx + 288.0f * scale, fy + 10.0f * scale, 22.0f * scale,
+              rgba(245, 222, 65, 255));
+}
+
+void FrontendSceneBuilder::build_options_page(f2::render::UiDrawList& scene, float width,
+                                              float height, const NativeGame& game) const {
+    const float unit = width / 1280.0f;
+    const auto& options = game.frontend.options_items();
+    const std::size_t selected =
+        options.empty() ? std::size_t{0}
+                        : std::min(game.frontend.selected_item(), options.size() - 1);
+    const std::string_view page_id =
+        options.empty() ? std::string_view{} : std::string_view(options[selected].id);
+    const float page_x = width * 0.495f;
+    const float page_w = width * 0.325f;
+    const float center_x = page_x + page_w * 0.50f;
+    add_rect(scene, page_x - 10.0f * unit, 0.0f, page_x + page_w + 10.0f * unit, height,
+             rgba(0, 0, 0, 110));
+    if (const auto id = access_.id(NativeUiAsset::FramesPageTexture)) {
+        scene.add_sprite(id, page_x, 0.0f, page_x + page_w, height, 0.0f, 0.0f, 1.0f, 1.0f,
+                         rgba(255, 255, 255, 245));
+    }
+    emit_centered(scene, options.empty() ? "Options" : options[selected].label, center_x,
+                  height * 0.105f, 27.0f * unit, rgba(105, 55, 27, 255));
+    if (const auto id = access_.id(NativeUiAsset::Motifs)) {
+        scene.add_sprite(id, page_x + page_w * 0.09f, height * 0.165f, page_x + page_w * 0.91f,
+                         height * 0.195f, 0.043f, 0.020f, 0.72f, 0.070f, rgba(133, 78, 28, 255));
+    }
+    const auto arrows = [&](float y) {
+        const float aw = 20.0f * unit;
+        emit_text(scene, "<", page_x + page_w * 0.12f, y - 24.0f * unit, 28.0f * unit,
+                  rgba(192, 107, 57, 235));
+        emit_text(scene, ">", page_x + page_w * 0.88f - aw, y - 24.0f * unit, 28.0f * unit,
+                  rgba(192, 107, 57, 235));
+    };
+    const auto value = [&](std::string_view label, std::string_view val, float y) {
+        emit_centered(scene, label, center_x, y, 21.0f * unit, rgba(105, 55, 27, 255));
+        emit_centered(scene, val, center_x, y + 34.0f * unit, 21.0f * unit, rgba(24, 24, 24, 255));
+        arrows(y + 32.0f * unit);
+    };
+    const auto slider = [&](std::string_view label, int v, float y) {
+        if (!label.empty())
+            emit_centered(scene, label, center_x, y, 21.0f * unit, rgba(105, 55, 27, 255));
+        const float x0 = page_x + page_w * 0.22f;
+        const float x1 = page_x + page_w * 0.78f;
+        const float by = y + 34.0f * unit;
+        add_rect(scene, x0, by, x1, by + 5.0f * unit, rgba(43, 40, 45, 255));
+        add_rect(scene, x1 - 18.0f * unit * (static_cast<float>(v) / 100.0f), by, x1,
+                 by + 5.0f * unit, rgba(190, 105, 66, 255));
+    };
+    if (page_id == "game") {
+        value("Subtitles", game.frontend.subtitles_enabled() ? "On" : "Off", height * 0.235f);
+        value("Glowing Trail Brightness",
+              game.frontend.breadcrumb_size() == 0   ? "Off"
+              : game.frontend.breadcrumb_size() == 1 ? "Medium"
+                                                     : "Bright",
+              height * 0.355f);
+        value("Tutorials", game.frontend.tutorial_boxes_enabled() ? "On" : "Off", height * 0.475f);
+        value("Online Orbs", game.frontend.multiplayer_orbs_enabled() ? "Friends Only" : "Off",
+              height * 0.595f);
+        value("Auto Joinable", game.frontend.auto_joinable_enabled() ? "On" : "Off", height * 0.715f);
+    } else if (page_id == "controls") {
+        value("Invert Aim", game.frontend.invert_aim_enabled() ? "On" : "Off", height * 0.235f);
+    } else if (page_id == "audio") {
+        slider("Sounds", game.frontend.sounds_volume(), height * 0.255f);
+        slider("Music", game.frontend.music_volume(), height * 0.405f);
+        slider("Voice", game.frontend.voice_volume(), height * 0.555f);
+        value("Speakers", game.frontend.speaker_mode() == 0 ? "5.1 Surround" : "Stereo",
+              height * 0.695f);
+    } else if (page_id == "video") {
+        if (const auto id = access_.id(NativeUiAsset::CalibrationImage)) {
+            scene.add_sprite(id, page_x + page_w * 0.16f, height * 0.23f, page_x + page_w * 0.86f,
+                             height * 0.55f, 0.0f, 0.0f, 1.0f, 0.75f, rgba(255, 255, 255, 255));
+        }
+        const std::uint32_t sel = rgba(145, 72, 30, 255);
+        const std::uint32_t nrm = rgba(105, 55, 27, 255);
+        emit_centered(scene, "Gamma", center_x, height * 0.575f, 21.0f * unit,
+                      game.frontend.video_setting_row() == 0 ? sel : nrm);
+        slider("", game.frontend.gamma_percent(), height * 0.615f);
+        emit_centered(scene, "Adjust the gamma so that you are just", center_x, height * 0.685f,
+                      17.0f * unit, rgba(35, 35, 35, 255));
+        emit_centered(scene, "able to see the text on the left side", center_x, height * 0.725f,
+                      17.0f * unit, rgba(35, 35, 35, 255));
+        emit_centered(scene, "of the circular image.", center_x, height * 0.765f, 17.0f * unit,
+                      rgba(35, 35, 35, 255));
+        emit_centered(scene, "Display", center_x, height * 0.805f, 17.0f * unit,
+                      rgba(105, 55, 27, 255));
+        const auto display_value = [&](std::string_view label, std::string_view val, float y,
+                                       int row) {
+            const std::uint32_t col = game.frontend.video_setting_row() == row ? sel : nrm;
+            emit_text(scene, label, page_x + page_w * 0.19f, y, 16.0f * unit, col);
+            emit_text(scene, val, page_x + page_w * 0.81f - text_width(val, 16.0f * unit), y,
+                      16.0f * unit, rgba(24, 24, 24, 255));
+        };
+        const char* resolutions[] = {"1280 x 720", "1920 x 1080", "2560 x 1440"};
+        const char* anti_aliasing[] = {"Off", "2x", "4x", "8x"};
+        display_value("Resolution", resolutions[game.frontend.resolution_index()], height * 0.835f, 1);
+        display_value("Anti-Aliasing", anti_aliasing[game.frontend.anti_aliasing_index()],
+                      height * 0.875f, 2);
+    }
+    const bool has_controller = access_.shader_ready(NativeUiAsset::Accept);
+    const auto page_prompt = [&](std::string_view label, float y, float u0) {
+        const float icon = 27.0f * unit;
+        const float gap = 6.0f * unit;
+        const float ts = 17.0f * unit;
+        const float mw = text_width(label, ts);
+        const float right = page_x + page_w * 0.88f;
+        const float left = right - (icon + gap + mw);
+        emit_text(scene, label, left + 1.0f * unit, y + 1.0f * unit, ts, rgba(0, 0, 0, 70));
+        emit_text(scene, label, left, y, ts, rgba(35, 35, 35, 255));
+        if (has_controller) {
+            const float icon_x = left + mw + gap;
+            scene.add_sprite(access_.id(NativeUiAsset::Accept), icon_x, y - 3.0f * unit,
+                             icon_x + icon, y - 3.0f * unit + icon, u0, 0.0f, u0 + 0.25f, 0.25f,
+                             rgba(255, 255, 255, 255));
+        }
+    };
+    page_prompt("Cancel", height * 0.900f, 0.25f);
+    page_prompt("Accept", height * 0.950f, 0.0f);
+}
+
+void FrontendSceneBuilder::build_main_menu(f2::render::UiDrawList& scene, float width, float height,
+                                           const NativeGame& game, bool using_controller_prompts) {
+    const auto add = [&](NativeUiAsset asset, float x0, float y0, float x1, float y1, float u0,
+                         float v0, float u1, float v1, std::uint32_t color) {
+        const auto tid = access_.id(asset);
+        if (!tid) return;
+        scene.add_sprite(tid, x0, y0, x1, y1, u0, v0, u1, v1, color);
+    };
+    const auto alpha = [](float value) { return alpha_byte(value); };
+    const auto add_native_text = [&](std::string_view text, float x, float y, float size,
+                                     std::uint32_t color) { emit_text(scene, text, x, y, size, color); };
+
+    const auto background_asset = access_.id(NativeUiAsset::MainBackground)
+                                      ? NativeUiAsset::MainBackground
+                                      : NativeUiAsset::TitleBackground;
+    if (const NativeTexture* background = assets_.texture(background_asset);
+        background && access_.id(background_asset)) {
+        const float scale = height / static_cast<float>(background->height);
+        const float image_width = background->width * scale;
+        const float pan_scale = width / 1280.0f;
+        const float offset = std::fmod(
+            width * 0.78125f + static_cast<float>(game.frontend.state_time()) * 29.0f * pan_scale,
+            image_width);
+        const auto background_id = access_.id(background_asset);
+        for (float x = -offset; x < width; x += image_width) {
+            scene.add_sprite(background_id, x, 0.0f, x + image_width, height, 0.0f, 0.0f, 1.0f, 1.0f,
+                             rgba(255, 255, 255, 255));
+        }
+    } else {
+        add(NativeUiAsset::MenuSurface, 0.0f, 0.0f, width * 0.16f, height, 0.0f, 0.0f, 1.0f, 1.0f,
+            rgba(255, 255, 255, 245));
+        add(NativeUiAsset::MenuSurface, width * 0.84f, 0.0f, width, height, 0.0f, 0.0f, 1.0f, 1.0f,
+            rgba(255, 255, 255, 245));
+    }
+
+    const bool have_frame_elements = access_.id(NativeUiAsset::FrameElements) != 0;
+    const float menu_unit_scale = width / 1280.0f;
+    // Projected from the retail sprite shader at the 1280x720 reference. Rows are three-sliced, 450x68.
+    const float row_x = 177.0f * menu_unit_scale;
+    const float row_y = 160.0f * menu_unit_scale;
+    const float row_width = 450.0f * menu_unit_scale;
+    const float row_height = 68.0f * menu_unit_scale;
+    const float slice_width = 52.0f * menu_unit_scale;
+    const auto add_three_slice = [&](NativeUiAsset asset, float x0, float y0, float x1, float y1,
+                                     float v0, float v1, std::uint32_t color, bool key_black_matte) {
+        const auto add_slice = [&](float sx0, float sy0, float sx1, float sy1, float su0, float sv0,
+                                   float su1, float sv1) {
+            const auto before = scene.size();
+            add(asset, sx0, sy0, sx1, sy1, su0, sv0, su1, sv1, color);
+            if (key_black_matte && scene.size() != before) scene.set_last_key_black(true);
+        };
+        const float center_x0 = x0 + slice_width;
+        const float center_x1 = x1 - slice_width;
+        add_slice(x0, y0, center_x0, y1, 0.0f, v0, 0.125f, v1);
+        add_slice(center_x0, y0, center_x1, y1, 0.125f, v0, 0.813f, v1);
+        add_slice(center_x1, y0, x1, y1, 0.820f, v0, 0.945f, v1);
+    };
+    const bool have_ability = access_.id(NativeUiAsset::AbilityElements) != 0;
+    const bool have_menu_surface = access_.id(NativeUiAsset::MenuSurface) != 0;
+    const auto add_body_three_slice = [&](float x0, float y0, float x1, float y1,
+                                          std::uint32_t color) {
+        if (!have_ability || !have_menu_surface) return;
+        const float body_width = x1 - x0;
+        const float body_slice_width = body_width * (52.0f / 452.0f);
+        // The retail two-texture body: SHAPE/alpha from ability_elements' opaque fill-mask core
+        // (v104..143) and leather GRAIN from menu_surface as the detail -> fully opaque leather.
+        const auto add_body_slice = [&](float sx0, float sx1, float su0, float su1) {
+            const auto before = scene.size();
+            add(NativeUiAsset::AbilityElements, sx0, y0, sx1, y1, su0, 104.0f / 512.0f, su1,
+                143.0f / 512.0f, color);
+            if (scene.size() == before) return;
+            scene.set_last_detail(access_.id(NativeUiAsset::MenuSurface), (sx0 - x0) / body_width,
+                                  0.0f, (sx1 - x0) / body_width, 1.0f);
+        };
+        const float center_x0 = x0 + body_slice_width;
+        const float center_x1 = x1 - body_slice_width;
+        add_body_slice(x0, center_x0, 12.0f / 512.0f, 64.0f / 512.0f);
+        add_body_slice(center_x0, center_x1, 64.0f / 512.0f, 412.0f / 512.0f);
+        add_body_slice(center_x1, x1, 412.0f / 512.0f, 464.0f / 512.0f);
+    };
+    const std::size_t selected_index = game.frontend.selected_item();
+    const std::size_t previous_selected_index = game.frontend.previous_selected_item();
+    const float selection_t =
+        std::clamp(static_cast<float>(game.frontend.selection_time() / 0.15), 0.0f, 1.0f);
+    const bool selection_animating = game.frontend.selection_animating();
+    bool selected_prompt_ready = false;
+    float selected_prompt_x = 0.0f;
+    float selected_prompt_y = 0.0f;
+    std::uint32_t selected_prompt_color = 0;
+    struct RetailDrawRow {
+        std::string label;
+        float x = 0.0f;
+        float y = 0.0f;
+        float width = 0.0f;
+        float height = 0.0f;
+        float scale = 1.0f;
+        std::uint32_t color = 0;
+    };
+    std::vector<RetailDrawRow> draw_rows;
+    // For the Options state the rows are the submenu tabs (options_items), not the main menu.
+    const auto& displayed_items = game.frontend.state() == f2::FrontendState::Options
+                                      ? game.frontend.options_items()
+                                      : game.frontend.menu_items();
+    for (std::size_t index = 0; index < displayed_items.size(); ++index) {
+        const RetailMenuSlot* target_slot = retail_menu_slot(index, selected_index);
+        const RetailMenuSlot* source_slot = retail_menu_slot(index, previous_selected_index);
+        if (!target_slot || (selection_animating && !source_slot)) continue;
+        const bool selected = index == game.frontend.selected_item();
+        const RetailMenuSlot& from = selection_animating ? *source_slot : *target_slot;
+        const auto lerp = [selection_t](float a, float b) { return a + (b - a) * selection_t; };
+        const float slot_x = lerp(from.x, target_slot->x);
+        const float slot_y = lerp(from.y, target_slot->y);
+        const float slot_opacity = lerp(from.opacity, target_slot->opacity);
+        const float slot_scale = lerp(from.scale, target_slot->scale);
+        const float draw_width = row_width * slot_scale;
+        const float draw_height = row_height * slot_scale;
+        const float x = row_x + (slot_x - kRetailCenterSlotX) * menu_unit_scale;
+        const float y = row_y + (kRetailCenterSlotY - slot_y) * menu_unit_scale +
+                        (row_height - draw_height) * 0.5f;
+        const float slot_alpha = slot_opacity / 100.0f;
+        const auto row_color = rgba(255, 255, 255, alpha(slot_alpha));
+        const auto& item = displayed_items[index];
+        draw_rows.push_back({item.label, x, y, draw_width, draw_height, slot_scale, row_color});
+        if (selected && using_controller_prompts && have_frame_elements) {
+            selected_prompt_ready = true;
+            // MenuHighlight is a fixed component at the center slot; rows animate through it.
+            selected_prompt_x = row_x + 20.0f * menu_unit_scale;
+            selected_prompt_y = row_y + 15.0f * menu_unit_scale;
+            selected_prompt_color = row_color;
+        }
+    }
+    // Render the recovered passes in serialized order: inner brown layers, frame rims, then labels.
+    for (const auto& row : draw_rows) {
+        const float body_width = row.width * (452.0f / 484.0f);
+        const float body_height = row.height * (56.0f / 80.0f);
+        const float body_x0 = row.x + (row.width - body_width) * 0.5f;
+        const float body_y0 = row.y + (row.height - body_height) * 0.5f;
+        add_body_three_slice(body_x0, body_y0, body_x0 + body_width, body_y0 + body_height,
+                             row.color);
+    }
+    for (const auto& row : draw_rows) {
+        if (!have_frame_elements) continue;
+        add_three_slice(NativeUiAsset::FrameElements, row.x, row.y, row.x + row.width,
+                        row.y + row.height, 4.0f / 512.0f, 84.0f / 512.0f, row.color, true);
+    }
+    for (const auto& row : draw_rows) {
+        add_native_text(row.label, row.x + 92.0f * row.scale, row.y + 18.0f * row.scale,
+                        26.0f * menu_unit_scale * row.scale, rgba(255, 224, 128, row.color >> 24u));
+    }
+    // Side panels overlay the row ends: their curved inner edge must occlude the left button ends.
+    const bool has_exact_menu_frame = access_.id(NativeUiAsset::MenuFrameLeftUpper) &&
+                                      access_.id(NativeUiAsset::MenuFrameLeftLower) &&
+                                      access_.id(NativeUiAsset::MenuFrameRightUpper) &&
+                                      access_.id(NativeUiAsset::MenuFrameRightLower);
+    if (has_exact_menu_frame) {
+        add(NativeUiAsset::MenuFrameLeftUpper, -3.05f * menu_unit_scale, -3.95f * menu_unit_scale,
+            271.93f * menu_unit_scale, 513.67f * menu_unit_scale, 0.0f, 0.0f, 0.531f, 1.0f,
+            rgba(255, 255, 255, 255));
+        add(NativeUiAsset::MenuFrameLeftLower, -3.05f * menu_unit_scale, 513.67f * menu_unit_scale,
+            271.93f * menu_unit_scale, 723.95f * menu_unit_scale, 0.0f, 0.0f, 0.531f, 0.406f,
+            rgba(255, 255, 255, 255));
+        add(NativeUiAsset::MenuFrameRightUpper, 1007.06f * menu_unit_scale, -4.95f * menu_unit_scale,
+            1283.56f * menu_unit_scale, 515.53f * menu_unit_scale, 0.0f, 0.0f, 0.531f, 1.0f,
+            rgba(255, 255, 255, 255));
+        add(NativeUiAsset::MenuFrameRightLower, 1007.06f * menu_unit_scale, 515.53f * menu_unit_scale,
+            1283.56f * menu_unit_scale, 726.98f * menu_unit_scale, 0.0f, 0.0f, 0.531f, 0.406f,
+            rgba(255, 255, 255, 255));
+    } else if (access_.id(NativeUiAsset::MenuFrameOverlay)) {
+        scene.add_sprite(access_.id(NativeUiAsset::MenuFrameOverlay), 0.0f, 0.0f, width, height, 0.0f,
+                         0.0f, 1.0f, 1.0f, rgba(255, 255, 255, 255));
+    }
+    if (!has_exact_menu_frame && !access_.id(NativeUiAsset::MenuFrameOverlay) &&
+        access_.id(NativeUiAsset::SideRailAtlas)) {
+        add(NativeUiAsset::SideRailAtlas, width * 0.145f, 0.0f, width * 0.172f, height, 0.0f, 0.0f,
+            74.0f / 256.0f, 720.0f / 1024.0f, rgba(205, 145, 88, 245));
+        add(NativeUiAsset::SideRailAtlas, width * 0.828f, 0.0f, width * 0.855f, height,
+            74.0f / 256.0f, 0.0f, 150.0f / 256.0f, 720.0f / 1024.0f, rgba(205, 145, 88, 245));
+    }
+    if (selected_prompt_ready) {
+        // MenuHighlight.rim_and_red: the metallic bezel + red center covered by the green passes.
+        const float source_prompt_width = 0.448f;
+        const float source_rim_width = 1.024f;
+        const float source_prompt_left_in_rim = 0.328f;
+        const float source_prompt_top_in_rim = 0.844f;
+        const float source_prompt_bottom_in_rim = 1.268f;
+        const float prompt_pixel_scale = (46.0f * menu_unit_scale) / source_prompt_width;
+        const float rim_x0 = selected_prompt_x - source_prompt_left_in_rim * prompt_pixel_scale;
+        const float rim_y0 = selected_prompt_y - source_prompt_top_in_rim * prompt_pixel_scale;
+        const float rim_x1 = rim_x0 + source_rim_width * prompt_pixel_scale;
+        const float rim_y1 = selected_prompt_y + source_prompt_bottom_in_rim * prompt_pixel_scale;
+        add(NativeUiAsset::FrameElements, rim_x0, rim_y0, rim_x1, rim_y1, 0.0f, 0.171f, 0.25f, 0.687f,
+            selected_prompt_color);
+        const float prompt_y = selected_prompt_y - 2.0f * menu_unit_scale;
+        add(NativeUiAsset::FrameElements, selected_prompt_x, prompt_y,
+            selected_prompt_x + 46.0f * menu_unit_scale, prompt_y + 46.0f * menu_unit_scale,
+            8.0f / 512.0f, 369.0f / 512.0f, 64.0f / 512.0f, 425.0f / 512.0f, selected_prompt_color);
+        add(NativeUiAsset::FrameElements, selected_prompt_x, prompt_y - 0.4f * menu_unit_scale,
+            selected_prompt_x + 46.0f * menu_unit_scale, prompt_y + 45.6f * menu_unit_scale,
+            8.0f / 512.0f, 369.0f / 512.0f, 64.0f / 512.0f, 425.0f / 512.0f, selected_prompt_color);
+    }
+    if (game.frontend.state() == f2::FrontendState::ChooseCard) {
+        // choosecard is a modal layer: menu + panorama stay visible behind a translucent black veil.
+        const float card_fade = std::clamp(
+            (static_cast<float>(game.frontend.state_time()) - 0.04f) / 0.34f, 0.0f, 1.0f);
+        const float card_smooth = card_fade * card_fade * (3.0f - 2.0f * card_fade);
+        add(NativeUiAsset::MenuSurface, 0.0f, 0.0f, width, height, 0.0f, 0.0f, 1.0f, 1.0f,
+            rgba(0, 0, 0, 76));
+        const auto add_card = [&](NativeUiAsset asset, float x0, float draw_width, float y_offset,
+                                  float angle) {
+            const auto id = access_.id(asset);
+            if (!id) return;
+            const float card_height = 398.0f * menu_unit_scale;
+            const float center_y = height * 0.502f + y_offset * menu_unit_scale;
+            const float scaled_width = draw_width * menu_unit_scale;
+            scene.add_sprite(id, x0 * menu_unit_scale, center_y - card_height * 0.5f,
+                             x0 * menu_unit_scale + scaled_width, center_y + card_height * 0.5f, 0.0f,
+                             0.0f, 1.0f, 1.0f,
+                             rgba(255, 255, 255, static_cast<std::uint32_t>(card_smooth * 255.0f)));
+            scene.set_last_rotation(angle);
+        };
+        add_card(NativeUiAsset::CardBoy, 349.0f, 410.0f, -12.0f, -0.14f);
+        add_card(NativeUiAsset::CardGirl, 654.0f, 250.0f, -3.0f, 0.105f);
+    }
+    // Native Options screen: title/footer chrome always, the settings panel when a submenu is open.
+    if (game.frontend.state() == f2::FrontendState::Options) {
+        build_options_chrome(scene, width, height);
+        if (game.frontend.options_page_open()) build_options_page(scene, width, height, game);
     }
 }
 
