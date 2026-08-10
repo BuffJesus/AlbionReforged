@@ -266,8 +266,58 @@ def _instance_transform(block: dict, inst: dict):
     return pos, yaw, scale
 
 
+def _cook_textures(tokens, textures_bnks, tex_cook: Path, f2tool: Path,
+                   out_dir: Path, tmp: Path, log=print) -> dict:
+    """Extract + decode each referenced `.tex` into a loose DDS, searching every source bnk.
+
+    `textures_bnks` = ordered list of container Paths (e.g. globals_textures.bnk, the level's
+    own textures.bnk). Returns {token: absolute-dds-path} for every texture that cooked.
+    Shared textures are self-contained comp-1/11 LhTex blobs (verified on chapter2slums),
+    decoded by f2native_cook_lh_tex (the AssetBrowser LhTexCodec, productised). comp-7 tiled
+    BCn (needs a header bnk) is skipped with a warning; the material falls back to flat colour.
+    """
+    import subprocess
+    sources = [b for b in (textures_bnks or []) if b]
+    if not sources or not tex_cook:
+        return {}
+    out_dir.mkdir(parents=True, exist_ok=True)
+    indices = [(b, _bnk_name_index(b)) for b in sources]
+    cooked: dict[str, str] = {}
+    for token in tokens:
+        if token in cooked:
+            continue
+        cooked[token] = ""  # mark seen (so a failed texture isn't retried every material)
+        bnk = exact = None
+        for b, idx in indices:
+            hit = _resolve(idx, token)
+            if hit:
+                bnk, exact = b, hit
+                break
+        if not exact:
+            log(f"  tex skip (not in any textures bnk): {token}")
+            continue
+        stem = _norm(token).rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        raw = tmp / f"{stem}.tex"
+        dds = out_dir / f"{stem}.dds"
+        try:
+            subprocess.run([str(f2tool), "extract", str(bnk), exact, str(raw)],
+                           check=True, capture_output=True)
+            result = subprocess.run([str(tex_cook), str(raw), str(dds)],
+                                    capture_output=True, text=True)
+            if result.returncode != 0 or not dds.is_file():
+                log(f"  tex skip ({result.stdout.strip() or result.stderr.strip()}): {token}")
+                continue
+        except Exception as exc:  # noqa: BLE001 - skip-and-continue
+            log(f"  tex skip ({type(exc).__name__}): {token}")
+            continue
+        cooked[token] = str(dds.resolve())
+    return cooked
+
+
 def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
-               out_scene: Path, types=(2, 21), max_per_block=None, log=print) -> dict:
+               out_scene: Path, types=(2, 21), max_per_block=None, log=print,
+               textures_bnks=None, tex_cook: Path = None,
+               tex_out_dir: Path = None) -> dict:
     """Stage 2: glue every prop model (header++body) and merge instances into one F2SCENE.
 
     Data-driven from ghidra_out/model_glue_lmp_format.txt (the RE'd glue) — no guessing.
@@ -364,6 +414,21 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                 instances.append((name, pos, yaw, scale))
             n_inst += 1
 
+    # Cook the referenced albedo textures (globals_textures.bnk .tex -> loose DDS). The runtime
+    # only samples albedo (t0), so albedo is what turns the flat-grey buildings textured.
+    albedo_tokens = []
+    for _name, opts in materials:
+        for o in opts:
+            if o.startswith("albedo="):
+                albedo_tokens.append(o[len("albedo="):])
+    tex_sources = [b for b in (textures_bnks or []) if b]
+    tex_map = _cook_textures(albedo_tokens, tex_sources, tex_cook, f2tool,
+                             tex_out_dir or (out_scene.parent / (out_scene.stem + ".textures")),
+                             tmp, log=log) if (tex_sources and tex_cook) else {}
+    n_tex = sum(1 for v in tex_map.values() if v)
+    if tex_sources and tex_cook:
+        log(f"cooked {n_tex}/{len(tex_map)} distinct albedo textures -> DDS")
+
     # Emit F2SCENE (matches native_scene.cpp load_native_scene grammar).
     with out_scene.open("w", encoding="utf-8", newline="\n") as out:
         out.write(f"# Cooked from {engine_level.name} (v{info['version']}) — "
@@ -372,7 +437,21 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
         out.write("sun -0.4 -0.82 -0.4\n")
         out.write("sky 0.52 0.62 0.78 1\n")
         for name, opts in materials:
-            out.write(f"material {name} 0.72 0.72 0.72 1" + ("".join(" " + o for o in opts)) + "\n")
+            # Repoint albedo at the cooked loose DDS (absolute path; the runtime loads it
+            # directly). Drop albedo tokens that didn't cook so the material shows its flat
+            # base colour instead of the unresolved .tex name (which would sample white).
+            emit = []
+            for o in opts:
+                if o.startswith("albedo="):
+                    dds = tex_map.get(o[len("albedo="):], "")
+                    if dds:
+                        emit.append("albedo=" + dds.replace("\\", "/"))
+                    # else: skip albedo -> flat base colour fallback
+                elif o.startswith("normal=") or o.startswith("material="):
+                    continue  # runtime samples albedo only; drop uncooked normal/spec tokens
+                else:
+                    emit.append(o)
+            out.write(f"material {name} 0.72 0.72 0.72 1" + ("".join(" " + o for o in emit)) + "\n")
         for name, mat_idx, positions, normals, uvs, indices in meshes:
             out.write(f"mesh {name} {len(positions) // 3} {len(indices)} {mat_idx}\n")
             for vi in range(len(positions) // 3):
@@ -407,6 +486,15 @@ def main() -> int:
                     / "build" / "f2tool.exe", help="f2tool.exe (decompresses body entries)")
     ap.add_argument("--types", default="2,21", help="prop block types to cook (default 2,21)")
     ap.add_argument("--max-per-block", type=int, help="cap instances per block (for quick tests)")
+    ap.add_argument("--textures-bnk", type=Path, action="append", dest="textures_bnk",
+                    help="a .tex source bnk (repeatable: globals_textures.bnk, the level's textures.bnk). "
+                         "Searched in order.")
+    ap.add_argument("--tex-cook", type=Path,
+                    default=Path(__file__).resolve().parents[1] / "build" / "RelWithDebInfo"
+                    / "f2native_cook_lh_tex.exe",
+                    help="f2native_cook_lh_tex.exe (.tex -> DDS decoder)")
+    ap.add_argument("--tex-out-dir", type=Path,
+                    help="where to write cooked albedo DDS (default <scene>.textures/)")
     args = ap.parse_args()
 
     data = args.engine_level.read_bytes()
@@ -435,8 +523,11 @@ def main() -> int:
         if not args.header_bnk or not args.body_bnk:
             ap.error("--cook requires --header-bnk and --body-bnk")
         types = tuple(int(t) for t in args.types.split(","))
+        tex_cook = args.tex_cook if (args.tex_cook and args.tex_cook.is_file()) else None
         cook_level(args.engine_level, args.header_bnk, args.body_bnk, args.f2tool,
-                   args.cook, types=types, max_per_block=args.max_per_block)
+                   args.cook, types=types, max_per_block=args.max_per_block,
+                   textures_bnks=args.textures_bnk, tex_cook=tex_cook,
+                   tex_out_dir=args.tex_out_dir)
     return 0
 
 

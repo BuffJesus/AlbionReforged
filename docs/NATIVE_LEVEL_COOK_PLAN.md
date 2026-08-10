@@ -140,11 +140,27 @@ Verify: run on the extracted `chapter2slums.engine_level`, then World `--scene` 
     dropped. Added normal to the renderer Vertex/input-layout (POSITION 0/NORMAL 12/COLOR 24/TEXCOORD 40),
     world-rotate the normal, pass normalized sun in the cbuffer (CBV vis VERTEX→ALL), PS lambert
     `0.35+0.65*saturate(dot(n,-sun))`. D3D debug layer (FABLE2NATIVE_D3D_DEBUG=1) raised zero messages.
-- REMAINING for a good-looking render (NEXT SESSION, priority order): (b) `.tex` texture decode/cook →
-  currently grey vertex-color fallback (albedo.Sample returns white); on-ramp = untracked WIP
-  `tools/decode_large_ring.cpp`. (d) foliage MDL strides in fable_mdl_format (type-21 grass/trees skip with
-  MdlParseError); (e) terrain heightfield mesh; (f) VULKAN world-renderer parity — it's behind D3D12
-  (old origin-orbit camera, no scene-AABB fit, no depth attachment in its render pass, no lighting).
+- ✅ ALBEDO TEXTURES DONE (2026-08-10, D3D12, screenshot-verified) — (b) partially: the buildings whose
+  albedo lives in `globals_textures.bnk` (bs_* shared, self-contained comp-1 LhTex) now render TEXTURED
+  (brick/timber/stone). The decode path already existed (`f2native_cook_lh_tex` = productised AssetBrowser
+  LhTexCodec, `.tex`→DXT1 DDS; runtime `decode_dds_rgba8` loads DXT1/DXT5). What was missing = wiring the
+  world cooker to extract+cook each material's albedo `.tex` and emit the loose-DDS path. Impl:
+  - `cook_levels.py` `_cook_textures()`: for each distinct albedo token, resolve it across an ordered list
+    of `--textures-bnk` containers (repeatable arg), `f2tool extract` the `.tex`, run `--tex-cook`
+    (f2native_cook_lh_tex) → DDS in `<scene>.textures/`, emit `albedo=<abs-dds>` (runtime `resolve_texture`
+    loads absolute paths directly → ZERO renderer change). Uncooked albedo/normal/spec tokens are dropped
+    so the material shows its flat base colour instead of sampling white. Verified: 15/27 chapter2slums
+    albedos cook; the townhouse cluster is visibly textured while the Fairfax castle (its `fc_*` in the
+    high-res pool) stays grey — exactly the container split, which confirms correctness.
+  - Repro: `cook_levels.py … --textures-bnk <globals_textures.bnk> --textures-bnk <level textures.bnk>`
+    (default `--tex-cook` = build/RelWithDebInfo/f2native_cook_lh_tex.exe).
+- REMAINING (NEXT SESSION, priority order): (b-cont) the OTHER textures (fairfax `fc_*`, `esa_facade_*`,
+  `bs_gatehouse_*`, `cliffg_*`) live in `Globals/1024mip0_textures.bnk` = comp-7 Xbox-TILED BCn needing
+  dims/pf from `Globals/globals_texture_headers.bnk`; `f2native_cook_lh_tex` already supports comp-7 via
+  `--pf/--width/--height`, so the cooker just needs to parse the 84-byte header per texture and pass them.
+  (c) sample the normal map (renderer PS ignores t1). (d) foliage MDL strides (type-21 skip). (e) terrain
+  heightfield. (f) VULKAN world-renderer parity — behind D3D12 (old origin-orbit camera, no scene-AABB fit,
+  no depth attachment in its render pass, no lighting, no textures).
 
 ## Ground-truth references
 `ghidra_out/world_level_format.txt`, `newgame_handoff.txt`, `gdb_instantiation_re.txt`,

@@ -17,8 +17,15 @@ Commit `e16428d`.
   3D (Fairfax castle/towers, townhouses, bridge/wall). D32 DSV in `native_frontend_app.cpp` (World-only
   bind); per-vertex normal + sun lambert in `native_world_renderer.cpp`. Debug layer clean. Details in
   `NATIVE_LEVEL_COOK_PLAN.md` + memory `fable2native-level-cook-renders`.
-- **NEXT (priority):** (b) `.tex` texture decode (on-ramp: untracked `tools/decode_large_ring.cpp`),
-  (d) foliage MDL strides in fable_mdl_format, (e) terrain, (f) Vulkan world-renderer parity (behind D3D12).
+- **✅ ALBEDO TEXTURES DONE (2026-08-10, D3D12, screenshot-verified):** (b) partially — buildings whose
+  albedo is in `globals_textures.bnk` (comp-1 LhTex) now render textured (brick/timber/stone). The decoder
+  (`f2native_cook_lh_tex`) + runtime DDS loader already existed; wired `cook_levels.py _cook_textures()` to
+  extract+cook each albedo `.tex`→DDS and emit an absolute loose-DDS path (no renderer change). 15/27
+  chapter2slums albedos cook; the rest live in comp-7 tiled `1024mip0_textures.bnk` (+ header bnk). See
+  `NATIVE_LEVEL_COOK_PLAN.md` (b).
+- **NEXT (priority):** (b-cont) comp-7 tiled textures from `1024mip0_textures.bnk` + `globals_texture_headers.bnk`
+  (tool already supports `--pf/--width/--height`), (c) normal maps, (d) foliage MDL strides, (e) terrain,
+  (f) Vulkan world-renderer parity (behind D3D12).
 - New decomp specs this session: `ghidra_out/{model_glue_lmp_format,gdb_component_schemas,worldmap_travel_minigames,ingame_menu_live_achievements}.txt`.
 
 ## ▶▶ ACTIVE TRACK (2026-08-06) — RETAIL FRONTEND DECOMP → Fable2Native fidelity
