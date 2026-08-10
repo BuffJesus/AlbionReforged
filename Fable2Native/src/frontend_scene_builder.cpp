@@ -438,6 +438,10 @@ void FrontendSceneBuilder::build_options_page(f2::render::UiDrawList& scene, flo
         scene.add_sprite(id, page_x + page_w * 0.09f, height * 0.165f, page_x + page_w * 0.91f,
                          height * 0.195f, 0.043f, 0.020f, 0.72f, 0.070f, rgba(133, 78, 28, 255));
     }
+    // The row the cursor is on gets the highlight color + the </> adjust arrows.
+    const std::uint32_t sel = rgba(145, 72, 30, 255);
+    const std::uint32_t nrm = rgba(105, 55, 27, 255);
+    const int focus = game.frontend.option_row();
     const auto arrows = [&](float y) {
         const float aw = 20.0f * unit;
         emit_text(scene, "<", page_x + page_w * 0.12f, y - 24.0f * unit, 28.0f * unit,
@@ -445,14 +449,14 @@ void FrontendSceneBuilder::build_options_page(f2::render::UiDrawList& scene, flo
         emit_text(scene, ">", page_x + page_w * 0.88f - aw, y - 24.0f * unit, 28.0f * unit,
                   rgba(192, 107, 57, 235));
     };
-    const auto value = [&](std::string_view label, std::string_view val, float y) {
-        emit_centered(scene, label, center_x, y, 21.0f * unit, rgba(105, 55, 27, 255));
+    const auto value = [&](std::string_view label, std::string_view val, float y, int row) {
+        emit_centered(scene, label, center_x, y, 21.0f * unit, focus == row ? sel : nrm);
         emit_centered(scene, val, center_x, y + 34.0f * unit, 21.0f * unit, rgba(24, 24, 24, 255));
-        arrows(y + 32.0f * unit);
+        if (focus == row) arrows(y + 32.0f * unit);
     };
-    const auto slider = [&](std::string_view label, int v, float y) {
+    const auto slider = [&](std::string_view label, int v, float y, int row) {
         if (!label.empty())
-            emit_centered(scene, label, center_x, y, 21.0f * unit, rgba(105, 55, 27, 255));
+            emit_centered(scene, label, center_x, y, 21.0f * unit, focus == row ? sel : nrm);
         const float x0 = page_x + page_w * 0.22f;
         const float x1 = page_x + page_w * 0.78f;
         const float by = y + 34.0f * unit;
@@ -461,34 +465,33 @@ void FrontendSceneBuilder::build_options_page(f2::render::UiDrawList& scene, flo
                  by + 5.0f * unit, rgba(190, 105, 66, 255));
     };
     if (page_id == "game") {
-        value("Subtitles", game.frontend.subtitles_enabled() ? "On" : "Off", height * 0.235f);
+        value("Subtitles", game.frontend.subtitles_enabled() ? "On" : "Off", height * 0.235f, 0);
         value("Glowing Trail Brightness",
               game.frontend.breadcrumb_size() == 0   ? "Off"
               : game.frontend.breadcrumb_size() == 1 ? "Medium"
                                                      : "Bright",
-              height * 0.355f);
-        value("Tutorials", game.frontend.tutorial_boxes_enabled() ? "On" : "Off", height * 0.475f);
+              height * 0.355f, 1);
+        value("Tutorials", game.frontend.tutorial_boxes_enabled() ? "On" : "Off", height * 0.475f, 2);
         value("Online Orbs", game.frontend.multiplayer_orbs_enabled() ? "Friends Only" : "Off",
-              height * 0.595f);
-        value("Auto Joinable", game.frontend.auto_joinable_enabled() ? "On" : "Off", height * 0.715f);
+              height * 0.595f, 3);
+        value("Auto Joinable", game.frontend.auto_joinable_enabled() ? "On" : "Off", height * 0.715f,
+              4);
     } else if (page_id == "controls") {
-        value("Invert Aim", game.frontend.invert_aim_enabled() ? "On" : "Off", height * 0.235f);
+        value("Invert Aim", game.frontend.invert_aim_enabled() ? "On" : "Off", height * 0.235f, 0);
     } else if (page_id == "audio") {
-        slider("Sounds", game.frontend.sounds_volume(), height * 0.255f);
-        slider("Music", game.frontend.music_volume(), height * 0.405f);
-        slider("Voice", game.frontend.voice_volume(), height * 0.555f);
+        slider("Sounds", game.frontend.sounds_volume(), height * 0.255f, 0);
+        slider("Music", game.frontend.music_volume(), height * 0.405f, 1);
+        slider("Voice", game.frontend.voice_volume(), height * 0.555f, 2);
         value("Speakers", game.frontend.speaker_mode() == 0 ? "5.1 Surround" : "Stereo",
-              height * 0.695f);
+              height * 0.695f, 3);
     } else if (page_id == "video") {
         if (const auto id = access_.id(NativeUiAsset::CalibrationImage)) {
             scene.add_sprite(id, page_x + page_w * 0.16f, height * 0.23f, page_x + page_w * 0.86f,
                              height * 0.55f, 0.0f, 0.0f, 1.0f, 0.75f, rgba(255, 255, 255, 255));
         }
-        const std::uint32_t sel = rgba(145, 72, 30, 255);
-        const std::uint32_t nrm = rgba(105, 55, 27, 255);
         emit_centered(scene, "Gamma", center_x, height * 0.575f, 21.0f * unit,
-                      game.frontend.video_setting_row() == 0 ? sel : nrm);
-        slider("", game.frontend.gamma_percent(), height * 0.615f);
+                      focus == 0 ? sel : nrm);
+        slider("", game.frontend.gamma_percent(), height * 0.615f, 0);
         emit_centered(scene, "Adjust the gamma so that you are just", center_x, height * 0.685f,
                       17.0f * unit, rgba(35, 35, 35, 255));
         emit_centered(scene, "able to see the text on the left side", center_x, height * 0.725f,
@@ -499,7 +502,7 @@ void FrontendSceneBuilder::build_options_page(f2::render::UiDrawList& scene, flo
                       rgba(105, 55, 27, 255));
         const auto display_value = [&](std::string_view label, std::string_view val, float y,
                                        int row) {
-            const std::uint32_t col = game.frontend.video_setting_row() == row ? sel : nrm;
+            const std::uint32_t col = focus == row ? sel : nrm;
             emit_text(scene, label, page_x + page_w * 0.19f, y, 16.0f * unit, col);
             emit_text(scene, val, page_x + page_w * 0.81f - text_width(val, 16.0f * unit), y,
                       16.0f * unit, rgba(24, 24, 24, 255));

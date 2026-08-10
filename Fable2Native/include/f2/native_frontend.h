@@ -76,7 +76,11 @@ public:
     // Render backend (0 = D3D12, 1 = Vulkan). Restart-applied: changing it persists the preference;
     // the unified launcher (frontend_main.cpp) reads it on next start. Initialized from the pref.
     [[nodiscard]] int render_backend_index() const noexcept { return render_backend_index_; }
-    [[nodiscard]] int video_setting_row() const noexcept { return video_setting_row_; }
+    // Cursor for the focused option row within an open Options tab (Up/Down moves it, Left/Right
+    // changes that row's value). Named per-tab-generic; the Video page also keys its row highlight to it.
+    [[nodiscard]] int option_row() const noexcept { return option_row_; }
+    // Number of adjustable rows in the currently selected Options tab.
+    [[nodiscard]] int option_row_count() const noexcept;
     // On-screen FPS counter toggle (Video options row 3). A real native setting the app applies by
     // drawing the counter each frame when enabled.
     [[nodiscard]] bool fps_display_enabled() const noexcept { return fps_display_enabled_; }
@@ -131,7 +135,7 @@ private:
     int resolution_index_ = 1;
     int anti_aliasing_index_ = 2;
     int render_backend_index_ = 0;
-    int video_setting_row_ = 0;
+    int option_row_ = 0;
     bool fps_display_enabled_ = false;
     int sounds_volume_ = 80;
     int music_volume_ = 80;

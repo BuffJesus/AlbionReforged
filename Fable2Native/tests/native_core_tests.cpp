@@ -269,6 +269,73 @@ int main() {
         }
     }
 
+    {
+        // Options navigation: inside a tab you move a row cursor (Up/Down) and change the focused
+        // value (Left/Right) — the fix for "can't cycle options within a tab". Also covers the FPS toggle.
+        using A = f2::FrontendAction;
+        using S = f2::FrontendState;
+        f2::FrontendController fc;
+        fc.dispatch(A::Skip);  // Boot -> Title
+        assert(fc.state() == S::Title);
+        fc.dispatch(A::Accept);  // Title -> MainMenu
+        assert(fc.state() == S::MainMenu);
+        assert(fc.select_menu_item("options"));
+        fc.dispatch(A::Accept);  // -> Options (tabs), page closed
+        assert(fc.state() == S::Options);
+        assert(!fc.options_page_open());
+
+        // Move to the Video tab (Up/Down cycles tabs while the page is closed).
+        for (int i = 0; i < 8 && fc.options_items()[fc.selected_item()].id != "video"; ++i) {
+            fc.dispatch(A::Down);
+        }
+        assert(fc.options_items()[fc.selected_item()].id == "video");
+
+        // Open the tab: the row cursor starts at 0 and Up/Down now moves it (not the tab).
+        fc.dispatch(A::Accept);
+        assert(fc.options_page_open());
+        assert(fc.option_row() == 0);
+        assert(fc.option_row_count() == 5);  // Gamma, Resolution, AA, FPS, Renderer
+        fc.dispatch(A::Down);
+        assert(fc.option_row() == 1);
+        fc.dispatch(A::Down);
+        fc.dispatch(A::Down);
+        assert(fc.option_row() == 3);  // FPS Display row
+
+        // FPS toggle via Left/Right on its row.
+        assert(!fc.fps_display_enabled());
+        fc.dispatch(A::Right);
+        assert(fc.fps_display_enabled());
+        fc.dispatch(A::Left);
+        assert(!fc.fps_display_enabled());
+
+        // Cursor clamps at the last row.
+        fc.dispatch(A::Down);
+        assert(fc.option_row() == 4);
+        fc.dispatch(A::Down);
+        assert(fc.option_row() == 4);
+
+        // Resolution (row 1) changes with Left/Right.
+        while (fc.option_row() > 1) fc.dispatch(A::Up);
+        assert(fc.option_row() == 1);
+        const int res0 = fc.resolution_index();
+        fc.dispatch(A::Right);
+        assert(fc.resolution_index() == (res0 < 2 ? res0 + 1 : 2));
+
+        // Back closes the page but stays in Options.
+        fc.dispatch(A::Back);
+        assert(!fc.options_page_open());
+        assert(fc.state() == S::Options);
+
+        // The Game tab exposes 5 rows including the toggles reachable by the cursor.
+        while (fc.options_items()[fc.selected_item()].id != "game") fc.dispatch(A::Up);
+        fc.dispatch(A::Accept);
+        assert(fc.option_row_count() == 5);
+        const bool subs0 = fc.subtitles_enabled();
+        fc.dispatch(A::Left);  // row 0 = Subtitles -> Off
+        assert(fc.subtitles_enabled() == false);
+        (void)subs0;
+    }
+
     std::filesystem::remove(path);
     return 0;
 }

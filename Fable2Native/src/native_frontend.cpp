@@ -83,7 +83,7 @@ void FrontendController::reset() {
     resolution_index_ = 1;
     anti_aliasing_index_ = 2;
     render_backend_index_ = (read_render_backend_preference() == RenderBackend::Vulkan) ? 1 : 0;
-    video_setting_row_ = 0;
+    option_row_ = 0;
     sounds_volume_ = 80;
     music_volume_ = 80;
     voice_volume_ = 80;
@@ -127,6 +127,19 @@ void FrontendController::tick(double delta_seconds) {
     }
 }
 
+int FrontendController::option_row_count() const noexcept {
+    if (state_ != FrontendState::Options || options_items_.empty() ||
+        selected_item_ >= options_items_.size()) {
+        return 1;
+    }
+    const auto& id = options_items_[selected_item_].id;
+    if (id == "game") return 5;    // Subtitles, Glowing Trail, Tutorials, Online Orbs, Auto Joinable
+    if (id == "video") return 5;   // Gamma, Resolution, Anti-Aliasing, FPS Display, Renderer
+    if (id == "audio") return 4;   // Sounds, Music, Voice, Speakers
+    if (id == "controls") return 1;  // Invert Aim
+    return 1;
+}
+
 void FrontendController::dispatch(FrontendAction action) {
     switch (action) {
         case FrontendAction::Skip:
@@ -142,38 +155,61 @@ void FrontendController::dispatch(FrontendAction action) {
         case FrontendAction::Down:
             if (state_ == FrontendState::AttractVideo) {
                 enter(FrontendState::Title);
-            } else if (state_ == FrontendState::MainMenu || state_ == FrontendState::Options) {
+            } else if (state_ == FrontendState::MainMenu) {
                 move_selection(action == FrontendAction::Up ? -1 : 1);
+            } else if (state_ == FrontendState::Options) {
+                if (options_page_open_) {
+                    // Inside a tab: move the option-row cursor (Left/Right then changes its value).
+                    const int count = option_row_count();
+                    option_row_ = std::clamp(option_row_ + (action == FrontendAction::Up ? -1 : 1),
+                                             0, count - 1);
+                } else {
+                    move_selection(action == FrontendAction::Up ? -1 : 1);
+                }
             }
             break;
         case FrontendAction::Left:
         case FrontendAction::Right:
             if (state_ == FrontendState::AttractVideo) enter(FrontendState::Title);
             else if (state_ == FrontendState::ChooseCard) select_card(!girl_selected_);
-            else if (state_ == FrontendState::Options && !options_items_.empty()) {
-                const int delta = action == FrontendAction::Left ? -10 : 10;
+            else if (state_ == FrontendState::Options && options_page_open_ &&
+                     !options_items_.empty() && selected_item_ < options_items_.size()) {
+                // Adjust the focused row's value (Up/Down picks the row; Left/Right changes it).
+                const bool right = action == FrontendAction::Right;
+                const int step = right ? 1 : -1;
+                const int vstep = right ? 10 : -10;
                 const auto& id = options_items_[selected_item_].id;
                 if (id == "game") {
-                    breadcrumb_size_ = std::clamp(breadcrumb_size_ + (delta > 0 ? 1 : -1), 0, 2);
-                } else if (id == "video") {
-                    if (video_setting_row_ == 0) {
-                        gamma_percent_ = std::clamp(gamma_percent_ + delta, 0, 100);
-                    } else if (video_setting_row_ == 1) {
-                        resolution_index_ = std::clamp(resolution_index_ + (delta > 0 ? 1 : -1), 0, 2);
-                    } else if (video_setting_row_ == 2) {
-                        anti_aliasing_index_ = std::clamp(anti_aliasing_index_ + (delta > 0 ? 1 : -1), 0, 3);
-                    } else if (video_setting_row_ == 3) {
-                        fps_display_enabled_ = delta > 0;  // Right = On, Left = Off
-                    } else {
-                        // Renderer backend (restart-applied): persist so the launcher picks it up.
-                        render_backend_index_ = std::clamp(render_backend_index_ + (delta > 0 ? 1 : -1), 0, 1);
-                        save_render_backend_preference(render_backend_index_ == 1 ? RenderBackend::Vulkan
-                                                                                  : RenderBackend::D3D12);
+                    switch (option_row_) {
+                        case 0: subtitles_enabled_ = right; break;
+                        case 1: breadcrumb_size_ = std::clamp(breadcrumb_size_ + step, 0, 2); break;
+                        case 2: tutorial_boxes_enabled_ = right; break;
+                        case 3: multiplayer_orbs_enabled_ = right; break;
+                        case 4: auto_joinable_enabled_ = right; break;
                     }
+                } else if (id == "controls") {
+                    invert_aim_enabled_ = right;
                 } else if (id == "audio") {
-                    sounds_volume_ = std::clamp(sounds_volume_ + delta, 0, 100);
-                    music_volume_ = std::clamp(music_volume_ + delta, 0, 100);
-                    voice_volume_ = std::clamp(voice_volume_ + delta, 0, 100);
+                    switch (option_row_) {
+                        case 0: sounds_volume_ = std::clamp(sounds_volume_ + vstep, 0, 100); break;
+                        case 1: music_volume_ = std::clamp(music_volume_ + vstep, 0, 100); break;
+                        case 2: voice_volume_ = std::clamp(voice_volume_ + vstep, 0, 100); break;
+                        case 3: speaker_mode_ = right ? 1 : 0; break;
+                    }
+                } else if (id == "video") {
+                    switch (option_row_) {
+                        case 0: gamma_percent_ = std::clamp(gamma_percent_ + vstep, 0, 100); break;
+                        case 1: resolution_index_ = std::clamp(resolution_index_ + step, 0, 2); break;
+                        case 2: anti_aliasing_index_ = std::clamp(anti_aliasing_index_ + step, 0, 3); break;
+                        case 3: fps_display_enabled_ = right; break;
+                        case 4:
+                            // Renderer backend (restart-applied): persist so the launcher picks it up.
+                            render_backend_index_ = std::clamp(render_backend_index_ + step, 0, 1);
+                            save_render_backend_preference(render_backend_index_ == 1
+                                                               ? RenderBackend::Vulkan
+                                                               : RenderBackend::D3D12);
+                            break;
+                    }
                 }
             }
             break;
@@ -203,14 +239,22 @@ void FrontendController::dispatch(FrontendAction action) {
             else if (state_ == FrontendState::ChooseCard) {
                 enter(FrontendState::Loading);
             }
-            else if (state_ == FrontendState::Options && !options_items_.empty()) {
+            else if (state_ == FrontendState::Options && !options_items_.empty() &&
+                     selected_item_ < options_items_.size()) {
                 const auto& id = options_items_[selected_item_].id;
                 if (!options_page_open_) {
+                    // Enter the tab; start the row cursor at the top (Up/Down moves it, Left/Right edits).
                     options_page_open_ = true;
-                } else if (id == "game") subtitles_enabled_ = !subtitles_enabled_;
-                else if (id == "controls") invert_aim_enabled_ = !invert_aim_enabled_;
-                else if (id == "video") video_setting_row_ = (video_setting_row_ + 1) % 5;
-                else if (id == "audio") speaker_mode_ = speaker_mode_ == 0 ? 1 : 0;
+                    option_row_ = 0;
+                } else {
+                    // Accept also flips the focused boolean row, as a convenience alongside Left/Right.
+                    if (id == "game" && option_row_ == 0) subtitles_enabled_ = !subtitles_enabled_;
+                    else if (id == "game" && option_row_ == 2) tutorial_boxes_enabled_ = !tutorial_boxes_enabled_;
+                    else if (id == "game" && option_row_ == 3) multiplayer_orbs_enabled_ = !multiplayer_orbs_enabled_;
+                    else if (id == "game" && option_row_ == 4) auto_joinable_enabled_ = !auto_joinable_enabled_;
+                    else if (id == "controls") invert_aim_enabled_ = !invert_aim_enabled_;
+                    else if (id == "video" && option_row_ == 3) fps_display_enabled_ = !fps_display_enabled_;
+                }
             }
             break;
         case FrontendAction::None:
