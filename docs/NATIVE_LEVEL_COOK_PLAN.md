@@ -93,9 +93,46 @@ Verify: run on the extracted `chapter2slums.engine_level`, then World `--scene` 
   ModelParser do this for display; UI-tangled → needs a headless glue extraction) → glued MDL →
   fable_mdl_format → NativeMesh → merge with cook_levels instances (type-2 = 20-float transform,
   type-21 = normalized pos/yaw/scale) → save_native_scene. Then World `--scene` renders the real level.
-- INSTANCE TRANSFORM: type-21 instances are already normalized (pos + sin/cos yaw + scale). type-2 stores a
-  raw 20-float transform per instance — decode to pos/rot/scale for the F2SCENE `instance` (extract from the
-  20 floats; likely a 4x3/4x4 matrix — confirm against the renderer's expectation).
+- ✅ MANIFEST VALIDATED (`cook_levels.py --json`): chapter2slums = **32 DISTINCT models → 7011 instances**
+  across 177 prop blocks. Key simplification for stage 2: cook each of the **32 unique MDLs ONCE**, then emit
+  the 7011 placements as cheap `instance` records — the merge is 32 mesh cooks + 7011 transforms, not 7011
+  mesh cooks. JSON manifest (`prop_blocks[].model` + `.instances[].pos/values|yaw_sin_cos|scale`) is the
+  stage-2 input.
+- ✅ INSTANCE TRANSFORM DECODE PROVEN (measured on real chapter2slums type-2 instances, not guessed):
+  `values[0..2]`=world pos; `values[6..7]`=(cos,sin) yaw with **|cos,sin|==1.000 exactly** on EVERY instance
+  (confirms a unit 2D rotation, not a scaled matrix column); `values[9..11]`=scale==[1,1,1] (uniform unit).
+  So F2SCENE `instance <mesh> px py pz rx ry rz scale` = `pos=values[0:3], rx=rz=0,
+  ry=atan2(values[7],values[6]), scale=values[9]`. type-21 is already normalized (pos + yaw_sin_cos + scale)
+  → same emit (ry=atan2(sin,cos)). Both paths land on the SAME instance-record recipe — stage 2 has no
+  transform ambiguity left; only the mesh geometry (the glue) remains.
+
+## ✅ STAGE 2 SHIPPED + RENDERS (2026-08-09) — the cooked level draws in the native port
+- `cook_levels.py --cook out.f2scene --header-bnk globals_model_headers.bnk --body-bnk <level>_models.bnk`
+  glues each distinct prop model (MeshFile header ++ polymsh body via f2tool, per the RE'd glue) and
+  merges instances into ONE F2SCENE. chapter2slums type-2 → 43 meshes / 21,584 verts / 14 building
+  instances (townhouses, market walls, structures) with real material texture paths. Foliage/LOD trees
+  skip with MdlParseError (fable_mdl_format doesn't decode those strides yet) — expected; buildings are
+  the landmarks.
+- Runtime: `f2native_frontend --start-world --scene <cooked.f2scene> --game-dir <data>` renders it
+  (new `--start-world` test flag + `NativeFrontend::debug_jump_to`). VERIFIED via PrintWindow screenshot.
+- ⚠ THE WORLD RENDERER WAS NEVER EXERCISED BEFORE — reaching World surfaced 3 real D3D12 bugs, all found
+  by DATA (D3D12 debug layer, gated by env `FABLE2NATIVE_D3D_DEBUG=1` → `d3d_debug.log`), not guessing:
+  1. **Missing viewport/scissor** in `NativeWorldRenderer::render` — an unset 0x0 viewport rasterises
+     NOTHING with zero validation error (THE primary black-screen cause). Now sets RSSetViewports/Scissor.
+  2. **`pipeline.SampleMask = 0`** (zero-init default) — "preventing blend operations for all samples";
+     writes no samples. Set to 0xFFFFFFFF. (Debug layer caught this one explicitly.)
+  3. Descriptor heap must be bound (SetDescriptorHeaps) BEFORE the world draw's root descriptor table.
+  Also: instance rotation was dropped (added yaw via `place_vertex` Rz*Ry*Rx in both renderers), camera
+  now fits the scene AABB (`scene_center_`/`scene_radius_`), CULL_NONE (strip winding), row_major cbuffer.
+- ✅ AXIS FIX (user-caught "everything laying sideways"): model verts are game-space Z-up; the engine
+  renders Y-up via game_vec_to_xform_axes(x,y,z)={x,z,y}. The cooker now swaps vertex+normal axes the SAME
+  way it already swapped instance positions → buildings stand UPRIGHT (peaked roofs/gables/spires visible).
+- REMAINING for a good-looking render (NEXT SESSION, in priority order): (a) DEPTH BUFFER — currently no
+  depth → buildings read as a flat merged grey silhouette (overdraw, no occlusion); add a D32 depth
+  texture+DSV, enable depth in the world pipeline, clear+bind it. THIS is the biggest visual win. (b)
+  `.tex` texture decode/cook → currently grey vertex-color fallback (albedo.Sample returns white); (c)
+  lighting (the sun dir is in the F2SCENE but the PS ignores normals); (d) foliage MDL strides in
+  fable_mdl_format (type-21 grass/trees skip with MdlParseError); (e) terrain heightfield mesh.
 
 ## Ground-truth references
 `ghidra_out/world_level_format.txt`, `newgame_handoff.txt`, `gdb_instantiation_re.txt`,

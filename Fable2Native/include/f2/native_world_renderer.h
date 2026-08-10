@@ -39,6 +39,10 @@ private:
     D3D12_INDEX_BUFFER_VIEW index_view_{};
     D3D12_GPU_VIRTUAL_ADDRESS constant_address_ = 0;
     std::uint32_t index_count_ = 0;
+    // World-space bounds of the baked geometry, so the camera frames a real cooked
+    // level (spanning hundreds of units) instead of the origin-orbit test default.
+    std::array<float, 3> scene_center_{0.0f, 0.7f, 0.0f};
+    float scene_radius_ = 4.0f;
     struct DrawRange {
         std::uint32_t first_index = 0;
         std::uint32_t index_count = 0;

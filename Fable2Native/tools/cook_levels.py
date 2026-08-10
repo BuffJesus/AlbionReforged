@@ -211,19 +211,215 @@ def parse_engine_level(data: bytes) -> dict:
             "prop_blocks": prop_blocks}
 
 
+def _norm(p: str) -> str:
+    """Lowercased, forward-slashed bnk key (matches ModelParser.cpp:35 normalisation)."""
+    return p.lower().replace("\\", "/")
+
+
+def _bnk_name_index(bnk_path: Path):
+    """Build {norm_name: exact_name} + {leaf: exact_name} from a bnk's file table.
+
+    Uses AssetBrowser's BNKReader only to LIST (the table decompresses fine); the
+    entry BYTES are pulled via f2tool.exe, whose C++ BnkCore handles the level
+    _models.bnk 'C' chunk compression the Python reader can't inflate.
+    """
+    import sys as _sys
+    addon = Path(__file__).resolve().parents[2] / "Fable2AssetBrowser" / "source" / "Archive"
+    _sys.path.insert(0, str(addon))
+    from bnk_reader import BNKReader  # noqa: E402
+
+    by_norm, by_leaf = {}, {}
+    for e in BNKReader(str(bnk_path)).list_files():
+        exact = e["name"]
+        n = _norm(exact)
+        by_norm[n] = exact
+        by_leaf.setdefault(n.rsplit("/", 1)[-1], exact)
+    return by_norm, by_leaf
+
+
+def _resolve(index, model_path: str):
+    """model path -> exact stored bnk name (norm match, then leaf fallback)."""
+    by_norm, by_leaf = index
+    n = _norm(model_path)
+    return by_norm.get(n) or by_leaf.get(n.rsplit("/", 1)[-1])
+
+
+def _instance_transform(block: dict, inst: dict):
+    """Return (pos[3], yaw, scale) in RENDER axes.
+
+    PROVEN against real chapter2slums data + prop_instance_xform @ LevelLoader.cpp:1328
+    (ghidra_out/model_glue_lmp_format.txt section D): the loader swaps game(x,y,z) ->
+    render(x,z,y); type-2 uses the sin/cos path (values[6]=sin, [7]=cos yaw); type-21 is
+    pre-normalised (yaw_sin_cos + scale).
+    """
+    if block["kind"] == 2:
+        v = inst["values"]
+        pos = (v[0], v[2], v[1])
+        yaw = math.atan2(v[6], v[7])
+        scale = v[9] if v[9] and v[9] > 0.0 else 1.0
+    else:  # type-21 (already normalised: pos + yaw_sin_cos + scale)
+        p = inst["pos"]
+        pos = (p[0], p[2], p[1])
+        s, c = inst.get("yaw_sin_cos", (0.0, 1.0))
+        yaw = math.atan2(s, c)
+        scale = inst.get("scale", 1.0) or 1.0
+    return pos, yaw, scale
+
+
+def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
+               out_scene: Path, types=(2, 21), max_per_block=None, log=print) -> dict:
+    """Stage 2: glue every prop model (header++body) and merge instances into one F2SCENE.
+
+    Data-driven from ghidra_out/model_glue_lmp_format.txt (the RE'd glue) — no guessing.
+    Skips (with a warning) any model whose bank entry is missing or whose MDL body uses a
+    stride fable_mdl_format doesn't yet decode (e.g. some foliage), so type-2 landmarks
+    still render.
+    """
+    import subprocess, sys as _sys, tempfile
+    addon = Path(__file__).resolve().parents[2] / "Fable2AssetBrowser" / "source" / "addons"
+    _sys.path.insert(0, str(addon))
+    import fable_mdl_format as mdl  # noqa: E402
+    from cook_mdl import add_normals, texture_token  # reuse the per-MDL emit helpers
+
+    info = parse_engine_level(engine_level.read_bytes())
+    hidx = _bnk_name_index(header_bnk)
+    bidx = _bnk_name_index(body_bnk)
+    tmp = Path(tempfile.mkdtemp(prefix="f2cook_"))
+
+    def extract(bnk: Path, exact: str, tag: str) -> bytes:
+        dst = tmp / tag
+        subprocess.run([str(f2tool), "extract", str(bnk), exact, str(dst)],
+                       check=True, capture_output=True)
+        return dst.read_bytes()
+
+    # Cook each DISTINCT model once -> list of geoms (positions/indices/uvs/textures).
+    model_geoms: dict[str, list] = {}
+
+    def cook_model(model_path: str):
+        key = _norm(model_path)
+        if key in model_geoms:
+            return model_geoms[key]
+        he = _resolve(hidx, model_path)
+        be = _resolve(bidx, model_path)
+        if not he or not be:
+            log(f"  skip (no bank entry): {model_path}")
+            model_geoms[key] = None
+            return None
+        try:
+            glued = extract(header_bnk, he, "h.bin") + extract(body_bnk, be, "b.bin")
+            _, geoms = mdl.parse(glued, log=lambda m: None)
+        except Exception as exc:  # noqa: BLE001 - want to skip-and-continue
+            log(f"  skip ({type(exc).__name__}): {model_path}")
+            model_geoms[key] = None
+            return None
+        model_geoms[key] = geoms or None
+        return model_geoms[key]
+
+    # First pass: cook models + assign stable mesh/material names.
+    mesh_names: dict[str, list] = {}   # model key -> [mesh_name per geom]
+    materials, meshes = [], []          # F2SCENE material / mesh records
+    for block in info["prop_blocks"]:
+        if block["kind"] not in types or not block.get("model"):
+            continue
+        key = _norm(block["model"])
+        if key in mesh_names:
+            continue
+        geoms = cook_model(block["model"])
+        if not geoms:
+            mesh_names[key] = None
+            continue
+        mid = len(mesh_names)
+        names = []
+        for gi, g in enumerate(geoms):
+            mat_idx = len(materials)
+            opts = []
+            for attr, tok in (("diffuse", "albedo"), ("normal_tex", "normal"),
+                              ("specular_tex", "material")):
+                val = getattr(g, attr, "")
+                if val:
+                    opts.append(f"{tok}={texture_token(val)}")
+            materials.append((f"mat_{mid}_{gi}", opts))
+            positions = g.positions
+            normals = g.normals or add_normals(positions, g.indices)
+            name = f"m{mid}_{gi}"
+            names.append(name)
+            meshes.append((name, mat_idx, positions, normals, g.uvs, g.indices))
+        mesh_names[key] = names
+
+    # Second pass: one instance record per (instance x geom-mesh).
+    instances, n_inst, n_blocks = [], 0, 0
+    for block in info["prop_blocks"]:
+        if block["kind"] not in types or not block.get("model"):
+            continue
+        names = mesh_names.get(_norm(block["model"]))
+        if not names:
+            continue
+        n_blocks += 1
+        insts = block["instances"]
+        if max_per_block:
+            insts = insts[:max_per_block]
+        for inst in insts:
+            pos, yaw, scale = _instance_transform(block, inst)
+            for name in names:
+                instances.append((name, pos, yaw, scale))
+            n_inst += 1
+
+    # Emit F2SCENE (matches native_scene.cpp load_native_scene grammar).
+    with out_scene.open("w", encoding="utf-8", newline="\n") as out:
+        out.write(f"# Cooked from {engine_level.name} (v{info['version']}) — "
+                  f"{len(meshes)} meshes / {n_inst} instances / {n_blocks} blocks\n")
+        out.write("F2SCENE 1\n")
+        out.write("sun -0.4 -0.82 -0.4\n")
+        out.write("sky 0.52 0.62 0.78 1\n")
+        for name, opts in materials:
+            out.write(f"material {name} 0.72 0.72 0.72 1" + ("".join(" " + o for o in opts)) + "\n")
+        for name, mat_idx, positions, normals, uvs, indices in meshes:
+            out.write(f"mesh {name} {len(positions) // 3} {len(indices)} {mat_idx}\n")
+            for vi in range(len(positions) // 3):
+                px, py, pz = positions[vi * 3:vi * 3 + 3]
+                nx, ny, nz = normals[vi * 3:vi * 3 + 3]
+                u, v = (uvs[vi * 2:vi * 2 + 2] if uvs else (0.0, 0.0))
+                # Model verts are in game space (Z-up); the engine renders Y-up via
+                # game_vec_to_xform_axes(x,y,z)={x,z,y}. Apply the SAME swap the instance
+                # positions use, so buildings stand upright instead of lying sideways.
+                out.write(f"vertex {px:.9g} {pz:.9g} {py:.9g} {nx:.9g} {nz:.9g} {ny:.9g} "
+                          f"{u:.9g} {v:.9g}\n")
+            for idx in indices:
+                out.write(f"index {idx}\n")
+        for name, pos, yaw, scale in instances:
+            out.write(f"instance {name} {pos[0]:.9g} {pos[1]:.9g} {pos[2]:.9g} "
+                      f"0 {yaw:.9g} 0 {scale:.9g}\n")
+
+    log(f"cooked {len(meshes)} meshes, {n_inst} instances ({n_blocks} blocks) -> {out_scene}")
+    return {"meshes": len(meshes), "instances": n_inst, "blocks": n_blocks}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("engine_level", type=Path, help="path to a *.engine_level file")
     ap.add_argument("--json", type=Path, help="write the full manifest as JSON")
+    ap.add_argument("--cook", type=Path, metavar="OUT.f2scene",
+                    help="stage 2: glue prop models + merge instances into one F2SCENE")
+    ap.add_argument("--header-bnk", type=Path, help="globals_model_headers.bnk (MeshFile headers)")
+    ap.add_argument("--body-bnk", type=Path, help="the level's <scenario>_models.bnk (polymsh bodies)")
+    ap.add_argument("--f2tool", type=Path,
+                    default=Path(__file__).resolve().parents[2] / "Fable2AssetBrowser" / "source"
+                    / "build" / "f2tool.exe", help="f2tool.exe (decompresses body entries)")
+    ap.add_argument("--types", default="2,21", help="prop block types to cook (default 2,21)")
+    ap.add_argument("--max-per-block", type=int, help="cap instances per block (for quick tests)")
     args = ap.parse_args()
 
     data = args.engine_level.read_bytes()
     info = parse_engine_level(data)
 
     total_inst = sum(len(b["instances"]) for b in info["prop_blocks"])
+    # Distinct models = the stage-2 cook workload: each unique MDL is cooked once,
+    # then reused across all its instances (32 meshes vs 7011 for chapter2slums).
+    distinct = sorted({b["model"].lower() for b in info["prop_blocks"] if b.get("model")})
     print(f"LevelGraphicsFile v{info['version']}  entries={info['entry_count']}  "
           f"entry_types={info['entry_types']}")
-    print(f"prop_blocks={len(info['prop_blocks'])}  total_instances={total_inst}")
+    print(f"prop_blocks={len(info['prop_blocks'])}  distinct_models={len(distinct)}  "
+          f"total_instances={total_inst}")
     for b in info["prop_blocks"][:20]:
         first = b["instances"][0]["pos"] if b["instances"] else []
         print(f"  [type {b['kind']:>2}] {len(b['instances']):>5} x  {b['model']}"
@@ -234,6 +430,13 @@ def main() -> int:
     if args.json:
         args.json.write_text(json.dumps(info, indent=1), encoding="utf-8")
         print(f"-> {args.json}")
+
+    if args.cook:
+        if not args.header_bnk or not args.body_bnk:
+            ap.error("--cook requires --header-bnk and --body-bnk")
+        types = tuple(int(t) for t in args.types.split(","))
+        cook_level(args.engine_level, args.header_bnk, args.body_bnk, args.f2tool,
+                   args.cook, types=types, max_per_block=args.max_per_block)
     return 0
 
 

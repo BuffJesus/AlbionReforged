@@ -15,6 +15,8 @@
 
 #include <windows.h>
 #include <d3d12.h>
+#include <d3d12sdklayers.h>
+#include <cstdlib>
 #include <dxgi1_6.h>
 #include <shellapi.h>
 #include <shobjidl.h>
@@ -266,6 +268,9 @@ public:
             }
         }
         if (command_line_flag(L"--show-fps")) game_.frontend.set_fps_display_enabled(true);
+        if (command_line_flag(L"--start-world")) {
+            game_.frontend.debug_jump_to(f2::FrontendState::World);
+        }
         if (com_initialized) CoUninitialize();
         if (!create_device()) return false;
         std::string renderer_error;
@@ -389,6 +394,13 @@ private:
     }
 
     bool create_device() {
+        // Opt-in D3D12 debug layer (FABLE2NATIVE_D3D_DEBUG=1): validates every call and
+        // lets us drain the real GPU errors instead of guessing why a draw produced nothing.
+        if (std::getenv("FABLE2NATIVE_D3D_DEBUG")) {
+            ComPtr<ID3D12Debug> debug;
+            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) debug->EnableDebugLayer();
+            d3d_debug_enabled_ = true;
+        }
         ComPtr<IDXGIFactory7> factory;
         if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) return false;
         ComPtr<IDXGIAdapter4> adapter;
@@ -411,6 +423,8 @@ private:
                 FAILED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0,
                                          IID_PPV_ARGS(&device_)))) return false;
         }
+
+        if (d3d_debug_enabled_) device_.As(&info_queue_);
 
         D3D12_COMMAND_QUEUE_DESC queue_desc{};
         queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -1261,12 +1275,14 @@ private:
         const D3D12_CPU_DESCRIPTOR_HANDLE target_rtv = msaa ? msaa_rtv_ : frame.rtv;
         command_list_->OMSetRenderTargets(1, &target_rtv, FALSE, nullptr);
         command_list_->ClearRenderTargetView(target_rtv, clear.data(), 0, nullptr);
+        // Bind the SRV heap BEFORE any draw: the world renderer sets a root descriptor
+        // table (its material textures), which requires the heap already bound.
+        ID3D12DescriptorHeap* heaps[] = {descriptor_heap_.Get()};
+        command_list_->SetDescriptorHeaps(1, heaps);
         if (state == f2::FrontendState::World) {
             world_renderer_.render(command_list_.Get(), game_.scene, width_, height_,
                                    game_.elapsed_seconds);
         }
-        ID3D12DescriptorHeap* heaps[] = {descriptor_heap_.Get()};
-        command_list_->SetDescriptorHeaps(1, heaps);
         if (state == f2::FrontendState::MainMenu || state == f2::FrontendState::ChooseCard ||
             state == f2::FrontendState::Options) {
             render_native_main_menu(command_list_.Get());
@@ -1315,6 +1331,25 @@ private:
         queue_->ExecuteCommandLists(1, lists);
         swap_chain_->Present(1, 0);
         wait_for_gpu();
+        drain_d3d_debug();
+    }
+
+    void drain_d3d_debug() {
+        if (!info_queue_) return;
+        const UINT64 n = info_queue_->GetNumStoredMessages();
+        if (n == 0) return;
+        std::ofstream log("d3d_debug.log", std::ios::app);
+        for (UINT64 i = 0; i < n; ++i) {
+            SIZE_T len = 0;
+            info_queue_->GetMessage(i, nullptr, &len);
+            std::vector<char> buf(len);
+            auto* msg = reinterpret_cast<D3D12_MESSAGE*>(buf.data());
+            if (SUCCEEDED(info_queue_->GetMessage(i, msg, &len))) {
+                log << "[D3D12 sev=" << msg->Severity << " id=" << msg->ID << "] "
+                    << std::string(msg->pDescription, msg->DescriptionByteLength) << "\n";
+            }
+        }
+        info_queue_->ClearStoredMessages();
     }
 
     void wait_for_gpu() {
@@ -1389,6 +1424,8 @@ private:
     f2::NativeInputRouter input_;
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12CommandQueue> queue_;
+    bool d3d_debug_enabled_ = false;
+    ComPtr<ID3D12InfoQueue> info_queue_;
     ComPtr<IDXGISwapChain4> swap_chain_;
     ComPtr<ID3D12DescriptorHeap> rtv_heap_;
     ComPtr<ID3D12DescriptorHeap> descriptor_heap_;

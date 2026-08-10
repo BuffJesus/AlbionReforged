@@ -73,6 +73,21 @@ std::array<float, 4> material_color(const NativeScene& scene, std::uint32_t inde
     return {0.25f, 0.65f, 0.95f, 1.0f};
 }
 
+// Place a model-local vertex: scale, then Euler-rotate (Rz*Ry*Rx), then translate.
+// Cooked level instances carry yaw in rotation[1] (prop_instance_xform, LevelLoader.cpp:1328).
+std::array<float, 3> place_vertex(const std::array<float, 3>& p,
+                                  const std::array<float, 3>& rot, float scale,
+                                  const std::array<float, 3>& translate) {
+    const float x = p[0] * scale, y = p[1] * scale, z = p[2] * scale;
+    const float cx = std::cos(rot[0]), sx = std::sin(rot[0]);
+    const float y1 = y * cx - z * sx, z1 = y * sx + z * cx;
+    const float cy = std::cos(rot[1]), sy = std::sin(rot[1]);
+    const float x2 = x * cy + z1 * sy, z2 = -x * sy + z1 * cy;
+    const float cz = std::cos(rot[2]), sz = std::sin(rot[2]);
+    const float x3 = x2 * cz - y1 * sz, y3 = x2 * sz + y1 * cz;
+    return {x3 + translate[0], y3 + translate[1], z2 + translate[2]};
+}
+
 Geometry make_geometry(const NativeScene& scene) {
     Geometry geometry;
     for (const auto& instance : scene.instances) {
@@ -81,12 +96,9 @@ Geometry make_geometry(const NativeScene& scene) {
         const auto color = material_color(scene, mesh.material);
         const auto base = static_cast<std::uint32_t>(geometry.vertices.size());
         for (const auto& source : mesh.vertices) {
-            geometry.vertices.push_back({
-                {source.position[0] * instance.scale + instance.position[0],
-                 source.position[1] * instance.scale + instance.position[1],
-                 source.position[2] * instance.scale + instance.position[2]},
-                color,
-                source.uv});
+            const auto world = place_vertex(source.position, instance.rotation,
+                                            instance.scale, instance.position);
+            geometry.vertices.push_back({world, color, source.uv});
         }
         const auto first_index = static_cast<std::uint32_t>(geometry.indices.size());
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);

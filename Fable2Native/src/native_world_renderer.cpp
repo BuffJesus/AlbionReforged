@@ -56,12 +56,14 @@ D3D12_RESOURCE_DESC buffer_description(std::size_t size) {
 D3D12_RASTERIZER_DESC rasterizer_description() {
     D3D12_RASTERIZER_DESC description{};
     description.FillMode = D3D12_FILL_MODE_SOLID;
-    description.CullMode = D3D12_CULL_MODE_BACK;
+    // Draw both faces: the MDL triangle-strip winding (0xFFFF restart, per-step flip)
+    // doesn't map cleanly to a single front-face convention yet.
+    description.CullMode = D3D12_CULL_MODE_NONE;
     description.FrontCounterClockwise = FALSE;
     description.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
     description.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
     description.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
-    description.DepthClipEnable = TRUE;
+    description.DepthClipEnable = FALSE;  // no depth buffer; don't clip on the z row
     description.MultisampleEnable = FALSE;
     description.AntialiasedLineEnable = FALSE;
     description.ForcedSampleCount = 0;
@@ -105,6 +107,22 @@ std::array<float, 4> material_color(const NativeScene& scene, std::uint32_t inde
     return {0.25f, 0.65f, 0.95f, 1.0f};
 }
 
+// Place a model-local vertex into the world: scale, then Euler-rotate (Rz*Ry*Rx),
+// then translate. Cooked level instances (cook_levels.py) carry yaw in rotation[1]
+// about the world up axis — prop_instance_xform @ LevelLoader.cpp:1328.
+std::array<float, 3> place_vertex(const std::array<float, 3>& p,
+                                  const std::array<float, 3>& rot, float scale,
+                                  const std::array<float, 3>& translate) {
+    const float x = p[0] * scale, y = p[1] * scale, z = p[2] * scale;
+    const float cx = std::cos(rot[0]), sx = std::sin(rot[0]);
+    const float y1 = y * cx - z * sx, z1 = y * sx + z * cx;
+    const float cy = std::cos(rot[1]), sy = std::sin(rot[1]);
+    const float x2 = x * cy + z1 * sy, z2 = -x * sy + z1 * cy;
+    const float cz = std::cos(rot[2]), sz = std::sin(rot[2]);
+    const float x3 = x2 * cz - y1 * sz, y3 = x2 * sz + y1 * cz;
+    return {x3 + translate[0], y3 + translate[1], z2 + translate[2]};
+}
+
 Geometry make_geometry(const NativeScene& scene) {
     Geometry geometry;
     for (const auto& instance : scene.instances) {
@@ -113,12 +131,9 @@ Geometry make_geometry(const NativeScene& scene) {
         const auto color = material_color(scene, mesh.material);
         const auto base = static_cast<std::uint32_t>(geometry.vertices.size());
         for (const auto& source : mesh.vertices) {
-            geometry.vertices.push_back({
-                {source.position[0] * instance.scale + instance.position[0],
-                 source.position[1] * instance.scale + instance.position[1],
-                 source.position[2] * instance.scale + instance.position[2]},
-                color,
-                source.uv});
+            const auto world = place_vertex(source.position, instance.rotation,
+                                            instance.scale, instance.position);
+            geometry.vertices.push_back({world, color, source.uv});
         }
         const auto first_index = static_cast<std::uint32_t>(geometry.indices.size());
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
@@ -295,6 +310,22 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
         error = "The native world has no renderable geometry.";
         return false;
     }
+    // Fit the camera to the baked world-space geometry (a cooked level spans hundreds
+    // of units; the test pyramid spans a few) so render() frames whatever we loaded.
+    {
+        std::array<float, 3> lo{geometry.vertices[0].position};
+        std::array<float, 3> hi = lo;
+        for (const auto& v : geometry.vertices) {
+            for (int a = 0; a < 3; ++a) {
+                lo[a] = std::min(lo[a], v.position[a]);
+                hi[a] = std::max(hi[a], v.position[a]);
+            }
+        }
+        for (int a = 0; a < 3; ++a) scene_center_[a] = 0.5f * (lo[a] + hi[a]);
+        float r = 0.0f;
+        for (int a = 0; a < 3; ++a) r = std::max(r, 0.5f * (hi[a] - lo[a]));
+        scene_radius_ = std::max(r, 1.0f);
+    }
     if (!create_upload_buffer(device, geometry.vertices.data(),
                               geometry.vertices.size() * sizeof(Vertex), vertex_buffer_, error) ||
         !create_upload_buffer(device, geometry.indices.data(),
@@ -349,7 +380,7 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     Microsoft::WRL::ComPtr<ID3DBlob> pixel_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> shader_errors;
     constexpr char shader_source[] = R"(
-cbuffer Camera : register(b0) { float4x4 view_projection; };
+cbuffer Camera : register(b0) { row_major float4x4 view_projection; };
 Texture2D albedo : register(t0);
 SamplerState albedo_sampler : register(s0);
 struct VSInput { float3 position : POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; };
@@ -428,6 +459,7 @@ float4 ps_main(PSInput input) : SV_TARGET { return input.color * albedo.Sample(a
     pipeline.NumRenderTargets = 1;
     pipeline.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     pipeline.SampleDesc.Count = 1;
+    pipeline.SampleMask = 0xFFFFFFFFu;  // 0 (zero-init default) writes no samples -> nothing renders
     pipeline.RasterizerState = rasterizer_description();
     pipeline.BlendState = blend_description();
     pipeline.DepthStencilState.DepthEnable = FALSE;
@@ -453,8 +485,11 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     if (!pipeline_state_ || width == 0 || height == 0) return;
 
     const float angle = static_cast<float>(elapsed_seconds * 0.25);
-    const std::array<float, 3> eye{std::sin(angle) * 7.0f, 4.0f, std::cos(angle) * 7.0f};
-    const std::array<float, 3> target{0.0f, 0.7f, 0.0f};
+    const float dist = scene_radius_ * 2.4f;
+    const std::array<float, 3> eye{scene_center_[0] + std::sin(angle) * dist,
+                                   scene_center_[1] + dist * 0.55f,
+                                   scene_center_[2] + std::cos(angle) * dist};
+    const std::array<float, 3> target{scene_center_[0], scene_center_[1], scene_center_[2]};
     const std::array<float, 3> up{0.0f, 1.0f, 0.0f};
     const auto forward = normalise(subtract(target, eye));
     const auto right = normalise(cross(up, forward));
@@ -465,8 +500,8 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
     const float y_scale = 1.0f / std::tan(0.5f);
     const float x_scale = y_scale / aspect;
-    const float near_plane = 0.1f;
-    const float far_plane = 100.0f;
+    const float near_plane = std::max(0.1f, scene_radius_ * 0.05f);
+    const float far_plane = scene_radius_ * 8.0f + 10.0f;
     Constants constants{};
     constants.view_projection[0][0] = right[0] * x_scale;
     constants.view_projection[1][0] = right[1] * x_scale;
@@ -480,12 +515,20 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     constants.view_projection[1][2] = forward[1] * far_plane / (far_plane - near_plane);
     constants.view_projection[2][2] = forward[2] * far_plane / (far_plane - near_plane);
     constants.view_projection[3][2] =
-        (near_plane * eye_dot_forward * far_plane) / (far_plane - near_plane);
+        -(far_plane * (eye_dot_forward + near_plane)) / (far_plane - near_plane);
     constants.view_projection[0][3] = forward[0];
     constants.view_projection[1][3] = forward[1];
     constants.view_projection[2][3] = forward[2];
     constants.view_projection[3][3] = -eye_dot_forward;
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
+
+    // The world render must set its OWN viewport/scissor — nothing else does before it,
+    // and an unset (0x0) viewport rasterises no pixels (silent: no validation error).
+    const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width),
+                                  static_cast<float>(height), 0.0f, 1.0f};
+    const D3D12_RECT scissor{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    command_list->RSSetViewports(1, &viewport);
+    command_list->RSSetScissorRects(1, &scissor);
 
     command_list->SetPipelineState(pipeline_state_.Get());
     command_list->SetGraphicsRootSignature(root_signature_.Get());

@@ -85,6 +85,9 @@ public:
     // drawing the counter each frame when enabled.
     [[nodiscard]] bool fps_display_enabled() const noexcept { return fps_display_enabled_; }
     void set_fps_display_enabled(bool enabled) noexcept { fps_display_enabled_ = enabled; }
+    // Test/tooling hook: force a state directly (e.g. --start-world for a cooked-level
+    // screenshot) without scripting the timed intro->title->menu->loading path.
+    void debug_jump_to(FrontendState next) { enter(next); }
     [[nodiscard]] int sounds_volume() const noexcept { return sounds_volume_; }
     [[nodiscard]] int music_volume() const noexcept { return music_volume_; }
     [[nodiscard]] int voice_volume() const noexcept { return voice_volume_; }
