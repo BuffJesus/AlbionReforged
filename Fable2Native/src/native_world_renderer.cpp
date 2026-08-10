@@ -14,12 +14,14 @@ namespace {
 
 struct Vertex {
     std::array<float, 3> position{};
+    std::array<float, 3> normal{0.0f, 1.0f, 0.0f};
     std::array<float, 4> color{};
     std::array<float, 2> uv{};
 };
 
 struct Constants {
     float view_projection[4][4]{};
+    float sun_direction[4]{0.0f, -1.0f, 0.0f, 0.0f};  // xyz = normalised light dir (world), w unused
 };
 
 struct Geometry {
@@ -63,7 +65,7 @@ D3D12_RASTERIZER_DESC rasterizer_description() {
     description.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
     description.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
     description.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
-    description.DepthClipEnable = FALSE;  // no depth buffer; don't clip on the z row
+    description.DepthClipEnable = TRUE;  // real D32 depth buffer; clip on the z row
     description.MultisampleEnable = FALSE;
     description.AntialiasedLineEnable = FALSE;
     description.ForcedSampleCount = 0;
@@ -133,7 +135,10 @@ Geometry make_geometry(const NativeScene& scene) {
         for (const auto& source : mesh.vertices) {
             const auto world = place_vertex(source.position, instance.rotation,
                                             instance.scale, instance.position);
-            geometry.vertices.push_back({world, color, source.uv});
+            // Rotate the normal into world space (uniform scale + no translation).
+            const auto world_normal = normalise(
+                place_vertex(source.normal, instance.rotation, 1.0f, {0.0f, 0.0f, 0.0f}));
+            geometry.vertices.push_back({world, world_normal, color, source.uv});
         }
         const auto first_index = static_cast<std::uint32_t>(geometry.indices.size());
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
@@ -147,11 +152,11 @@ Geometry make_geometry(const NativeScene& scene) {
     // Asset-free fallback: a small floor and pyramid prove the native world
     // handoff before a cooked level is available.
     geometry.vertices = {
-        {{-2.0f, 0.0f, -2.0f}, {0.18f, 0.30f, 0.42f, 1.0f}},
-        {{2.0f, 0.0f, -2.0f}, {0.18f, 0.30f, 0.42f, 1.0f}},
-        {{2.0f, 0.0f, 2.0f}, {0.18f, 0.30f, 0.42f, 1.0f}},
-        {{-2.0f, 0.0f, 2.0f}, {0.18f, 0.30f, 0.42f, 1.0f}},
-        {{0.0f, 2.0f, 0.0f}, {0.95f, 0.62f, 0.18f, 1.0f}},
+        {{-2.0f, 0.0f, -2.0f}, {0.0f, 1.0f, 0.0f}, {0.18f, 0.30f, 0.42f, 1.0f}, {}},
+        {{2.0f, 0.0f, -2.0f}, {0.0f, 1.0f, 0.0f}, {0.18f, 0.30f, 0.42f, 1.0f}, {}},
+        {{2.0f, 0.0f, 2.0f}, {0.0f, 1.0f, 0.0f}, {0.18f, 0.30f, 0.42f, 1.0f}, {}},
+        {{-2.0f, 0.0f, 2.0f}, {0.0f, 1.0f, 0.0f}, {0.18f, 0.30f, 0.42f, 1.0f}, {}},
+        {{0.0f, 2.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.95f, 0.62f, 0.18f, 1.0f}, {}},
     };
     geometry.indices = {0, 1, 2, 0, 2, 3, 0, 4, 1, 1, 4, 2,
                         2, 4, 3, 3, 4, 0};
@@ -380,19 +385,28 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     Microsoft::WRL::ComPtr<ID3DBlob> pixel_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> shader_errors;
     constexpr char shader_source[] = R"(
-cbuffer Camera : register(b0) { row_major float4x4 view_projection; };
+cbuffer Camera : register(b0) { row_major float4x4 view_projection; float4 sun_direction; };
 Texture2D albedo : register(t0);
 SamplerState albedo_sampler : register(s0);
-struct VSInput { float3 position : POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; };
-struct PSInput { float4 position : SV_POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; };
+struct VSInput { float3 position : POSITION; float3 normal : NORMAL; float4 color : COLOR; float2 uv : TEXCOORD0; };
+struct PSInput { float4 position : SV_POSITION; float3 normal : NORMAL; float4 color : COLOR; float2 uv : TEXCOORD0; };
 PSInput vs_main(VSInput input) {
     PSInput output;
     output.position = mul(float4(input.position, 1.0), view_projection);
+    output.normal = input.normal;
     output.color = input.color;
     output.uv = input.uv;
     return output;
 }
-float4 ps_main(PSInput input) : SV_TARGET { return input.color * albedo.Sample(albedo_sampler, input.uv); }
+float4 ps_main(PSInput input) : SV_TARGET {
+    float3 n = normalize(input.normal);
+    // Diffuse against the incoming sun direction; a hemisphere ambient term keeps
+    // faces in shadow readable (and lets depth-sorted surfaces separate visually).
+    float ndl = saturate(dot(n, -sun_direction.xyz));
+    float light = 0.35 + 0.65 * ndl;
+    float4 base = input.color * albedo.Sample(albedo_sampler, input.uv);
+    return float4(base.rgb * light, base.a);
+}
 )";
     const auto compile = [&](const char* entry, const char* target,
                              Microsoft::WRL::ComPtr<ID3DBlob>& blob) {
@@ -408,7 +422,7 @@ float4 ps_main(PSInput input) : SV_TARGET { return input.color * albedo.Sample(a
     D3D12_ROOT_PARAMETER root_parameters[2]{};
     root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     root_parameters[0].Descriptor.ShaderRegister = 0;
-    root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // PS reads sun_direction too
     D3D12_DESCRIPTOR_RANGE texture_range{};
     texture_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     texture_range.NumDescriptors = 1;
@@ -445,9 +459,11 @@ float4 ps_main(PSInput input) : SV_TARGET { return input.color * albedo.Sample(a
     const D3D12_INPUT_ELEMENT_DESC input_layout[] = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-        {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12,
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 28,
+        {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24,
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40,
          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
     };
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pipeline{};
@@ -462,8 +478,11 @@ float4 ps_main(PSInput input) : SV_TARGET { return input.color * albedo.Sample(a
     pipeline.SampleMask = 0xFFFFFFFFu;  // 0 (zero-init default) writes no samples -> nothing renders
     pipeline.RasterizerState = rasterizer_description();
     pipeline.BlendState = blend_description();
-    pipeline.DepthStencilState.DepthEnable = FALSE;
+    pipeline.DepthStencilState.DepthEnable = TRUE;
+    pipeline.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    pipeline.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     pipeline.DepthStencilState.StencilEnable = FALSE;
+    pipeline.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     if (FAILED(device->CreateGraphicsPipelineState(&pipeline, IID_PPV_ARGS(&pipeline_state_)))) {
         error = "The native world pipeline could not be created.";
         return false;
@@ -480,7 +499,7 @@ float4 ps_main(PSInput input) : SV_TARGET { return input.color * albedo.Sample(a
 }
 
 void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
-                                 const NativeScene&, std::uint32_t width,
+                                 const NativeScene& scene, std::uint32_t width,
                                  std::uint32_t height, double elapsed_seconds) {
     if (!pipeline_state_ || width == 0 || height == 0) return;
 
@@ -520,6 +539,11 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     constants.view_projection[1][3] = forward[1];
     constants.view_projection[2][3] = forward[2];
     constants.view_projection[3][3] = -eye_dot_forward;
+    const auto sun = normalise(scene.sun_direction);
+    constants.sun_direction[0] = sun[0];
+    constants.sun_direction[1] = sun[1];
+    constants.sun_direction[2] = sun[2];
+    constants.sun_direction[3] = 0.0f;
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     // The world render must set its OWN viewport/scissor — nothing else does before it,

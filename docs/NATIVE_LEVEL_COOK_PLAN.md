@@ -127,12 +127,24 @@ Verify: run on the extracted `chapter2slums.engine_level`, then World `--scene` 
 - ✅ AXIS FIX (user-caught "everything laying sideways"): model verts are game-space Z-up; the engine
   renders Y-up via game_vec_to_xform_axes(x,y,z)={x,z,y}. The cooker now swaps vertex+normal axes the SAME
   way it already swapped instance positions → buildings stand UPRIGHT (peaked roofs/gables/spires visible).
-- REMAINING for a good-looking render (NEXT SESSION, in priority order): (a) DEPTH BUFFER — currently no
-  depth → buildings read as a flat merged grey silhouette (overdraw, no occlusion); add a D32 depth
-  texture+DSV, enable depth in the world pipeline, clear+bind it. THIS is the biggest visual win. (b)
-  `.tex` texture decode/cook → currently grey vertex-color fallback (albedo.Sample returns white); (c)
-  lighting (the sun dir is in the F2SCENE but the PS ignores normals); (d) foliage MDL strides in
-  fable_mdl_format (type-21 grass/trees skip with MdlParseError); (e) terrain heightfield mesh.
+- ✅ DEPTH + LIGHTING DONE (2026-08-10, D3D12, screenshot-verified) — (a)+(c) shipped together because
+  depth occlusion is INVISIBLE when every surface is flat grey (the "flat silhouette" was BOTH no-depth
+  AND no-shading). Now chapter2slums renders as real 3D (Fairfax castle/towers, townhouses, bridge/wall,
+  market structures) with correct occlusion + directional shading. Impl:
+  - Depth (`native_frontend_app.cpp`): `kDepthFormat=D32_FLOAT`; DSV heap + `create_depth_target()` (D32
+    tex, DEPTH_WRITE, clear 1.0) at swapchain-init + `resize()`; World branch rebinds `OMSetRenderTargets(
+    rtv,&dsv)` + `ClearDepthStencilView(1.0)` (frontend states stay depthless). Renderer pipeline:
+    DepthEnable/WriteMask ALL/LESS_EQUAL, DSVFormat D32, DepthClipEnable TRUE (projection already emits
+    standard [0,1] depth).
+  - Lighting (`native_world_renderer.cpp`): normals+sun_direction were already in the scene data, just
+    dropped. Added normal to the renderer Vertex/input-layout (POSITION 0/NORMAL 12/COLOR 24/TEXCOORD 40),
+    world-rotate the normal, pass normalized sun in the cbuffer (CBV vis VERTEX→ALL), PS lambert
+    `0.35+0.65*saturate(dot(n,-sun))`. D3D debug layer (FABLE2NATIVE_D3D_DEBUG=1) raised zero messages.
+- REMAINING for a good-looking render (NEXT SESSION, priority order): (b) `.tex` texture decode/cook →
+  currently grey vertex-color fallback (albedo.Sample returns white); on-ramp = untracked WIP
+  `tools/decode_large_ring.cpp`. (d) foliage MDL strides in fable_mdl_format (type-21 grass/trees skip with
+  MdlParseError); (e) terrain heightfield mesh; (f) VULKAN world-renderer parity — it's behind D3D12
+  (old origin-orbit camera, no scene-AABB fit, no depth attachment in its render pass, no lighting).
 
 ## Ground-truth references
 `ghidra_out/world_level_format.txt`, `newgame_handoff.txt`, `gdb_instantiation_re.txt`,

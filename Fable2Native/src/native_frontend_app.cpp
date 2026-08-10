@@ -41,6 +41,7 @@ namespace {
 
 constexpr UINT kFrameCount = 2;
 constexpr DXGI_FORMAT kBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
 constexpr UINT kUiTextureCount = 35;
 
 // Recovered from the retail ExpandableMenuFormatter LuaQ bytecode.  The
@@ -448,6 +449,11 @@ private:
         rtv_desc.NumDescriptors = kFrameCount + 1;  // +1 for the MSAA resolve target
         rtv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (FAILED(device_->CreateDescriptorHeap(&rtv_desc, IID_PPV_ARGS(&rtv_heap_)))) return false;
+        D3D12_DESCRIPTOR_HEAP_DESC dsv_desc{};
+        dsv_desc.NumDescriptors = 1;
+        dsv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+        if (FAILED(device_->CreateDescriptorHeap(&dsv_desc, IID_PPV_ARGS(&dsv_heap_)))) return false;
+        dsv_handle_ = dsv_heap_->GetCPUDescriptorHandleForHeapStart();
         D3D12_DESCRIPTOR_HEAP_DESC srv_desc{};
         srv_desc.NumDescriptors =
             f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 2;
@@ -470,6 +476,7 @@ private:
             device_->CreateRenderTargetView(frames_[i].render_target.Get(), nullptr, frames_[i].rtv);
         }
         msaa_rtv_ = handle;  // the extra RTV slot after the back buffers
+        create_depth_target();
         if (FAILED(device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
                                                frames_[0].allocator.Get(), nullptr,
                                                IID_PPV_ARGS(&command_list_))) ||
@@ -494,6 +501,7 @@ private:
             device_->CreateRenderTargetView(frames_[i].render_target.Get(), nullptr, frames_[i].rtv);
         }
         create_msaa_target();  // match the MSAA target to the new size
+        create_depth_target();  // match the depth buffer to the new size
     }
 
     // Real backend owner for the Options "Resolution" setting: when the user changes it, resize the
@@ -541,6 +549,37 @@ private:
             }
         }
         return 1;
+    }
+
+    // (Re)create the World depth buffer at the current size. A D32 depth-stencil view gives the
+    // world renderer real occlusion (without it the level draws as a flat merged silhouette).
+    void create_depth_target() {
+        depth_target_.Reset();
+        if (!device_ || width_ == 0 || height_ == 0) return;
+        D3D12_RESOURCE_DESC description{};
+        description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        description.Width = width_;
+        description.Height = height_;
+        description.DepthOrArraySize = 1;
+        description.MipLevels = 1;
+        description.Format = kDepthFormat;
+        description.SampleDesc.Count = 1;
+        description.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_CLEAR_VALUE clear{};
+        clear.Format = kDepthFormat;
+        clear.DepthStencil.Depth = 1.0f;
+        if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &description,
+                                                    D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear,
+                                                    IID_PPV_ARGS(&depth_target_)))) {
+            depth_target_.Reset();
+            return;
+        }
+        D3D12_DEPTH_STENCIL_VIEW_DESC view{};
+        view.Format = kDepthFormat;
+        view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        device_->CreateDepthStencilView(depth_target_.Get(), &view, dsv_handle_);
     }
 
     // (Re)create the multisampled resolve target at the current size + sample count. Released at 1x.
@@ -1280,6 +1319,13 @@ private:
         ID3D12DescriptorHeap* heaps[] = {descriptor_heap_.Get()};
         command_list_->SetDescriptorHeaps(1, heaps);
         if (state == f2::FrontendState::World) {
+            // Rebind the same color target WITH the depth buffer so the world renderer
+            // gets real occlusion (frontend states render depthless above).
+            if (depth_target_) {
+                command_list_->OMSetRenderTargets(1, &target_rtv, FALSE, &dsv_handle_);
+                command_list_->ClearDepthStencilView(dsv_handle_, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0,
+                                                     0, nullptr);
+            }
             world_renderer_.render(command_list_.Get(), game_.scene, width_, height_,
                                    game_.elapsed_seconds);
         }
@@ -1381,6 +1427,9 @@ private:
     UINT msaa_samples_ = 1;  // current MSAA sample count (1 = off)
     ComPtr<ID3D12Resource> msaa_target_;  // multisampled color target resolved into the back buffer
     D3D12_CPU_DESCRIPTOR_HANDLE msaa_rtv_{};
+    ComPtr<ID3D12Resource> depth_target_;  // D32 depth buffer for the World state (occlusion)
+    ComPtr<ID3D12DescriptorHeap> dsv_heap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle_{};
     UINT rtv_stride_ = 0;
     UINT descriptor_stride_ = 0;
     UINT video_descriptor_index_ = 0;

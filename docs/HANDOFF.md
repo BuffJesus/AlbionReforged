@@ -12,8 +12,13 @@ Commit `e16428d`.
   --body-bnk <extracted chapter2slums_models.bnk> --types 2`. Glue recipe = `ghidra_out/model_glue_lmp_format.txt`.
 - **Run:** `f2native_frontend.exe --start-world --scene out.f2scene --game-dir <assets/game>`
   (`--start-world` = new test flag). Debug layer: env `FABLE2NATIVE_D3D_DEBUG=1` → `d3d_debug.log`.
-- **NEXT (priority):** (a) DEPTH BUFFER (currently flat grey silhouette, no occlusion — biggest visual win),
-  (b) `.tex` texture decode, (c) lighting, (d) foliage MDL strides in fable_mdl_format, (e) terrain.
+- **✅ DEPTH + LIGHTING DONE (2026-08-10, D3D12, screenshot-verified):** (a)+(c) shipped together — depth
+  occlusion is invisible on flat-grey surfaces, so both were needed to turn the grey silhouette into real
+  3D (Fairfax castle/towers, townhouses, bridge/wall). D32 DSV in `native_frontend_app.cpp` (World-only
+  bind); per-vertex normal + sun lambert in `native_world_renderer.cpp`. Debug layer clean. Details in
+  `NATIVE_LEVEL_COOK_PLAN.md` + memory `fable2native-level-cook-renders`.
+- **NEXT (priority):** (b) `.tex` texture decode (on-ramp: untracked `tools/decode_large_ring.cpp`),
+  (d) foliage MDL strides in fable_mdl_format, (e) terrain, (f) Vulkan world-renderer parity (behind D3D12).
 - New decomp specs this session: `ghidra_out/{model_glue_lmp_format,gdb_component_schemas,worldmap_travel_minigames,ingame_menu_live_achievements}.txt`.
 
 ## ▶▶ ACTIVE TRACK (2026-08-06) — RETAIL FRONTEND DECOMP → Fable2Native fidelity
