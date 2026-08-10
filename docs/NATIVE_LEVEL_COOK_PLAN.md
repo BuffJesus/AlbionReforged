@@ -149,16 +149,20 @@ Verify: run on the extracted `chapter2slums.engine_level`, then World `--scene` 
     of `--textures-bnk` containers (repeatable arg), `f2tool extract` the `.tex`, run `--tex-cook`
     (f2native_cook_lh_tex) → DDS in `<scene>.textures/`, emit `albedo=<abs-dds>` (runtime `resolve_texture`
     loads absolute paths directly → ZERO renderer change). Uncooked albedo/normal/spec tokens are dropped
-    so the material shows its flat base colour instead of sampling white. Verified: 15/27 chapter2slums
-    albedos cook; the townhouse cluster is visibly textured while the Fairfax castle (its `fc_*` in the
-    high-res pool) stays grey — exactly the container split, which confirms correctness.
-  - Repro: `cook_levels.py … --textures-bnk <globals_textures.bnk> --textures-bnk <level textures.bnk>`
-    (default `--tex-cook` = build/RelWithDebInfo/f2native_cook_lh_tex.exe).
-- REMAINING (NEXT SESSION, priority order): (b-cont) the OTHER textures (fairfax `fc_*`, `esa_facade_*`,
-  `bs_gatehouse_*`, `cliffg_*`) live in `Globals/1024mip0_textures.bnk` = comp-7 Xbox-TILED BCn needing
-  dims/pf from `Globals/globals_texture_headers.bnk`; `f2native_cook_lh_tex` already supports comp-7 via
-  `--pf/--width/--height`, so the cooker just needs to parse the 84-byte header per texture and pass them.
-  (c) sample the normal map (renderer PS ignores t1). (d) foliage MDL strides (type-21 skip). (e) terrain
+    so the material shows its flat base colour instead of sampling white. Verified: 20/27 chapter2slums
+    albedos cook (with 3 source bnks) and the townhouses + Fairfax castle + rocky cliff base all render
+    textured.
+  - The source bnks (ALL comp-1 self-contained — 1024mip0 is NOT comp-7 as first assumed): shared bs_*
+    in `Globals/globals_textures.bnk`; fairfax `fc_stone*`, `cliffg_*`, `bs_haunted_*` in
+    `Globals/1024mip0_textures.bnk`; foliage/ground in the level's own `textures.bnk`. Pass each with a
+    repeated `--textures-bnk`; searched in order.
+  - Repro: `cook_levels.py … --textures-bnk <globals_textures.bnk> --textures-bnk <1024mip0_textures.bnk>
+    --textures-bnk <level textures.bnk>` (default `--tex-cook` = build/RelWithDebInfo/f2native_cook_lh_tex.exe).
+- REMAINING (NEXT SESSION, priority order): (b-cont) the last 7 albedos (`esa_facade_window_*`,
+  `fc_rooftiles`, `fc_window_arched`, `bs_gatehouse_stone_*`) are in none of the 3 bnks searched — find
+  their container (maybe comp-7 tiled needing `globals_texture_headers.bnk`; `f2native_cook_lh_tex` already
+  supports comp-7 via `--pf/--width/--height`). (c) sample the normal map (renderer PS ignores t1). (d)
+  foliage MDL strides (type-21 skip). (e) terrain
   heightfield. (f) VULKAN world-renderer parity — behind D3D12 (old origin-orbit camera, no scene-AABB fit,
   no depth attachment in its render pass, no lighting, no textures).
 
