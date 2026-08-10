@@ -78,6 +78,25 @@ VERBATIM copy of BeReader + ParseEngineLevel (self-contained; no UI deps) → pr
 resolve+cook MDL (fable_mdl_format) → NativeMesh + `instance` per PropInstance transform → save_native_scene.
 Verify: run on the extracted `chapter2slums.engine_level`, then World `--scene` screenshot.
 
+## Cooker progress (2026-08-09, verified on real data)
+- ✅ PARSE STAGE DONE + VERIFIED: `Fable2Native/tools/cook_levels.py` (faithful port of ParseEngineLevel)
+  parses the REAL `albion\bwsslums\chapter2slums.engine_level`: v12, all 182 entries zero-desync,
+  177 prop blocks / 7011 instances (bs_townhouse/fairfaxcastle/bw_treelargeoak/glb_longgrass02 with real
+  world positions). Commit ee1e28f.
+- ✅ MODEL LOCATION FOUND: the prop `.mdl` models live in the LEVEL's OWN `<scenario>_streaming.bnk`
+  (chapter2slums_streaming.bnk = 499 `.mdl.gmd` + `.hkx` collision). Extract via f2tool. The referenced
+  `bs_townhouse_v1_facade_mid.mdl` = bnk entry `...BS_TownHouse_V1_Facade_Mid.mdl.gmd`.
+- ⚠ GEOMETRY STAGE (next, the deep layer): a `.mdl.gmd` is a 60-byte "GameMesh" v3 DESCRIPTOR, not the
+  mesh — the real vertex/index buffers are reassembled by the GLUE system from the level's `.lmp`
+  (level-mesh-pool, ~3MB) + streamed buffers. `cook_mdl.py`/`fable_mdl_format.parse` expect a GLUED (already
+  reassembled) MDL. So the geometry stage = implement/reuse the .gmd→.lmp glue (AssetBrowser's LevelLoader/
+  ModelParser do this for display; UI-tangled → needs a headless glue extraction) → glued MDL →
+  fable_mdl_format → NativeMesh → merge with cook_levels instances (type-2 = 20-float transform,
+  type-21 = normalized pos/yaw/scale) → save_native_scene. Then World `--scene` renders the real level.
+- INSTANCE TRANSFORM: type-21 instances are already normalized (pos + sin/cos yaw + scale). type-2 stores a
+  raw 20-float transform per instance — decode to pos/rot/scale for the F2SCENE `instance` (extract from the
+  20 floats; likely a 4x3/4x4 matrix — confirm against the renderer's expectation).
+
 ## Ground-truth references
 `ghidra_out/world_level_format.txt`, `newgame_handoff.txt`, `gdb_instantiation_re.txt`,
 `physics_collision_system.txt`, `hero_appearance_morph.txt`; `Fable2AssetBrowser/source/src/Level/
