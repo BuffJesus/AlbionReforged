@@ -272,6 +272,7 @@ public:
     int run() {
         MSG message{};
         auto previous = std::chrono::steady_clock::now();
+        last_resolution_index_ = game_.frontend.resolution_index();  // don't resize on the first frame
         while (message.message != WM_QUIT) {
             while (PeekMessageA(&message, nullptr, 0, 0, PM_REMOVE)) {
                 TranslateMessage(&message);
@@ -285,6 +286,7 @@ public:
             update_video();
             input_.poll();
             handle_input();
+            apply_resolution_setting();
             audio_.tick();
             const auto state = game_.frontend.state();
             audio_.set_music_enabled(game_.frontend.frontend_music_active() &&
@@ -680,6 +682,26 @@ private:
         if (input_.pressed(Action::Skip)) game_.frontend.dispatch(f2::FrontendAction::Skip);
     }
 
+    // Apply the Options "Resolution" setting by resizing the window; the WM_SIZE handler flags a
+    // framebuffer resize and draw() recreates the swapchain (mirrors the D3D12 frontend).
+    void apply_resolution_setting() {
+        const int index = game_.frontend.resolution_index();
+        if (index == last_resolution_index_) return;
+        last_resolution_index_ = index;
+        const UINT target_w = static_cast<UINT>(game_.frontend.resolution_width());
+        const UINT target_h = static_cast<UINT>(game_.frontend.resolution_height());
+        if (!window_ || target_w == 0 || target_h == 0 ||
+            (target_w == width_ && target_h == height_)) {
+            return;
+        }
+        RECT rect{0, 0, static_cast<LONG>(target_w), static_cast<LONG>(target_h)};
+        const DWORD style = static_cast<DWORD>(GetWindowLongPtrA(window_, GWL_STYLE));
+        const DWORD ex_style = static_cast<DWORD>(GetWindowLongPtrA(window_, GWL_EXSTYLE));
+        AdjustWindowRectEx(&rect, style, FALSE, ex_style);
+        SetWindowPos(window_, nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
+                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
     void update_video() {
         const auto state = game_.frontend.state();
         const bool video_state = state == f2::FrontendState::IntroVideo ||
@@ -1031,6 +1053,7 @@ private:
     UINT width_ = 1280;
     UINT height_ = 720;
     double current_fps_ = 0.0;  // smoothed FPS for the optional on-screen counter
+    int last_resolution_index_ = -1;  // tracks the applied Options "Resolution" value
     bool framebuffer_resized_ = false;
     bool com_initialized_ = false;
     bool video_runtime_started_ = false;
