@@ -38,8 +38,11 @@ struct NativeUiQuad {
 
 class NativeUiRenderer {
 public:
-    bool initialise(ID3D12Device* device, std::string& error);
+    // sample_count is the MSAA sample count the target render target uses (1 = no MSAA); the
+    // pipelines are baked for it, so re-initialise when the Anti-Aliasing option changes.
+    bool initialise(ID3D12Device* device, std::uint32_t sample_count, std::string& error);
     bool ready() const { return pipeline_state_ != nullptr; }
+    [[nodiscard]] std::uint32_t sample_count() const noexcept { return sample_count_; }
     void render(ID3D12GraphicsCommandList* command_list,
                 std::uint32_t width, std::uint32_t height,
                 const std::vector<NativeUiQuad>& quads);
@@ -74,6 +77,7 @@ private:
     D3D12_VERTEX_BUFFER_VIEW vertex_view_{};
     Vertex* mapped_vertices_ = nullptr;
     std::size_t vertex_capacity_ = 0;
+    std::uint32_t sample_count_ = 1;
 };
 
 }  // namespace f2

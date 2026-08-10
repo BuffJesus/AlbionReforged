@@ -284,11 +284,12 @@ public:
             return false;
         }
         std::string ui_renderer_error;
-        if (!native_ui_renderer_.initialise(device_.Get(), ui_renderer_error)) {
+        if (!native_ui_renderer_.initialise(device_.Get(), 1, ui_renderer_error)) {
             MessageBoxA(window_, ui_renderer_error.c_str(),
                         "Fable II Native - UI renderer failed", MB_OK | MB_ICONERROR);
             return false;
         }
+        apply_aa_setting();  // apply the default Anti-Aliasing option (rebuilds the UI PSOs + MSAA target)
 
         ShowWindow(window_, SW_SHOWDEFAULT);
         UpdateWindow(window_);
@@ -314,6 +315,7 @@ public:
             input_.poll();
             handle_input();
             apply_resolution_setting();
+            apply_aa_setting();
             audio_.tick();
             const auto state = game_.frontend.state();
             audio_.set_music_enabled(game_.frontend.frontend_music_active() &&
@@ -427,7 +429,7 @@ private:
         factory->MakeWindowAssociation(window_, DXGI_MWA_NO_ALT_ENTER);
 
         D3D12_DESCRIPTOR_HEAP_DESC rtv_desc{};
-        rtv_desc.NumDescriptors = kFrameCount;
+        rtv_desc.NumDescriptors = kFrameCount + 1;  // +1 for the MSAA resolve target
         rtv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (FAILED(device_->CreateDescriptorHeap(&rtv_desc, IID_PPV_ARGS(&rtv_heap_)))) return false;
         D3D12_DESCRIPTOR_HEAP_DESC srv_desc{};
@@ -451,6 +453,7 @@ private:
             if (FAILED(swap_chain_->GetBuffer(i, IID_PPV_ARGS(&frames_[i].render_target)))) return false;
             device_->CreateRenderTargetView(frames_[i].render_target.Get(), nullptr, frames_[i].rtv);
         }
+        msaa_rtv_ = handle;  // the extra RTV slot after the back buffers
         if (FAILED(device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
                                                frames_[0].allocator.Get(), nullptr,
                                                IID_PPV_ARGS(&command_list_))) ||
@@ -474,6 +477,7 @@ private:
             swap_chain_->GetBuffer(i, IID_PPV_ARGS(&frames_[i].render_target));
             device_->CreateRenderTargetView(frames_[i].render_target.Get(), nullptr, frames_[i].rtv);
         }
+        create_msaa_target();  // match the MSAA target to the new size
     }
 
     // Real backend owner for the Options "Resolution" setting: when the user changes it, resize the
@@ -496,6 +500,76 @@ private:
         SetWindowPos(window_, nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
                      SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         resize(target_w, target_h);  // idempotent if WM_SIZE already handled it
+    }
+
+    // Anti-Aliasing option index -> MSAA sample count (0 Off, 1 2x, 2 4x, 3 8x).
+    static UINT samples_for_aa(int index) {
+        switch (index) {
+        case 1: return 2;
+        case 2: return 4;
+        case 3: return 8;
+        default: return 1;
+        }
+    }
+
+    // Clamp a desired sample count down to what the device supports for the back-buffer format.
+    UINT supported_sample_count(UINT desired) const {
+        for (UINT s = desired; s > 1; s /= 2) {
+            D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS levels{};
+            levels.Format = kBackBufferFormat;
+            levels.SampleCount = s;
+            if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
+                                                       &levels, sizeof(levels))) &&
+                levels.NumQualityLevels > 0) {
+                return s;
+            }
+        }
+        return 1;
+    }
+
+    // (Re)create the multisampled resolve target at the current size + sample count. Released at 1x.
+    void create_msaa_target() {
+        msaa_target_.Reset();
+        if (msaa_samples_ <= 1 || !device_ || width_ == 0 || height_ == 0) return;
+        D3D12_RESOURCE_DESC description{};
+        description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        description.Width = width_;
+        description.Height = height_;
+        description.DepthOrArraySize = 1;
+        description.MipLevels = 1;
+        description.Format = kBackBufferFormat;
+        description.SampleDesc.Count = msaa_samples_;
+        description.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &description,
+                                                    D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
+                                                    IID_PPV_ARGS(&msaa_target_)))) {
+            msaa_target_.Reset();
+            msaa_samples_ = 1;  // fall back to no MSAA on allocation failure
+            return;
+        }
+        D3D12_RENDER_TARGET_VIEW_DESC view{};
+        view.Format = kBackBufferFormat;
+        view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DMS;
+        device_->CreateRenderTargetView(msaa_target_.Get(), &view, msaa_rtv_);
+    }
+
+    // Apply the Options "Anti-Aliasing" setting: rebuild the UI pipelines for the new sample count and
+    // (re)create the MSAA resolve target. No-op when the setting hasn't changed.
+    void apply_aa_setting() {
+        const int index = game_.frontend.anti_aliasing_index();
+        if (index == last_aa_index_ && msaa_target_) return;
+        if (index == last_aa_index_ && samples_for_aa(index) <= 1) return;
+        last_aa_index_ = index;
+        const UINT samples = supported_sample_count(samples_for_aa(index));
+        wait_for_gpu();
+        if (samples != native_ui_renderer_.sample_count()) {
+            std::string error;
+            native_ui_renderer_.initialise(device_.Get(), samples, error);
+        }
+        msaa_samples_ = samples;
+        create_msaa_target();
     }
 
     void update_video() {
@@ -1158,20 +1232,33 @@ private:
         command_list_->Reset(frame.allocator.Get(), nullptr);
         upload_video_frame(command_list_.Get());
         upload_ui_textures(command_list_.Get());
-        D3D12_RESOURCE_BARRIER barrier{};
-        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        barrier.Transition.pResource = frame.render_target.Get();
-        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-        command_list_->ResourceBarrier(1, &barrier);
         // The title wordmark reveals over BLACK before the winter panorama fades/scrolls in
         // (build_title fades the background in from ~5.9s).
         const std::array<float, 4> clear = state == f2::FrontendState::Title
                                                 ? std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}
                                                 : std::array<float, 4>{0.015f, 0.02f, 0.035f, 1.0f};
-        command_list_->OMSetRenderTargets(1, &frame.rtv, FALSE, nullptr);
-        command_list_->ClearRenderTargetView(frame.rtv, clear.data(), 0, nullptr);
+        const auto transition = [](ID3D12Resource* resource, D3D12_RESOURCE_STATES before,
+                                   D3D12_RESOURCE_STATES after) {
+            D3D12_RESOURCE_BARRIER b{};
+            b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b.Transition.pResource = resource;
+            b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            b.Transition.StateBefore = before;
+            b.Transition.StateAfter = after;
+            return b;
+        };
+        // MSAA (Options > Anti-Aliasing): render the frontend UI into a multisampled target and resolve
+        // it into the back buffer. World renders directly (its pipeline is single-sample).
+        const bool msaa =
+            msaa_samples_ > 1 && msaa_target_ && state != f2::FrontendState::World;
+        if (!msaa) {
+            const auto to_rt = transition(frame.render_target.Get(), D3D12_RESOURCE_STATE_PRESENT,
+                                          D3D12_RESOURCE_STATE_RENDER_TARGET);
+            command_list_->ResourceBarrier(1, &to_rt);
+        }
+        const D3D12_CPU_DESCRIPTOR_HANDLE target_rtv = msaa ? msaa_rtv_ : frame.rtv;
+        command_list_->OMSetRenderTargets(1, &target_rtv, FALSE, nullptr);
+        command_list_->ClearRenderTargetView(target_rtv, clear.data(), 0, nullptr);
         if (state == f2::FrontendState::World) {
             world_renderer_.render(command_list_.Get(), game_.scene, width_, height_,
                                    game_.elapsed_seconds);
@@ -1200,8 +1287,27 @@ private:
             native_ui_renderer_.render(command_list_.Get(), width_, height_, scene.quads(),
                                        [this](f2::render::TextureId id) { return resolve_ui_texture(id); });
         }
-        std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
-        command_list_->ResourceBarrier(1, &barrier);
+        if (msaa) {
+            const D3D12_RESOURCE_BARRIER pre[] = {
+                transition(frame.render_target.Get(), D3D12_RESOURCE_STATE_PRESENT,
+                           D3D12_RESOURCE_STATE_RESOLVE_DEST),
+                transition(msaa_target_.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                           D3D12_RESOURCE_STATE_RESOLVE_SOURCE)};
+            command_list_->ResourceBarrier(2, pre);
+            command_list_->ResolveSubresource(frame.render_target.Get(), 0, msaa_target_.Get(), 0,
+                                              kBackBufferFormat);
+            const D3D12_RESOURCE_BARRIER post[] = {
+                transition(frame.render_target.Get(), D3D12_RESOURCE_STATE_RESOLVE_DEST,
+                           D3D12_RESOURCE_STATE_PRESENT),
+                transition(msaa_target_.Get(), D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+                           D3D12_RESOURCE_STATE_RENDER_TARGET)};
+            command_list_->ResourceBarrier(2, post);
+        } else {
+            const auto to_present = transition(frame.render_target.Get(),
+                                               D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                               D3D12_RESOURCE_STATE_PRESENT);
+            command_list_->ResourceBarrier(1, &to_present);
+        }
         command_list_->Close();
         ID3D12CommandList* lists[] = {command_list_.Get()};
         queue_->ExecuteCommandLists(1, lists);
@@ -1234,6 +1340,10 @@ private:
     UINT height_ = 720;
     double current_fps_ = 0.0;  // smoothed FPS for the optional on-screen counter
     int last_resolution_index_ = -1;  // tracks the applied Options "Resolution" value
+    int last_aa_index_ = -1;  // tracks the applied Options "Anti-Aliasing" value
+    UINT msaa_samples_ = 1;  // current MSAA sample count (1 = off)
+    ComPtr<ID3D12Resource> msaa_target_;  // multisampled color target resolved into the back buffer
+    D3D12_CPU_DESCRIPTOR_HANDLE msaa_rtv_{};
     UINT rtv_stride_ = 0;
     UINT descriptor_stride_ = 0;
     UINT video_descriptor_index_ = 0;

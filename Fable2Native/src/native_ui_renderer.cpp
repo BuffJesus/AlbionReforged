@@ -21,11 +21,13 @@ float channel(std::uint32_t color, unsigned shift) {
 
 }  // namespace
 
-bool NativeUiRenderer::initialise(ID3D12Device* device, std::string& error) {
+bool NativeUiRenderer::initialise(ID3D12Device* device, std::uint32_t sample_count,
+                                  std::string& error) {
     if (!device) {
         error = "The native UI renderer received no D3D12 device.";
         return false;
     }
+    sample_count_ = sample_count == 0 ? 1 : sample_count;
 
     D3D12_HEAP_PROPERTIES heap{};
     heap.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -181,7 +183,7 @@ float4 ps_main(PSInput input) : SV_TARGET {
     pipeline.SampleMask = UINT_MAX;
     pipeline.NumRenderTargets = 1;
     pipeline.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-    pipeline.SampleDesc.Count = 1;
+    pipeline.SampleDesc.Count = sample_count_;
     pipeline.RasterizerState = rasterizer;
     pipeline.BlendState = blend;
     pipeline.DepthStencilState.DepthEnable = FALSE;
