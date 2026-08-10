@@ -69,6 +69,7 @@ NativeVulkanUiRenderer::~NativeVulkanUiRenderer() { destroy(); }
 
 bool NativeVulkanUiRenderer::initialise(VkPhysicalDevice physical_device, VkDevice device,
                                         VkRenderPass render_pass, std::uint32_t frame_count,
+                                        VkSampleCountFlagBits samples,
                                         const std::filesystem::path& shader_directory,
                                         std::string& error) {
     destroy();
@@ -205,7 +206,7 @@ bool NativeVulkanUiRenderer::initialise(VkPhysicalDevice physical_device, VkDevi
     rasterizer.lineWidth = 1.0f;
     VkPipelineMultisampleStateCreateInfo multisample{
         VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.rasterizationSamples = samples == 0 ? VK_SAMPLE_COUNT_1_BIT : samples;
     VkPipelineDepthStencilStateCreateInfo depth_stencil{
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     depth_stencil.depthTestEnable = VK_FALSE;

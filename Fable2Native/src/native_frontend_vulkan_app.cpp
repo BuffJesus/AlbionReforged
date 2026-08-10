@@ -255,7 +255,7 @@ public:
         if (!create_vulkan()) return false;
         std::string renderer_error;
         if (!world_renderer_.initialise(physical_device_, device_, command_pool_, queue_,
-                                        render_pass_, surface_format_.format,
+                                        render_pass_, surface_format_.format, msaa_samples_,
                                         source_ ? source_->data_root : std::filesystem::path{},
                                         F2NATIVE_VULKAN_SHADER_DIR, game_.scene,
                                         renderer_error)) {
@@ -397,6 +397,7 @@ private:
         result = vkCreateDevice(physical_device_, &device_info, nullptr, &device_);
         if (result != VK_SUCCESS) return fail("Vulkan device creation failed: ", result);
         vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
+        msaa_samples_ = choose_sample_count(game_.frontend.anti_aliasing_index());  // AA option
 
         VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -510,18 +511,31 @@ private:
     }
 
     bool create_render_pass() {
-        VkAttachmentDescription color{};
-        color.format = surface_format_.format;
-        color.samples = VK_SAMPLE_COUNT_1_BIT;
-        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        color.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        VkAttachmentReference reference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        const bool msaa = msaa_samples_ > VK_SAMPLE_COUNT_1_BIT;
+        // attachment 0 = color (multisampled under MSAA; else the presentable swapchain image).
+        // attachment 1 (MSAA only) = the resolve target = the presentable swapchain image.
+        VkAttachmentDescription attachments[2]{};
+        attachments[0].format = surface_format_.format;
+        attachments[0].samples = msaa ? msaa_samples_ : VK_SAMPLE_COUNT_1_BIT;
+        attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachments[0].storeOp =
+            msaa ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
+        attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[0].finalLayout =
+            msaa ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        attachments[1].format = surface_format_.format;
+        attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+        attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[1].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        VkAttachmentReference color_ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkAttachmentReference resolve_ref{1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         VkSubpassDescription subpass{};
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpass.colorAttachmentCount = 1;
-        subpass.pColorAttachments = &reference;
+        subpass.pColorAttachments = &color_ref;
+        if (msaa) subpass.pResolveAttachments = &resolve_ref;
         VkSubpassDependency dependency{};
         dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
         dependency.dstSubpass = 0;
@@ -529,8 +543,8 @@ private:
         dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-        info.attachmentCount = 1;
-        info.pAttachments = &color;
+        info.attachmentCount = msaa ? 2u : 1u;
+        info.pAttachments = attachments;
         info.subpassCount = 1;
         info.pSubpasses = &subpass;
         info.dependencyCount = 1;
@@ -538,13 +552,97 @@ private:
         return vkCreateRenderPass(device_, &info, nullptr, &render_pass_) == VK_SUCCESS;
     }
 
+    // AA index -> a device-supported MSAA sample count.
+    VkSampleCountFlagBits choose_sample_count(int aa_index) const {
+        std::uint32_t desired = 1;
+        if (aa_index == 1) desired = 2;
+        else if (aa_index == 2) desired = 4;
+        else if (aa_index == 3) desired = 8;
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(physical_device_, &props);
+        const VkSampleCountFlags supported = props.limits.framebufferColorSampleCounts;
+        for (std::uint32_t s = desired; s > 1; s /= 2) {
+            const auto bit = static_cast<VkSampleCountFlagBits>(s);
+            if (supported & bit) return bit;
+        }
+        return VK_SAMPLE_COUNT_1_BIT;
+    }
+
+    // (Re)create the multisampled color image the MSAA render pass renders into (resolved to the
+    // swapchain image). Released at 1x. Sized to the current swapchain extent.
+    bool create_msaa_image() {
+        destroy_msaa_image();
+        if (msaa_samples_ <= VK_SAMPLE_COUNT_1_BIT) return true;
+        VkImageCreateInfo image_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        image_info.imageType = VK_IMAGE_TYPE_2D;
+        image_info.format = surface_format_.format;
+        image_info.extent = {extent_.width, extent_.height, 1};
+        image_info.mipLevels = 1;
+        image_info.arrayLayers = 1;
+        image_info.samples = msaa_samples_;
+        image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        image_info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+        image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateImage(device_, &image_info, nullptr, &msaa_image_) != VK_SUCCESS) return false;
+        VkMemoryRequirements requirements{};
+        vkGetImageMemoryRequirements(device_, msaa_image_, &requirements);
+        VkPhysicalDeviceMemoryProperties memory_properties{};
+        vkGetPhysicalDeviceMemoryProperties(physical_device_, &memory_properties);
+        std::uint32_t memory_type = 0;
+        bool found = false;
+        for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
+            if ((requirements.memoryTypeBits & (1u << i)) &&
+                (memory_properties.memoryTypes[i].propertyFlags &
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+                memory_type = i;
+                found = true;
+                break;
+            }
+        }
+        if (!found) { destroy_msaa_image(); return false; }
+        VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocation.allocationSize = requirements.size;
+        allocation.memoryTypeIndex = memory_type;
+        if (vkAllocateMemory(device_, &allocation, nullptr, &msaa_memory_) != VK_SUCCESS ||
+            vkBindImageMemory(device_, msaa_image_, msaa_memory_, 0) != VK_SUCCESS) {
+            destroy_msaa_image();
+            return false;
+        }
+        VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        view_info.image = msaa_image_;
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = surface_format_.format;
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(device_, &view_info, nullptr, &msaa_view_) != VK_SUCCESS) {
+            destroy_msaa_image();
+            return false;
+        }
+        return true;
+    }
+
+    void destroy_msaa_image() {
+        if (msaa_view_) vkDestroyImageView(device_, msaa_view_, nullptr);
+        if (msaa_image_) vkDestroyImage(device_, msaa_image_, nullptr);
+        if (msaa_memory_) vkFreeMemory(device_, msaa_memory_, nullptr);
+        msaa_view_ = VK_NULL_HANDLE;
+        msaa_image_ = VK_NULL_HANDLE;
+        msaa_memory_ = VK_NULL_HANDLE;
+    }
+
     bool create_framebuffers() {
+        const bool msaa = msaa_samples_ > VK_SAMPLE_COUNT_1_BIT;
+        if (!create_msaa_image()) return false;
         framebuffers_.resize(swapchain_views_.size());
         for (std::size_t index = 0; index < swapchain_views_.size(); ++index) {
+            // MSAA: attachment 0 = the multisampled image, attachment 1 = the resolve/swapchain image.
+            const VkImageView attachments[2] = {msaa ? msaa_view_ : swapchain_views_[index],
+                                                swapchain_views_[index]};
             VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             info.renderPass = render_pass_;
-            info.attachmentCount = 1;
-            info.pAttachments = &swapchain_views_[index];
+            info.attachmentCount = msaa ? 2u : 1u;
+            info.pAttachments = attachments;
             info.width = extent_.width;
             info.height = extent_.height;
             info.layers = 1;
@@ -567,6 +665,7 @@ private:
         std::string error;
         if (!native_ui_renderer_.initialise(physical_device_, device_, render_pass_,
                                             static_cast<std::uint32_t>(swapchain_images_.size()),
+                                            msaa_samples_,
                                             std::filesystem::path(F2NATIVE_VULKAN_SHADER_DIR),
                                             error)) {
             if (window_)
@@ -947,12 +1046,15 @@ private:
         } else {
             clear.color = {{0.015f, 0.02f, 0.035f, 1.0f}};
         }
+        // Under MSAA the render pass has 2 attachments (color 0 + resolve 1); only the color clears,
+        // but pass a clear value per attachment so validation is happy.
+        const VkClearValue clears[2] = {clear, clear};
         VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         pass.renderPass = render_pass_;
         pass.framebuffer = framebuffers_[image_index];
         pass.renderArea.extent = extent_;
-        pass.clearValueCount = 1;
-        pass.pClearValues = &clear;
+        pass.clearValueCount = msaa_samples_ > VK_SAMPLE_COUNT_1_BIT ? 2u : 1u;
+        pass.pClearValues = clears;
         vkCmdBeginRenderPass(command_buffers_[image_index], &pass, VK_SUBPASS_CONTENTS_INLINE);
         if (game_.frontend.state() == f2::FrontendState::World) {
             world_renderer_.render(command_buffers_[image_index], extent_.width, extent_.height,
@@ -1026,6 +1128,7 @@ private:
         video_texture_.destroy();
         video_decoder_.close();
         world_renderer_.destroy();
+        destroy_msaa_image();
         if (ui_descriptor_pool_) vkDestroyDescriptorPool(device_, ui_descriptor_pool_, nullptr);
         if (device_) {
             cleanup_swapchain();
@@ -1055,6 +1158,10 @@ private:
     UINT height_ = 720;
     double current_fps_ = 0.0;  // smoothed FPS for the optional on-screen counter
     int last_resolution_index_ = -1;  // tracks the applied Options "Resolution" value
+    VkSampleCountFlagBits msaa_samples_ = VK_SAMPLE_COUNT_1_BIT;  // Options "Anti-Aliasing"
+    VkImage msaa_image_ = VK_NULL_HANDLE;  // multisampled color target resolved to the swapchain image
+    VkDeviceMemory msaa_memory_ = VK_NULL_HANDLE;
+    VkImageView msaa_view_ = VK_NULL_HANDLE;
     bool framebuffer_resized_ = false;
     bool com_initialized_ = false;
     bool video_runtime_started_ = false;

@@ -20,6 +20,7 @@ public:
                     VkQueue queue,
                     VkRenderPass render_pass,
                     VkFormat color_format,
+                    VkSampleCountFlagBits samples,
                     const std::filesystem::path& texture_root,
                     const std::filesystem::path& shader_directory,
                     const NativeScene& scene,

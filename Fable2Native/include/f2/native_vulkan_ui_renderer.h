@@ -28,8 +28,8 @@ public:
     ~NativeVulkanUiRenderer();
 
     bool initialise(VkPhysicalDevice physical_device, VkDevice device, VkRenderPass render_pass,
-                    std::uint32_t frame_count, const std::filesystem::path& shader_directory,
-                    std::string& error);
+                    std::uint32_t frame_count, VkSampleCountFlagBits samples,
+                    const std::filesystem::path& shader_directory, std::string& error);
     void destroy();
 
     [[nodiscard]] bool ready() const noexcept { return pipeline_ != VK_NULL_HANDLE; }

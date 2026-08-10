@@ -382,6 +382,7 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
                                            VkQueue queue,
                                            VkRenderPass render_pass,
                                            VkFormat color_format,
+                                           VkSampleCountFlagBits samples,
                                            const std::filesystem::path& texture_root,
                                            const std::filesystem::path& shader_directory,
                                            const NativeScene& scene,
@@ -545,7 +546,7 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.lineWidth = 1.0f;
     VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.rasterizationSamples = samples == 0 ? VK_SAMPLE_COUNT_1_BIT : samples;
     VkPipelineColorBlendAttachmentState blend_attachment{};
     blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
