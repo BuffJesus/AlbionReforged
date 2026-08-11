@@ -607,15 +607,14 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             else:
                 glued = extract(header_bnk, he, "hero_h.bin") + extract(hero_body_bnk, be, "hero_b.bin")
                 _, hgeoms = mdl.parse(glued, log=lambda m: None, file_path=hero_model)
+                # chapter2slums PlayerStart (ghidra_out/npc_spawn_re.txt, validated from the
+                # .gdb SimpleTransformComponent 0x619F96CF): game(192.622,169.201,48.637) yaw
+                # -1.288 -> render {x,z,y}. Overridable with --hero-pos.
+                hero_yaw = -1.288
                 if hero_pos:
                     hx, hy, hz = hero_pos
-                elif instances:
-                    xs = [p[0] for _, p, _, _ in instances]
-                    ys = sorted(p[1] for _, p, _, _ in instances)
-                    zs = [p[2] for _, p, _, _ in instances]
-                    hx, hy, hz = sum(xs) / len(xs), ys[len(ys) // 2], sum(zs) / len(zs)
                 else:
-                    hx, hy, hz = 0.0, 0.0, 0.0
+                    hx, hy, hz = 192.622, 48.637, 169.201
                 for gi, g in enumerate(hgeoms or []):
                     mat_idx = len(materials)
                     opts = []
@@ -627,9 +626,10 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                     normals = g.normals or add_normals(positions, g.indices)
                     name = f"hero{gi}"
                     meshes.append((name, mat_idx, positions, normals, g.uvs, g.indices))
-                    instances.append((name, (hx, hy, hz), 0.0, 1.0))
+                    instances.append((name, (hx, hy, hz), hero_yaw, 1.0))
                     n_inst += 1
-                log(f"hero: {len(hgeoms or [])} geoms at render ({hx:.1f},{hy:.1f},{hz:.1f})")
+                log(f"hero: {len(hgeoms or [])} geoms at PlayerStart render "
+                    f"({hx:.1f},{hy:.1f},{hz:.1f}) yaw {hero_yaw}")
         except Exception as exc:  # noqa: BLE001
             log(f"  hero skip ({type(exc).__name__}: {exc})")
 
