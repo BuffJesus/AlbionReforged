@@ -26,6 +26,14 @@ struct Constants {
     std::array<float, 4> eye_time{0.0f, 0.0f, 0.0f, 0.0f};        // xyz = camera eye, w = seconds
 };
 
+// b1-equivalent point-light UBO (level_lights_effects_re.txt §3.1); mirrors the D3D12 layout.
+struct Lights {
+    std::uint32_t light_count = 0;
+    float pad[3]{0.0f, 0.0f, 0.0f};
+    float pos_range[64][4]{};        // xyz = pos, w = range
+    float color_intensity[64][4]{};  // rgb = colour, w = intensity
+};
+
 struct Geometry {
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
@@ -462,6 +470,27 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         error = "Vulkan could not map the world camera buffer.";
         return false;
     }
+    // Static point-light UBO (b1-equivalent), filled once from the cooked scene lights.
+    {
+        Lights lights{};
+        const std::size_t light_n = std::min<std::size_t>(scene.lights.size(), 64);
+        lights.light_count = static_cast<std::uint32_t>(light_n);
+        for (std::size_t i = 0; i < light_n; ++i) {
+            const auto& src = scene.lights[i];
+            lights.pos_range[i][0] = src.position[0];
+            lights.pos_range[i][1] = src.position[1];
+            lights.pos_range[i][2] = src.position[2];
+            lights.pos_range[i][3] = src.range;
+            lights.color_intensity[i][0] = src.color[0];
+            lights.color_intensity[i][1] = src.color[1];
+            lights.color_intensity[i][2] = src.color[2];
+            lights.color_intensity[i][3] = src.intensity;
+        }
+        if (!upload_buffer(physical_device, device, &lights, sizeof(lights),
+                           VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, lights_buffer_, lights_memory_, error)) {
+            return false;
+        }
+    }
 
     const auto material_count = std::max<std::size_t>(
         1, std::min<std::size_t>(scene.materials.size(), kMaxMaterialTextures));
@@ -509,7 +538,7 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         }
     }
 
-    VkDescriptorSetLayoutBinding bindings[3]{};
+    VkDescriptorSetLayoutBinding bindings[4]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -522,8 +551,12 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[3].binding = 3;  // point-light UBO (b1-equivalent)
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_info.bindingCount = 3;
+    layout_info.bindingCount = 4;
     layout_info.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &descriptor_set_layout_) != VK_SUCCESS) {
         error = "Vulkan could not create the world descriptor layout.";
@@ -531,7 +564,7 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     }
 
     VkDescriptorPoolSize pool_sizes[] = {
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<std::uint32_t>(material_count)},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<std::uint32_t>(material_count * 2)},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<std::uint32_t>(material_count * 2)},
     };
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -553,9 +586,10 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         return false;
     }
     VkDescriptorBufferInfo buffer_info{constant_buffer_, 0, sizeof(Constants)};
+    VkDescriptorBufferInfo lights_info{lights_buffer_, 0, sizeof(Lights)};
     std::vector<VkDescriptorImageInfo> image_infos(material_count);   // albedo (t0)
     std::vector<VkDescriptorImageInfo> normal_infos(material_count);  // normal map (t1)
-    std::vector<VkWriteDescriptorSet> writes(material_count * 3);
+    std::vector<VkWriteDescriptorSet> writes(material_count * 4);
     for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
         image_infos[material_index] = {texture_samplers_[material_index],
                                        texture_views_[material_index],
@@ -563,27 +597,34 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         normal_infos[material_index] = {normal_samplers_[material_index],
                                         normal_views_[material_index],
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        auto& uniform_write = writes[material_index * 3];
+        auto& uniform_write = writes[material_index * 4];
         uniform_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         uniform_write.dstSet = descriptor_sets_[material_index];
         uniform_write.dstBinding = 0;
         uniform_write.descriptorCount = 1;
         uniform_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         uniform_write.pBufferInfo = &buffer_info;
-        auto& image_write = writes[material_index * 3 + 1];
+        auto& image_write = writes[material_index * 4 + 1];
         image_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         image_write.dstSet = descriptor_sets_[material_index];
         image_write.dstBinding = 1;
         image_write.descriptorCount = 1;
         image_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         image_write.pImageInfo = &image_infos[material_index];
-        auto& normal_write = writes[material_index * 3 + 2];
+        auto& normal_write = writes[material_index * 4 + 2];
         normal_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         normal_write.dstSet = descriptor_sets_[material_index];
         normal_write.dstBinding = 2;
         normal_write.descriptorCount = 1;
         normal_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         normal_write.pImageInfo = &normal_infos[material_index];
+        auto& lights_write = writes[material_index * 4 + 3];
+        lights_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        lights_write.dstSet = descriptor_sets_[material_index];
+        lights_write.dstBinding = 3;
+        lights_write.descriptorCount = 1;
+        lights_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        lights_write.pBufferInfo = &lights_info;
     }
     vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()),
                            writes.data(), 0, nullptr);
@@ -802,6 +843,8 @@ void NativeVulkanWorldRenderer::destroy() {
     if (descriptor_set_layout_) vkDestroyDescriptorSetLayout(device_, descriptor_set_layout_, nullptr);
     if (constant_buffer_) vkDestroyBuffer(device_, constant_buffer_, nullptr);
     if (constant_memory_) vkFreeMemory(device_, constant_memory_, nullptr);
+    if (lights_buffer_) vkDestroyBuffer(device_, lights_buffer_, nullptr);
+    if (lights_memory_) vkFreeMemory(device_, lights_memory_, nullptr);
     if (index_buffer_) vkDestroyBuffer(device_, index_buffer_, nullptr);
     if (index_memory_) vkFreeMemory(device_, index_memory_, nullptr);
     if (vertex_buffer_) vkDestroyBuffer(device_, vertex_buffer_, nullptr);
@@ -815,6 +858,8 @@ void NativeVulkanWorldRenderer::destroy() {
     index_memory_ = VK_NULL_HANDLE;
     constant_buffer_ = VK_NULL_HANDLE;
     constant_memory_ = VK_NULL_HANDLE;
+    lights_buffer_ = VK_NULL_HANDLE;
+    lights_memory_ = VK_NULL_HANDLE;
     mapped_constants_ = nullptr;
     descriptor_set_layout_ = VK_NULL_HANDLE;
     descriptor_pool_ = VK_NULL_HANDLE;

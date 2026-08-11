@@ -14,6 +14,11 @@ layout(set = 0, binding = 0) uniform Camera {
 } camera;
 layout(set = 0, binding = 1) uniform sampler2D albedo;
 layout(set = 0, binding = 2) uniform sampler2D normalTex;
+layout(set = 0, binding = 3) uniform Lights {
+    uint light_count; vec3 _pad;
+    vec4 light_pos_range[64];        // xyz = pos, w = range
+    vec4 light_color_intensity[64];  // rgb = colour, w = intensity
+} lights;
 layout(push_constant) uniform Push { uint is_water; } pc;
 layout(location = 0) out vec4 out_color;
 
@@ -58,5 +63,20 @@ void main() {
     vec3 ambient = mix(vec3(0.18, 0.20, 0.24), vec3(0.55, 0.58, 0.62), hemi);
     if (probe.w > 0.5) ambient = probe.rgb;
     vec3 lit = base.rgb * (ambient + ndl * camera.sun_color.rgb);
+    // Additive local point lights (lamp posts/lanterns/braziers), N.L with a soft
+    // linear-squared falloff clamped at each light's range — mirrors the D3D12 world PS.
+    for (uint li = 0u; li < lights.light_count; ++li) {
+        vec3 d = lights.light_pos_range[li].xyz - world_pos;
+        float r = lights.light_pos_range[li].w;
+        float dist = length(d);
+        if (dist < r) {
+            vec3 Lp = d / max(dist, 1e-3);
+            float ndlp = max(dot(N, Lp), 0.0);
+            float atten = clamp(1.0 - dist / r, 0.0, 1.0);
+            atten *= atten;
+            lit += base.rgb * lights.light_color_intensity[li].rgb *
+                   (ndlp * atten * lights.light_color_intensity[li].w);
+        }
+    }
     out_color = vec4(lit, 1.0);  // opaque -> alpha 1 makes the global blend a no-op
 }

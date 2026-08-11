@@ -46,6 +46,8 @@ private:
     VkBuffer constant_buffer_ = VK_NULL_HANDLE;
     VkDeviceMemory constant_memory_ = VK_NULL_HANDLE;
     void* mapped_constants_ = nullptr;
+    VkBuffer lights_buffer_ = VK_NULL_HANDLE;   // b1-equivalent point-light UBO (static)
+    VkDeviceMemory lights_memory_ = VK_NULL_HANDLE;
     std::array<float, 3> sun_direction_{0.0f, -1.0f, 0.0f};  // from the cooked scene
     std::array<float, 3> sun_color_{1.0f, 1.0f, 1.0f};
     std::array<float, 3> scene_center_{0.0f, 0.0f, 0.0f};    // geometry bounds -> auto-frame camera
