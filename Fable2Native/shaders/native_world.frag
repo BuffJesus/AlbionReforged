@@ -19,6 +19,7 @@ layout(set = 0, binding = 3) uniform Lights {
     vec4 light_pos_range[64];        // xyz = pos, w = range
     vec4 light_color_intensity[64];  // rgb = colour, w = intensity
 } lights;
+layout(set = 0, binding = 4) uniform sampler2D specTex;  // spec/"material" mask (t2)
 layout(push_constant) uniform Push { uint is_water; } pc;
 layout(location = 0) out vec4 out_color;
 
@@ -63,6 +64,13 @@ void main() {
     vec3 ambient = mix(vec3(0.18, 0.20, 0.24), vec3(0.55, 0.58, 0.62), hemi);
     if (probe.w > 0.5) ambient = probe.rgb;
     vec3 lit = base.rgb * (ambient + ndl * camera.sun_color.rgb);
+    // Specular highlight (world_shading_model_re.txt §7, ladder step 3): Blinn-Phong gated by the
+    // grayscale spec/"material" mask (t2). Mirrors the D3D12 world PS. Default mask=0 -> no spec.
+    float specMask = texture(specTex, uv).r;
+    vec3 Vdir = normalize(camera.eye_time.xyz - world_pos);
+    vec3 Hdir = normalize(-camera.sun_direction.xyz + Vdir);
+    float spec = pow(max(dot(N, Hdir), 0.0), 32.0) * specMask;
+    lit += spec * camera.sun_color.rgb;
     // Additive local point lights (lamp posts/lanterns/braziers), N.L with a soft
     // linear-squared falloff clamped at each light's range — mirrors the D3D12 world PS.
     for (uint li = 0u; li < lights.light_count; ++li) {

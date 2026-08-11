@@ -371,12 +371,13 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
         return false;
     }
 
-    // Two descriptor slots per material: albedo (t0) + normal (t1), interleaved.
+    // Three descriptor slots per material: albedo (t0) + normal (t1) + spec/"material" (t2),
+    // interleaved (world_shading_model_re.txt §7, ladder step 3).
     const auto material_count = std::max<std::size_t>(
-        1, std::min<std::size_t>(scene.materials.size(), kMaxMaterialTextures / 2));
+        1, std::min<std::size_t>(scene.materials.size(), kMaxMaterialTextures / 3));
     texture_descriptor_stride_ = device->GetDescriptorHandleIncrementSize(
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    textures_.resize(material_count * 2);
+    textures_.resize(material_count * 3);
     D3D12_SHADER_RESOURCE_VIEW_DESC texture_view{};
     texture_view.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     texture_view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -392,6 +393,8 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
         NativeTexture albedo{1, 1, {255, 255, 255, 255}};
         NativeTexture normal{1, 1, {128, 128, 255, 255}};  // flat tangent-space normal default
+        // Default spec/"material" mask = black → spec_mask 0 = no highlight (§3: default?0:sSamp.r).
+        NativeTexture spec{1, 1, {0, 0, 0, 255}};
         if (material_index < scene.materials.size()) {
             const auto& material = scene.materials[material_index];
             const auto albedo_path = resolve_texture(material, texture_root);
@@ -403,9 +406,16 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
                 const auto normal_path = resolve_texture(normal_ref, texture_root);
                 if (!normal_path.empty()) load_dds_rgba8(normal_path, normal, texture_error);
             }
+            if (!material.material.empty()) {
+                NativeMaterial spec_ref;
+                spec_ref.albedo = material.material;  // reuse resolve_texture for the spec path
+                const auto spec_path = resolve_texture(spec_ref, texture_root);
+                if (!spec_path.empty()) load_dds_rgba8(spec_path, spec, texture_error);
+            }
         }
-        if (!make_srv(material_index * 2, albedo, error)) return false;
-        if (!make_srv(material_index * 2 + 1, normal, error)) return false;
+        if (!make_srv(material_index * 3, albedo, error)) return false;
+        if (!make_srv(material_index * 3 + 1, normal, error)) return false;
+        if (!make_srv(material_index * 3 + 2, spec, error)) return false;
     }
     texture_gpu_handle_ = texture_gpu_handle;
     draw_ranges_.clear();
@@ -462,6 +472,7 @@ cbuffer Lights : register(b1) {
 };
 Texture2D albedo : register(t0);
 Texture2D normalTex : register(t1);
+Texture2D specTex : register(t2);
 SamplerState albedo_sampler : register(s0);
 struct VSInput { float3 position : POSITION; float3 normal : NORMAL; float4 color : COLOR0; float2 uv : TEXCOORD0; float4 probe : COLOR1; };
 struct PSInput { float4 position : SV_POSITION; float3 normal : NORMAL; float3 world_pos : TEXCOORD1; float4 color : COLOR0; float2 uv : TEXCOORD0; float4 probe : COLOR1; };
@@ -507,6 +518,14 @@ float4 ps_main(PSInput input) : SV_TARGET {
     // Warm directional sun (theme main_light_colour) tints the N.L term; ambient stays the
     // baked/hemisphere term. Cool ambient + warm sun = the retail daytime split.
     float3 lit = base.rgb * (ambient + ndl * sun_color.rgb);
+    // Specular highlight (world_shading_model_re.txt §7, ladder step 3): Blinn-Phong gated by the
+    // spec/"material" mask (t2). Grayscale mask.r modulates a pow(N·H, k) lobe using the sun as the
+    // key light and the camera eye (eye_time.xyz) for the view vector. Default mask=0 → no spec.
+    float specMask = specTex.Sample(albedo_sampler, input.uv).r;
+    float3 Vdir = normalize(eye_time.xyz - input.world_pos);
+    float3 Hdir = normalize(-sun_direction.xyz + Vdir);
+    float spec = pow(saturate(dot(N, Hdir)), 32.0) * specMask;
+    lit += spec * sun_color.rgb;
     // Additive local point lights (level_lights_effects_re.txt §3.1): diffuse N·L with a
     // soft linear-squared falloff clamped at each light's Range. Added AFTER the
     // hemisphere+sun term so lamps/braziers glow warm over the global lighting.
@@ -569,7 +588,7 @@ float4 ps_water(PSInput input) : SV_TARGET {
     root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // PS reads sun_direction too
     D3D12_DESCRIPTOR_RANGE texture_range{};
     texture_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    texture_range.NumDescriptors = 2;  // t0 albedo + t1 normal
+    texture_range.NumDescriptors = 3;  // t0 albedo + t1 normal + t2 spec
     texture_range.BaseShaderRegister = 0;
     root_parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     root_parameters[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -767,7 +786,7 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
         for (const auto& range : draw_ranges_) {
             if (range.is_water != water) continue;
             auto texture_handle = texture_gpu_handle_;
-            texture_handle.ptr += static_cast<std::size_t>(range.material_index) * 2 *
+            texture_handle.ptr += static_cast<std::size_t>(range.material_index) * 3 *
                                  texture_descriptor_stride_;
             command_list->SetGraphicsRootDescriptorTable(1, texture_handle);
             command_list->DrawIndexedInstanced(range.index_count, 1, range.first_index, 0, 0);

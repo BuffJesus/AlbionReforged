@@ -66,6 +66,10 @@ private:
     std::vector<VkDeviceMemory> normal_memories_;
     std::vector<VkImageView> normal_views_;
     std::vector<VkSampler> normal_samplers_;
+    std::vector<VkImage> spec_images_;
+    std::vector<VkDeviceMemory> spec_memories_;
+    std::vector<VkImageView> spec_views_;
+    std::vector<VkSampler> spec_samplers_;
     std::uint32_t index_count_ = 0;
     struct DrawRange {
         std::uint32_t first_index = 0;

@@ -1300,9 +1300,12 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
     albedo_tokens = []
     for _name, opts, _base in materials:
         for o in opts:
-            if o.startswith("albedo=") or o.startswith("normal="):
-                # normal maps cook too now (cook_lh_tex decodes comp-3 BC5 -> RGBA8 DDS,
-                # which the runtime loader reads); the world PS samples t1 for bump detail.
+            if (o.startswith("albedo=") or o.startswith("normal=")
+                    or o.startswith("material=")):
+                # normal maps cook too (cook_lh_tex decodes comp-3 BC5 -> RGBA8 DDS) and, since
+                # world_shading_model_re.txt §7 ladder step 3, so do spec/"material" masks — the
+                # world PS/frag samples t2 for a Blinn-Phong highlight. All three go through the
+                # same _cook_textures() pass; grayscale spec .tex cook to a single-channel DDS.
                 albedo_tokens.append(o.split("=", 1)[1])
     tex_sources = [b for b in (textures_bnks or []) if b]
     tex_map = _cook_textures(albedo_tokens, tex_sources, tex_cook, f2tool,
@@ -1346,7 +1349,11 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                         emit.append("normal=" + dds.replace("\\", "/"))
                     # else: drop -> PS falls back to the geometric normal
                 elif o.startswith("material="):
-                    continue  # spec map not sampled yet (renderer t2 TODO)
+                    # Spec/"material" mask: repoint at the cooked DDS (t2). Drop if it didn't
+                    # cook so the PS uses its black-default spec (spec_mask 0 = no highlight).
+                    dds = tex_map.get(o[len("material="):], "")
+                    if dds:
+                        emit.append("material=" + dds.replace("\\", "/"))
                 else:
                     emit.append(o)
             out.write(f"material {name} {base[0]:.4g} {base[1]:.4g} {base[2]:.4g} {base[3]:.4g}"
