@@ -23,6 +23,7 @@ struct Constants {
     std::array<float, 16> view_projection{};
     std::array<float, 4> sun_direction{0.0f, -1.0f, 0.0f, 0.0f};  // xyz = light dir (world)
     std::array<float, 4> sun_color{1.0f, 1.0f, 1.0f, 0.0f};       // rgb = directional sun colour
+    std::array<float, 4> eye_time{0.0f, 0.0f, 0.0f, 0.0f};        // xyz = camera eye, w = seconds
 };
 
 struct Geometry {
@@ -32,6 +33,7 @@ struct Geometry {
         std::uint32_t first_index = 0;
         std::uint32_t index_count = 0;
         std::uint32_t material_index = 0;
+        bool is_water = false;
     };
     std::vector<DrawRange> draw_ranges;
 };
@@ -120,10 +122,13 @@ Geometry make_geometry(const NativeScene& scene) {
         }
         const auto first_index = static_cast<std::uint32_t>(geometry.indices.size());
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
+        const bool is_water = mesh.material < scene.materials.size() &&
+                              scene.materials[mesh.material].name == "water";
         geometry.draw_ranges.push_back({first_index,
                                         static_cast<std::uint32_t>(mesh.indices.size()),
                                         std::min(mesh.material,
-                                                 NativeVulkanWorldRenderer::kMaxMaterialTextures - 1)});
+                                                 NativeVulkanWorldRenderer::kMaxMaterialTextures - 1),
+                                        is_water});
     }
 
     if (!geometry.vertices.empty()) return geometry;
@@ -584,7 +589,8 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
                            writes.data(), 0, nullptr);
     draw_ranges_.clear();
     for (const auto& range : geometry.draw_ranges) {
-        draw_ranges_.push_back({range.first_index, range.index_count, range.material_index});
+        draw_ranges_.push_back({range.first_index, range.index_count, range.material_index,
+                                range.is_water});
     }
 
     std::vector<std::uint32_t> vertex_code;
@@ -642,7 +648,16 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     depth_stencil.depthTestEnable = VK_TRUE;
     depth_stencil.depthWriteEnable = VK_TRUE;
     depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    // Alpha blend so translucent water composites over the opaque world. Opaque fragments
+    // output alpha=1 -> src*1 + dst*0 = src (a no-op), so only water actually blends.
     VkPipelineColorBlendAttachmentState blend_attachment{};
+    blend_attachment.blendEnable = VK_TRUE;
+    blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+    blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
     blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
@@ -652,12 +667,16 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dynamic.dynamicStateCount = 2;
     dynamic.pDynamicStates = dynamic_states;
-    VkPushConstantRange no_push_constants{};
+    // Push constant: is_water (uint) selects the procedural water path in the fragment shader.
+    VkPushConstantRange push_range{};
+    push_range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    push_range.offset = 0;
+    push_range.size = sizeof(std::uint32_t);
     VkPipelineLayoutCreateInfo pipeline_layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pipeline_layout.setLayoutCount = 1;
     pipeline_layout.pSetLayouts = &descriptor_set_layout_;
-    pipeline_layout.pushConstantRangeCount = 0;
-    pipeline_layout.pPushConstantRanges = &no_push_constants;
+    pipeline_layout.pushConstantRangeCount = 1;
+    pipeline_layout.pPushConstantRanges = &push_range;
     if (vkCreatePipelineLayout(device_, &pipeline_layout, nullptr, &pipeline_layout_) != VK_SUCCESS) {
         error = "Vulkan could not create the native world pipeline layout.";
         vkDestroyShaderModule(device_, vertex_module, nullptr);
@@ -725,6 +744,7 @@ void NativeVulkanWorldRenderer::render(VkCommandBuffer command_buffer,
     Constants constants{multiply(projection, view)};
     constants.sun_direction = {sun_direction_[0], sun_direction_[1], sun_direction_[2], 0.0f};
     constants.sun_color = {sun_color_[0], sun_color_[1], sun_color_[2], 0.0f};
+    constants.eye_time = {eye[0], eye[1], eye[2], static_cast<float>(elapsed_seconds)};
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width),
@@ -742,6 +762,9 @@ void NativeVulkanWorldRenderer::render(VkCommandBuffer command_buffer,
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 pipeline_layout_, 0, 1,
                                 &descriptor_sets_[material_index], 0, nullptr);
+        const std::uint32_t is_water = range.is_water ? 1u : 0u;
+        vkCmdPushConstants(command_buffer, pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(is_water), &is_water);
         vkCmdDrawIndexed(command_buffer, range.index_count, 1, range.first_index, 0, 0);
     }
 }

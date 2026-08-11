@@ -69,6 +69,7 @@ private:
         std::uint32_t first_index = 0;
         std::uint32_t index_count = 0;
         std::uint32_t material_index = 0;
+        bool is_water = false;
     };
     std::vector<DrawRange> draw_ranges_;
 };
