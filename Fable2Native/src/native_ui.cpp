@@ -130,7 +130,7 @@ bool NativeUiAssets::load(const std::filesystem::path& root, std::string& error)
         title_font_path_ = resolved_title_font;
     }
 
-    const std::array<std::pair<NativeUiAsset, std::string_view>, 35> defaults = {{
+    const std::array<std::pair<NativeUiAsset, std::string_view>, 36> defaults = {{
         {NativeUiAsset::TitleBackground, "title_background.dds"},
         {NativeUiAsset::MainBackground, "main_background.dds"},
         {NativeUiAsset::Logo, "logo.dds"},
@@ -164,6 +164,7 @@ bool NativeUiAssets::load(const std::filesystem::path& root, std::string& error)
         {NativeUiAsset::FramesPageTexture, "frames_page_texture.png"},
         {NativeUiAsset::SliderFrame, "sliderframe.png"},
         {NativeUiAsset::Motifs, "motifs.png"},
+        {NativeUiAsset::LogoFlare, "fe_logo_ambient.png"},
         {NativeUiAsset::CalibrationImage, "CalibrationImage.dds"},
         {NativeUiAsset::GoldCoin, "icon_gold_coin.dds"},
     }};

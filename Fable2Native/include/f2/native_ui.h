@@ -46,6 +46,7 @@ enum class NativeUiAsset : std::uint8_t {
     Motifs,
     CalibrationImage,
     GoldCoin,
+    LogoFlare,
     Count,
 };
 

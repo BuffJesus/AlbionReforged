@@ -67,9 +67,26 @@ private:
     void build_options_page(f2::render::UiDrawList& scene, float width, float height,
                             const NativeGame& game) const;
 
+    // Title reveal sparkle cloud (measured: ghidra_out/title_sparkle_burst_re.txt §8/§10).
+    // The retail effect is a blue-white additive point-sprite burst whose sparkles SPAWN in a
+    // wide band over the wordmark and CONVERGE onto the "Fable II" silhouette, then settle to a
+    // low idle twinkle. Each sprite has a spawn point (band) + a target point (on the logo alpha
+    // mask), a stagger delay, size and twinkle phase; positions lerp spawn->target with ease-out.
+    struct TitleSparkle {
+        float spawn_x = 0.5f;   // normalized in the wordmark rect (can spill outside 0..1)
+        float spawn_y = 0.5f;
+        float target_x = 0.5f;  // on the logo silhouette (alpha > threshold)
+        float target_y = 0.5f;
+        float delay = 0.0f;     // 0..1 stagger
+        float size = 10.0f;     // px at 1280 wide
+        float phase = 0.0f;     // idle-twinkle phase offset
+    };
+    void ensure_title_sparkles();
+
     const NativeFont& font_;
     const NativeUiAssets& assets_;
     TextureAccess access_;
+    std::vector<TitleSparkle> title_sparkles_;
 };
 
 }  // namespace f2

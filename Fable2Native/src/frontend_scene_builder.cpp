@@ -103,6 +103,47 @@ void FrontendSceneBuilder::build_loading(f2::render::UiDrawList& scene, float wi
               0xffffffffu);
 }
 
+void FrontendSceneBuilder::ensure_title_sparkles() {
+    if (!title_sparkles_.empty()) return;
+    constexpr std::size_t kCount = 160;  // measured burst spawns hundreds; 160 reads as the cloud
+    title_sparkles_.reserve(kCount);
+    const NativeTexture* logo = assets_.texture(NativeUiAsset::Logo);
+    const bool have_mask = logo && logo->width > 0 && logo->height > 0 &&
+                           logo->rgba8.size() >=
+                               static_cast<std::size_t>(logo->width) * logo->height * 4;
+    std::uint32_t seed = 0xF2B1052u;
+    const auto rnd = [&seed]() {
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<float>(seed & 0x00ffffffu) / 16777215.0f;
+    };
+    for (std::size_t i = 0; i < kCount; ++i) {
+        TitleSparkle s;
+        // TARGET: a point on the "Fable II" silhouette (logo alpha mask) — the sparkles
+        // converge here to resolve the letters (measured §10: converge-to-silhouette).
+        float tx = rnd();
+        float ty = rnd();
+        if (have_mask) {
+            for (int attempt = 0; attempt < 48; ++attempt) {
+                tx = rnd();
+                ty = rnd();
+                const auto px = (static_cast<std::size_t>(ty * logo->height) * logo->width +
+                                 static_cast<std::size_t>(tx * logo->width)) * 4;
+                if (px + 3 < logo->rgba8.size() && logo->rgba8[px + 3] > 24) break;
+            }
+        }
+        s.target_x = tx;
+        s.target_y = ty;
+        // SPAWN: diffuse in a wider/taller band over the wordmark (measured §10: a wide flat
+        // horizontal band, ~1.3x wide x ~1.6x tall vs the final text).
+        s.spawn_x = (rnd() - 0.5f) * 1.3f + 0.5f;
+        s.spawn_y = (rnd() - 0.5f) * 1.6f + 0.5f;
+        s.delay = rnd();
+        s.size = 6.0f + rnd() * 10.0f;
+        s.phase = rnd() * 6.2831853f;
+        title_sparkles_.push_back(s);
+    }
+}
+
 void FrontendSceneBuilder::build_title(f2::render::UiDrawList& scene, float width, float height,
                                        double state_time, std::string_view accept_prompt,
                                        bool using_controller_prompts) {
@@ -138,44 +179,80 @@ void FrontendSceneBuilder::build_title(f2::render::UiDrawList& scene, float widt
         add(NativeUiAsset::Logo, logo_x, logo_y, logo_x + logo_width, logo_y + logo_height, 0.0f,
             0.0f, 1.0f, 1.0f, rgba(255, 255, 255, alpha_byte(logo_fade)));
 
-        // Title "burst" + "sparkles" — the retail effect is NOT a particle system. It is an Anark
-        // (BGF) timeline animating THREE material layers over the SAME fe_f2logo texture, alpha-
-        // blended (NOT additive): L1 solid wordmark (drawn above), L2 a one-shot ignition flare
-        // ("burst"), L3 a looping idle shimmer ("sparkles"). Evidence: ghidra_out/title_sparkle_
-        // burst_re.txt (frontendstartupscreen.bgf has FXGUI_Logomain / _Fadein / _Ambient, no
-        // star/particle/emitter element; measured reveal blend = SRC_ALPHA/INV_SRC_ALPHA).
-        //
-        // The layers are the logo quad re-drawn white with an opacity ENVELOPE. Curve constants
-        // marked (*) are ESTIMATES from the reference video / state timing (spec §6) pending a
-        // reveal-instant capture or an Anark-timeline parse (spec GAP 1/3) — grouped here to tune.
-        const float kLogoFullTime = 0.86f + 0.75f;  // title_time at which L1 reaches full opacity
-        // L2 BURST: fast attack to a bright white flare as the wordmark completes, then decays. One shot.
-        constexpr float kBurstAttack = 0.10f;        // (*) rise to peak
-        constexpr float kBurstDecay = 0.60f;         // (*) falloff to 0
-        constexpr float kBurstPeak = 0.85f;          // (*) peak alpha (high-alpha white, not additive)
-        const float burst_t = title_time - kLogoFullTime;
+        // Title BURST + SPARKLES — measured from the retail reveal (ghidra_out/title_sparkle_
+        // burst_re.txt §8/§10): a BLUE additive GPU point-sprite system, NOT the fe_f2logo
+        // material shimmer. (A) an ignition BURST flare (fe_logo_ambient starburst, blue-white,
+        // additive), (B) a SPARKLE CLOUD (~160 fe_logo_ambient blobs that spawn diffuse in a band
+        // and CONVERGE onto the wordmark silhouette), (C) a settled blue GLOW rim. Timing anchored
+        // to ignite = logo-fade start (0.86 s): burst peaks +1.1 s, letters resolve by +3.0 s.
+        const float kIgnite = 0.86f;
+        const float kBurstPeak = kIgnite + 1.1f;
+        const float kConvergeEnd = kIgnite + 3.0f;
+        const auto add_flare = [&](float cx, float cy, float half, std::uint32_t color) {
+            const auto tid = access_.id(NativeUiAsset::LogoFlare);
+            if (!tid) return;
+            scene.add_sprite(tid, cx - half, cy - half, cx + half, cy + half, 0.0f, 0.0f, 1.0f,
+                             1.0f, color);
+            scene.set_last_blend(f2::render::BlendMode::Additive);
+        };
+        const float cx = logo_x + logo_width * 0.5f;
+        const float cy = logo_y + logo_height * 0.5f;
+
+        // (A) IGNITION BURST: one big radial flare, 0 -> peak at burst_peak -> soft residual glow.
         float burst_a = 0.0f;
-        if (burst_t >= 0.0f && burst_t < kBurstAttack + kBurstDecay) {
-            burst_a = burst_t < kBurstAttack ? (burst_t / kBurstAttack)
-                                             : (1.0f - (burst_t - kBurstAttack) / kBurstDecay);
-            burst_a = std::clamp(burst_a, 0.0f, 1.0f) * kBurstPeak;
+        if (title_time >= kIgnite) {
+            if (title_time < kBurstPeak) {
+                burst_a = (title_time - kIgnite) / (kBurstPeak - kIgnite);
+            } else {
+                const float d = std::clamp((title_time - kBurstPeak) / (kConvergeEnd - kBurstPeak),
+                                           0.0f, 1.0f);
+                burst_a = 1.0f - d * (1.0f - 0.14f);  // decays to a persistent ~0.14 glow
+            }
         }
         if (burst_a > 0.004f) {
-            add(NativeUiAsset::Logo, logo_x, logo_y, logo_x + logo_width, logo_y + logo_height, 0.0f,
-                0.0f, 1.0f, 1.0f, rgba(255, 255, 255, alpha_byte(burst_a)));
+            add_flare(cx, cy, logo_width * 0.62f, rgba(130, 175, 255, alpha_byte(burst_a * 0.9f)));
         }
-        // L3 AMBIENT: gentle looping shimmer on the settled wordmark (glyph-shaped, since it's the
-        // logo's own silhouette). Low-amplitude cool-white opacity pulse that never fully leaves.
-        constexpr float kAmbientPeriod = 2.5f;       // (*) shimmer period, seconds
-        constexpr float kAmbientBase = 0.06f;        // (*) never-off floor
-        constexpr float kAmbientAmp = 0.10f;         // (*) pulse amplitude
-        const float ambient_in = std::clamp((title_time - (kLogoFullTime + kBurstAttack)) / 0.5f,
-                                             0.0f, 1.0f);  // ramp in as the burst settles
-        if (ambient_in > 0.0f) {
-            const float pulse = 0.5f + 0.5f * std::sin(title_time * (6.2831853f / kAmbientPeriod));
-            const float ambient_a = ambient_in * (kAmbientBase + kAmbientAmp * pulse);
-            add(NativeUiAsset::Logo, logo_x, logo_y, logo_x + logo_width, logo_y + logo_height, 0.0f,
-                0.0f, 1.0f, 1.0f, rgba(226, 236, 255, alpha_byte(ambient_a)));
+
+        // (B) SPARKLE CLOUD: spawn in a band, converge to the wordmark silhouette, then twinkle.
+        ensure_title_sparkles();
+        const float unit = width / 1280.0f;
+        const auto ease_out = [](float t) { return 1.0f - (1.0f - t) * (1.0f - t); };
+        for (const auto& s : title_sparkles_) {
+            const float own_start = kIgnite + s.delay * 0.8f;
+            if (title_time < own_start) continue;
+            const float conv = ease_out(std::clamp(
+                (title_time - own_start) / (kConvergeEnd - own_start), 0.0f, 1.0f));
+            // spawn/target in logo-rect normalized coords -> screen.
+            const float sxn = s.spawn_x + (s.target_x - s.spawn_x) * conv;
+            const float syn = s.spawn_y + (s.target_y - s.spawn_y) * conv;
+            const float jit = (1.0f - conv) * 4.0f * unit;
+            const float px = logo_x + sxn * logo_width + std::sin(s.phase + title_time * 2.0f) * jit;
+            const float py = logo_y + syn * logo_height + std::cos(s.phase + title_time * 2.3f) * jit;
+            // opacity: fade in, hold bright through the burst, drop to a low idle twinkle.
+            const float fade_in = std::clamp((title_time - own_start) / 0.3f, 0.0f, 1.0f);
+            float a;
+            if (title_time < kConvergeEnd) {
+                a = fade_in * (0.55f + 0.45f * (title_time < kBurstPeak ? 1.0f : 0.8f));
+            } else {
+                a = 0.18f + 0.20f * (0.5f + 0.5f * std::sin(title_time * 3.0f + s.phase));  // twinkle
+            }
+            if (a <= 0.02f) continue;
+            const float half = s.size * unit * (1.5f - 0.8f * conv) * 0.5f;
+            add_flare(px, py, half, rgba(185, 212, 255, alpha_byte(a)));
+        }
+
+        // (C) SETTLED GLOW: a soft blue rim hugging the letters (logo silhouette, slightly enlarged,
+        // low additive alpha, gentle pulse) once the letters have resolved.
+        const float glow_in = std::clamp((title_time - (kBurstPeak)) / 0.8f, 0.0f, 1.0f);
+        if (glow_in > 0.0f) {
+            const float pulse = 0.5f + 0.5f * std::sin(title_time * (6.2831853f / 2.6f));
+            const float glow_a = glow_in * (0.10f + 0.06f * pulse);
+            const float gx = logo_width * 0.03f;
+            const float gy = logo_height * 0.06f;
+            scene.add_sprite(access_.id(NativeUiAsset::Logo), logo_x - gx, logo_y - gy,
+                             logo_x + logo_width + gx, logo_y + logo_height + gy, 0.0f, 0.0f, 1.0f,
+                             1.0f, rgba(120, 165, 255, alpha_byte(glow_a)));
+            scene.set_last_blend(f2::render::BlendMode::Additive);
         }
     }
 

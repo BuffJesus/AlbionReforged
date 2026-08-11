@@ -42,7 +42,7 @@ namespace {
 constexpr UINT kFrameCount = 2;
 constexpr DXGI_FORMAT kBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
-constexpr UINT kUiTextureCount = 35;
+constexpr UINT kUiTextureCount = 36;
 
 // Recovered from the retail ExpandableMenuFormatter LuaQ bytecode.  The
 // original formatter assigns a menu item to:
@@ -775,6 +775,7 @@ private:
         case f2::NativeUiAsset::Motifs: return 32;
         case f2::NativeUiAsset::CalibrationImage: return 33;
         case f2::NativeUiAsset::GoldCoin: return 34;
+        case f2::NativeUiAsset::LogoFlare: return 35;
         default: return 0;
         }
     }
@@ -991,6 +992,7 @@ private:
         ensure_ui_texture(f2::NativeUiAsset::Motifs);
         ensure_ui_texture(f2::NativeUiAsset::CalibrationImage);
         ensure_ui_texture(f2::NativeUiAsset::GoldCoin);
+        ensure_ui_texture(f2::NativeUiAsset::LogoFlare);
         ensure_font_texture();
     }
 
@@ -1029,7 +1031,7 @@ private:
                 font_texture_.shader_read = true;
             }
         }
-        const std::array<f2::NativeUiAsset, 35> assets = {
+        const std::array<f2::NativeUiAsset, 36> assets = {
             f2::NativeUiAsset::TitleBackground, f2::NativeUiAsset::MainBackground,
             f2::NativeUiAsset::Logo, f2::NativeUiAsset::Accept, f2::NativeUiAsset::Back,
             f2::NativeUiAsset::MenuSurface, f2::NativeUiAsset::Sparkle1,
@@ -1047,7 +1049,8 @@ private:
             f2::NativeUiAsset::MenuFrameRightLower,
             f2::NativeUiAsset::FramesPage, f2::NativeUiAsset::FramesPageTexture,
             f2::NativeUiAsset::SliderFrame, f2::NativeUiAsset::Motifs,
-            f2::NativeUiAsset::CalibrationImage, f2::NativeUiAsset::GoldCoin};
+            f2::NativeUiAsset::CalibrationImage, f2::NativeUiAsset::GoldCoin,
+            f2::NativeUiAsset::LogoFlare};
         for (const auto asset : assets) {
             const auto* source = ui_assets_.texture(asset);
             if (!source) continue;

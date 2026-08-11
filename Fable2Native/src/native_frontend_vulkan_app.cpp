@@ -38,7 +38,7 @@ namespace {
 
 // UI texture slots — identical mapping to the D3D12 frontend so the shared FrontendSceneBuilder
 // resolves the same logical asset to the same slot on both backends.
-constexpr std::uint32_t kUiTextureCount = 35;
+constexpr std::uint32_t kUiTextureCount = 36;
 
 std::size_t ui_slot(f2::NativeUiAsset asset) {
     switch (asset) {
@@ -77,6 +77,7 @@ std::size_t ui_slot(f2::NativeUiAsset asset) {
     case f2::NativeUiAsset::Motifs: return 32;
     case f2::NativeUiAsset::CalibrationImage: return 33;
     case f2::NativeUiAsset::GoldCoin: return 34;
+    case f2::NativeUiAsset::LogoFlare: return 35;
     default: return 0;
     }
 }
@@ -957,7 +958,7 @@ private:
               f2::NativeUiAsset::MenuFrameRightLower, f2::NativeUiAsset::FramesPage,
               f2::NativeUiAsset::FramesPageTexture, f2::NativeUiAsset::SliderFrame,
               f2::NativeUiAsset::Motifs, f2::NativeUiAsset::CalibrationImage,
-              f2::NativeUiAsset::GoldCoin}) {
+              f2::NativeUiAsset::GoldCoin, f2::NativeUiAsset::LogoFlare}) {
             ensure_ui_texture(asset);
         }
     }
