@@ -795,6 +795,78 @@ def _build_ehf(ehf_bytes: bytes):
     height = struct.unpack_from(">f", ehf_bytes, p)[0]
     if not math.isfinite(height):
         return None
+
+    # SLOPED-VISTA path (ghidra_out/ehf_vista_re.txt §3/§4B): the body's "850A0" patches carry
+    # the DISTANT-LOD render vertices (8 verts per 160-byte subcell). Deduping their (x,y)
+    # recovers a coarse grid whose z is the real terrain height — so a sloped vista (distant
+    # hills, e.g. spring_vista) gets real elevated geometry instead of a flat plane. The
+    # sea_vista is planar (all z == height) so this yields the SAME flat result; any parse
+    # deviation falls back to the header grid below. Returns None from the helper on any issue.
+    def _coarse_from_850a0():
+        try:
+            n850 = struct.unpack_from(">I", ehf_bytes, p + 4)[0]
+            if not (0 < n850 <= 4096):
+                return None
+            q = p + 8
+            verts = {}  # (xr,yr) -> list of heights
+            for _ in range(n850):
+                fa, fb, w_sub, h_sub = struct.unpack_from(">ffII", ehf_bytes, q)
+                q += 16
+                if not (0 < w_sub * h_sub <= 1 << 20):
+                    return None
+                for _s in range(w_sub * h_sub):
+                    base = q + 0x40  # skip the 64-byte bbox header; 8 verts follow
+                    for vi in range(8):
+                        vx, vy, vz = struct.unpack_from(">fff", ehf_bytes, base + vi * 12)
+                        if math.isfinite(vx) and math.isfinite(vy) and math.isfinite(vz):
+                            verts.setdefault((round(vx, 2), round(vy, 2)), []).append(vz)
+                    q += 160
+                q += 24  # patch aabb_min[3] + aabb_max[3]
+            if len(verts) < 4:
+                return None
+            xs = sorted({k[0] for k in verts})
+            ys = sorted({k[1] for k in verts})
+            if len(xs) < 2 or len(ys) < 2 or len(xs) * len(ys) > 1 << 18:
+                return None
+
+            def _h(gx, gy):
+                hs = verts.get((gx, gy))
+                if hs:
+                    hs = sorted(hs)
+                    return hs[len(hs) // 2]  # median (skirt/neighbour samples are outliers)
+                return None
+            # Only worth the coarse mesh if the surface is actually sloped; else fall back to
+            # the trivial flat header grid (identical result, simpler).
+            allh = [h for h in (_h(gx, gy) for gx in xs for gy in ys) if h is not None]
+            if not allh or (max(allh) - min(allh)) < 1.0:
+                return None
+            cpos, cnrm, cuv, cidx = [], [], [], []
+            node = {}
+            for gy in ys:
+                for gx in xs:
+                    hh = _h(gx, gy)
+                    if hh is None:  # fill a gap with the column/row nearest value
+                        hh = min(allh)
+                    node[(gx, gy)] = len(cpos) // 3
+                    cpos.extend((gx, gy, hh))
+                    cnrm.extend((0.0, 0.0, 1.0))
+                    cuv.extend((gx * 0.02, gy * 0.02))
+            for j in range(len(ys) - 1):
+                for i in range(len(xs) - 1):
+                    v00 = node[(xs[i], ys[j])]
+                    v10 = node[(xs[i + 1], ys[j])]
+                    v01 = node[(xs[i], ys[j + 1])]
+                    v11 = node[(xs[i + 1], ys[j + 1])]
+                    cidx.extend((v00, v01, v10, v10, v01, v11))
+            return (cpos, cnrm, cuv, cidx) if cidx else None
+        except (struct.error, ValueError, IndexError):
+            return None
+
+    coarse = _coarse_from_850a0()
+    if coarse:
+        return coarse
+
+    # FLAT-VISTA path (sea_vista): header grid at the constant plane height.
     pos, nrm, uv, idx = [], [], [], []
     for cy in range(u1):
         for cx in range(u0):
