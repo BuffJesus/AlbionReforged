@@ -105,7 +105,7 @@ void FrontendSceneBuilder::build_loading(f2::render::UiDrawList& scene, float wi
 
 void FrontendSceneBuilder::ensure_title_sparkles() {
     if (!title_sparkles_.empty()) return;
-    constexpr std::size_t kCount = 160;  // measured burst spawns hundreds; 160 reads as the cloud
+    constexpr std::size_t kCount = 600;  // measured burst spawns hundreds; a dense band, not sparse dots
     title_sparkles_.reserve(kCount);
     const NativeTexture* logo = assets_.texture(NativeUiAsset::Logo);
     const bool have_mask = logo && logo->width > 0 && logo->height > 0 &&
@@ -133,12 +133,12 @@ void FrontendSceneBuilder::ensure_title_sparkles() {
         }
         s.target_x = tx;
         s.target_y = ty;
-        // SPAWN: diffuse in a wider/taller band over the wordmark (measured §10: a wide flat
-        // horizontal band, ~1.3x wide x ~1.6x tall vs the final text).
-        s.spawn_x = (rnd() - 0.5f) * 1.3f + 0.5f;
-        s.spawn_y = (rnd() - 0.5f) * 1.6f + 0.5f;
+        // SPAWN: diffuse in a WIDE FLAT horizontal band over the wordmark (measured §10: X span
+        // ~5-10x wider than Y — a tight horizontal band, ~1.15x wide x ~1.1x tall vs the text).
+        s.spawn_x = (rnd() - 0.5f) * 1.15f + 0.5f;
+        s.spawn_y = (rnd() - 0.5f) * 1.1f + 0.5f;
         s.delay = rnd();
-        s.size = 6.0f + rnd() * 10.0f;
+        s.size = 12.0f + rnd() * 18.0f;
         s.phase = rnd() * 6.2831853f;
         title_sparkles_.push_back(s);
     }
@@ -155,6 +155,10 @@ void FrontendSceneBuilder::build_title(f2::render::UiDrawList& scene, float widt
     };
 
     const float title_time = static_cast<float>(state_time);
+    // The title reveal (ignite→settle, first ~4s) plays over a FLAT GREY backdrop (measured
+    // RGB ~72,72,72 in title_capture/reveal_frames/*) — the app clears the Title frame grey.
+    // The scenic panorama then FADES IN over that grey from ~5.9s (retail: the title shows the
+    // panorama once you wait past the reveal), scrolling slowly.
     if (const NativeTexture* background = assets_.texture(NativeUiAsset::TitleBackground);
         background && access_.id(NativeUiAsset::TitleBackground)) {
         const float fade = std::clamp((title_time - 5.90f) / 1.10f, 0.0f, 1.0f);
@@ -168,50 +172,62 @@ void FrontendSceneBuilder::build_title(f2::render::UiDrawList& scene, float widt
         }
     }
 
-    const float logo_fade = std::clamp((title_time - 0.86f) / 0.75f, 0.0f, 1.0f);
+    // The SOLID wordmark resolves LATE — the letters emerge from the converging star cloud and
+    // only become solid near the end of the reveal (retail t021882 ≈ native 2.65s), not during
+    // the burst. So fade the logo in from ~1.9s to ~2.65s (the stars carry the letter shape until).
+    const float logo_fade = std::clamp((title_time - 1.9f) / 0.75f, 0.0f, 1.0f);
     const NativeTexture* logo = assets_.texture(NativeUiAsset::Logo);
-    if (logo && access_.id(NativeUiAsset::Logo) && logo_fade > 0.0f) {
+    // Enter at ignite (0.86s) even though logo_fade is still 0 — the ignition BLOOM + sparkle
+    // band flash BEFORE the solid wordmark fades in (the letters emerge from the burst).
+    if (logo && access_.id(NativeUiAsset::Logo) && title_time >= 0.86f) {
         const float logo_scale = width / (logo->width * 1.8f);
         const float logo_width = logo->width * logo_scale;
         const float logo_height = logo->height * logo_scale;
         const float logo_x = (width - logo_width) * 0.5f;
-        const float logo_y = height * 0.47f - logo_height * 0.5f;
+        // Wordmark vertical center measured at ~0.43·H in the retail reveal frames (was 0.47).
+        const float logo_y = height * 0.43f - logo_height * 0.5f;
         add(NativeUiAsset::Logo, logo_x, logo_y, logo_x + logo_width, logo_y + logo_height, 0.0f,
             0.0f, 1.0f, 1.0f, rgba(255, 255, 255, alpha_byte(logo_fade)));
 
         // Title BURST + SPARKLES — measured from the retail reveal (ghidra_out/title_sparkle_
-        // burst_re.txt §8/§10): a BLUE additive GPU point-sprite system, NOT the fe_f2logo
-        // material shimmer. (A) an ignition BURST flare (fe_logo_ambient starburst, blue-white,
-        // additive), (B) a SPARKLE CLOUD (~160 fe_logo_ambient blobs that spawn diffuse in a band
-        // and CONVERGE onto the wordmark silhouette), (C) a settled blue GLOW rim. Timing anchored
-        // to ignite = logo-fade start (0.86 s): burst peaks +1.1 s, letters resolve by +3.0 s.
+        // burst_re.txt §8/§10 + the reveal_frames/*.png captures): a BLUE-white additive GPU
+        // point-sprite system over BLACK. (A) a big soft radial BLOOM (fe_logo_ambient starburst
+        // blown up ~screen-tall) that flashes at ignite; (B) a DENSE horizontal SPARKLE BAND of
+        // fe_logo_ambient blobs packed across the wordmark that CONVERGES onto the "Fable II"
+        // silhouette to resolve the letters; (C) a settled blue GLOW rim. Timing anchored to
+        // ignite = logo-fade start (0.86 s): burst peaks +1.1 s, letters resolve by +3.0 s.
         const float kIgnite = 0.86f;
         const float kBurstPeak = kIgnite + 1.1f;
         const float kConvergeEnd = kIgnite + 3.0f;
-        const auto add_flare = [&](float cx, float cy, float half, std::uint32_t color) {
+        const auto add_flare = [&](float px, float py, float half, std::uint32_t color) {
             const auto tid = access_.id(NativeUiAsset::LogoFlare);
             if (!tid) return;
-            scene.add_sprite(tid, cx - half, cy - half, cx + half, cy + half, 0.0f, 0.0f, 1.0f,
-                             1.0f, color);
+            // Inset the UVs to skip fe_logo_ambient.png's 1px OPAQUE BLACK border (alpha=255 at
+            // the very edge), which otherwise renders as a faint square frame around each sparkle.
+            scene.add_sprite(tid, px - half, py - half, px + half, py + half, 0.05f, 0.05f, 0.95f,
+                             0.95f, color);
             scene.set_last_blend(f2::render::BlendMode::Additive);
         };
         const float cx = logo_x + logo_width * 0.5f;
         const float cy = logo_y + logo_height * 0.5f;
 
-        // (A) IGNITION BURST: one big radial flare, 0 -> peak at burst_peak -> soft residual glow.
-        float burst_a = 0.0f;
+        // (A) IGNITION BLOOM: a FULL-SCREEN additive WASH that flashes the whole screen bright at
+        // ignite then fades to black — MEASURED to match the retail reveal frames' background
+        // corners: 225 -> 180 -> 127 -> 72 -> 0 (title_capture/reveal_frames/*, an additive bloom
+        // over black, NOT a static grey backdrop). The uniform wash reproduces the corner fade
+        // (native corners were black before — the bloom must reach the corners); a brighter blue
+        // central flare adds the wordmark-band pop. wash≈0 by the ~5.9s panorama fade-in.
+        float bloom = 0.0f;
         if (title_time >= kIgnite) {
-            if (title_time < kBurstPeak) {
-                burst_a = (title_time - kIgnite) / (kBurstPeak - kIgnite);
-            } else {
-                const float d = std::clamp((title_time - kBurstPeak) / (kConvergeEnd - kBurstPeak),
-                                           0.0f, 1.0f);
-                burst_a = 1.0f - d * (1.0f - 0.14f);  // decays to a persistent ~0.14 glow
-            }
+            const float tp = std::clamp((title_time - kIgnite) / 4.7f, 0.0f, 1.0f);
+            bloom = std::pow(1.0f - tp, 2.2f);  // (1-t)^2.2 tracks the measured 225→72→0 corner fade
         }
-        if (burst_a > 0.004f) {
-            add_flare(cx, cy, logo_width * 0.62f, rgba(130, 175, 255, alpha_byte(burst_a * 0.9f)));
+        if (bloom > 0.004f) {
+            add_rect(scene, 0.0f, 0.0f, width, height, rgba(248, 249, 252, alpha_byte(bloom * 0.88f)));
+            scene.set_last_blend(f2::render::BlendMode::Additive);
         }
+        (void)cx;
+        (void)cy;
 
         // (B) SPARKLE CLOUD: spawn in a band, converge to the wordmark silhouette, then twinkle.
         ensure_title_sparkles();
@@ -238,7 +254,7 @@ void FrontendSceneBuilder::build_title(f2::render::UiDrawList& scene, float widt
             }
             if (a <= 0.02f) continue;
             const float half = s.size * unit * (1.5f - 0.8f * conv) * 0.5f;
-            add_flare(px, py, half, rgba(185, 212, 255, alpha_byte(a)));
+            add_flare(px, py, half, rgba(210, 228, 255, alpha_byte(a)));
         }
 
         // (C) SETTLED GLOW: a soft blue rim hugging the letters (logo silhouette, slightly enlarged,
