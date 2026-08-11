@@ -235,6 +235,47 @@ Verify: run on the extracted `chapter2slums.engine_level`, then World `--scene` 
     --textures-bnk Globals/1024mip0_textures.bnk --textures-bnk Globals/globals_textures.bnk`.
     (`npc_markerdump.exe` auto-located in `Fable2AssetBrowser/source/build/`.)
 
+## ▶▶ SESSION SNAPSHOT 2026-08-10 (late) — vista cooked; full recook renders; 2 open items
+
+**Shipped this session (committed):**
+- **Sea/backdrop `.ehf` vista cook** — `cook_levels.py _build_ehf()` + `--vista-ehf` flag (spec
+  `ghidra_out/ehf_vista_re.txt`, validated on 3 real .ehf). Parses the 63-byte BE header (origin
+  f0/f1, grid u0/u1, tile f2) + the pre-850A0 body float (flat surface height) via the exact
+  EhfChunkParser skip-tex walk, emits a flat plane through the same {x,z,y} swap as terrain/water.
+  chapter2slums `sea_vista_id_6ce5fa48.ehf` → 33×65 grid, origin (0,-128), tile 2.0, **height
+  35.304** → 2145 verts filling game **X[0,64] Y[-128,0]**.
+- **Definitive full recook + render** (`scratchpad/recook_full.sh`, screenshot
+  `scratchpad/shots/native_full_vista.png`): 661 meshes / 6847 instances = props(1323) + terrain +
+  water + **vista** + hero + 20 NPCs + 64 lights + 515/516 textures. Renders: castle, bridge, dense
+  town, lit terrain, sky, the vista plane bridging the near-corner void.
+
+**OPEN ITEM 1 — the castle-approach VOID is only partly filled (user-flagged "still a void between").**
+MEASURED world bounds (render space, `native_full_vista.f2scene`):
+  - terrain: X[0,288] Z[0,288]   (from `slums.ghf`; the main render `.ehf` has the SAME extent: origin
+    (0,0), 577×577, tile 0.5 → X[0,288] Y[0,288] — so the .ehf does NOT extend past the .ghf)
+  - water:   X[0,258] Z[0,225]   (the town canals; `slums.water`)
+  - vista:   X[0,64]  Z[-128,0]  (the small sea_vista corner)
+  - castle + props: X[0,295] Z[**-92.7**,221.6]  ← the castle sits at render Z≈-92 (game Y≈-92)
+  ⇒ **The void = game X[64,288] Y[-128,0]** — the whole southern band the castle sits over, which the
+  small X[0,64] sea_vista corner does NOT cover. NOT guessing: the numbers above are from the cooked
+  scene. NEXT-SESSION LEADS (data-driven, don't guess): (a) is the negative-Y region meant to be SEA?
+  — we cooked `slums.water` (the town water, Y≥0) but NOT `sea_vista.water` (streaming.bnk #115, same
+  stem, staged at `scratchpad/sea_vista.water`); cook it and/or extend a sea plane across game Y<0.
+  (b) `f2tool list` for OTHER vista/backdrop `.ehf` under `worlds\albion\bwsslums\vistas\chapter2slums`
+  — there may be more than one tile. (c) does the vista carry a world PLACEMENT transform (level/.save)
+  rather than the identity we assumed? (d) does `bs_market_fairfaxcastle` include its own island/plinth?
+
+**OPEN ITEM 2 — most PROPS render near-black** (townhouses/walls/foliage). NOT missing albedo — the
+cooked materials DO carry `albedo=`/`normal=` DDS (e.g. `mat_4_*`, `mat_6_*` = bs_townhouse textures).
+So it's a lighting/normals/base-colour issue. A background agent (running at session end) is root-causing
+it → report will be at **`ghidra_out/dark_props_diagnosis.txt`** with a minimal cook_levels.py fix plan.
+READ THAT FIRST next session.
+
+**Recook command of record:** `scratchpad/recook_full.sh` (all inputs staged in `scratchpad/lvl/` +
+`scratchpad/*.ehf/.water/.ghf` + game `Globals/`; tex-cook =
+`Fable2Native/build/Release/f2native_cook_lh_tex.exe` — REBUILD it if `cook_lh_tex.cpp` changed, the
+exe was stale this session). Screenshot: `scratchpad/shot_world.ps1 -Scene <f2scene> -Tag <t>`.
+
 ## Ground-truth references
 `ghidra_out/world_level_format.txt`, `newgame_handoff.txt`, `gdb_instantiation_re.txt`,
 `physics_collision_system.txt`, `hero_appearance_morph.txt`; `Fable2AssetBrowser/source/src/Level/
