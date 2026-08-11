@@ -520,7 +520,9 @@ private:
         const bool msaa = msaa_samples_ > VK_SAMPLE_COUNT_1_BIT;
         // attachment 0 = color (multisampled under MSAA; else the presentable swapchain image).
         // attachment 1 (MSAA only) = the resolve target = the presentable swapchain image.
-        VkAttachmentDescription attachments[2]{};
+        // depth attachment is LAST (index 1 no-MSAA / 2 under MSAA).
+        const std::uint32_t depth_index = msaa ? 2u : 1u;
+        VkAttachmentDescription attachments[3]{};
         attachments[0].format = surface_format_.format;
         attachments[0].samples = msaa ? msaa_samples_ : VK_SAMPLE_COUNT_1_BIT;
         attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -529,27 +531,43 @@ private:
         attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         attachments[0].finalLayout =
             msaa ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        attachments[1].format = surface_format_.format;
-        attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-        attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        attachments[1].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        if (msaa) {
+            attachments[1].format = surface_format_.format;
+            attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+            attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            attachments[1].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        }
+        attachments[depth_index].format = kDepthFormat;
+        attachments[depth_index].samples = msaa ? msaa_samples_ : VK_SAMPLE_COUNT_1_BIT;
+        attachments[depth_index].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachments[depth_index].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[depth_index].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[depth_index].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[depth_index].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[depth_index].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         VkAttachmentReference color_ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         VkAttachmentReference resolve_ref{1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkAttachmentReference depth_ref{depth_index,
+                                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
         VkSubpassDescription subpass{};
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpass.colorAttachmentCount = 1;
         subpass.pColorAttachments = &color_ref;
         if (msaa) subpass.pResolveAttachments = &resolve_ref;
+        subpass.pDepthStencilAttachment = &depth_ref;
         VkSubpassDependency dependency{};
         dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
         dependency.dstSubpass = 0;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                   VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-        info.attachmentCount = msaa ? 2u : 1u;
+        info.attachmentCount = msaa ? 3u : 2u;
         info.pAttachments = attachments;
         info.subpassCount = 1;
         info.pSubpasses = &subpass;
@@ -637,17 +655,83 @@ private:
         msaa_memory_ = VK_NULL_HANDLE;
     }
 
+    // World depth buffer. Single image shared across framebuffers (like msaa_image_); its
+    // sample count must match the colour attachment (msaa) for a valid render pass.
+    bool create_depth_image() {
+        destroy_depth_image();
+        VkImageCreateInfo image_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        image_info.imageType = VK_IMAGE_TYPE_2D;
+        image_info.format = kDepthFormat;
+        image_info.extent = {extent_.width, extent_.height, 1};
+        image_info.mipLevels = 1;
+        image_info.arrayLayers = 1;
+        image_info.samples = msaa_samples_ > VK_SAMPLE_COUNT_1_BIT ? msaa_samples_
+                                                                   : VK_SAMPLE_COUNT_1_BIT;
+        image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        image_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateImage(device_, &image_info, nullptr, &depth_image_) != VK_SUCCESS) return false;
+        VkMemoryRequirements requirements{};
+        vkGetImageMemoryRequirements(device_, depth_image_, &requirements);
+        VkPhysicalDeviceMemoryProperties memory_properties{};
+        vkGetPhysicalDeviceMemoryProperties(physical_device_, &memory_properties);
+        std::uint32_t memory_type = 0;
+        bool found = false;
+        for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
+            if ((requirements.memoryTypeBits & (1u << i)) &&
+                (memory_properties.memoryTypes[i].propertyFlags &
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+                memory_type = i;
+                found = true;
+                break;
+            }
+        }
+        if (!found) { destroy_depth_image(); return false; }
+        VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocation.allocationSize = requirements.size;
+        allocation.memoryTypeIndex = memory_type;
+        if (vkAllocateMemory(device_, &allocation, nullptr, &depth_memory_) != VK_SUCCESS ||
+            vkBindImageMemory(device_, depth_image_, depth_memory_, 0) != VK_SUCCESS) {
+            destroy_depth_image();
+            return false;
+        }
+        VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        view_info.image = depth_image_;
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = kDepthFormat;
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(device_, &view_info, nullptr, &depth_view_) != VK_SUCCESS) {
+            destroy_depth_image();
+            return false;
+        }
+        return true;
+    }
+
+    void destroy_depth_image() {
+        if (depth_view_) vkDestroyImageView(device_, depth_view_, nullptr);
+        if (depth_image_) vkDestroyImage(device_, depth_image_, nullptr);
+        if (depth_memory_) vkFreeMemory(device_, depth_memory_, nullptr);
+        depth_view_ = VK_NULL_HANDLE;
+        depth_image_ = VK_NULL_HANDLE;
+        depth_memory_ = VK_NULL_HANDLE;
+    }
+
     bool create_framebuffers() {
         const bool msaa = msaa_samples_ > VK_SAMPLE_COUNT_1_BIT;
-        if (!create_msaa_image()) return false;
+        if (!create_msaa_image() || !create_depth_image()) return false;
         framebuffers_.resize(swapchain_views_.size());
         for (std::size_t index = 0; index < swapchain_views_.size(); ++index) {
-            // MSAA: attachment 0 = the multisampled image, attachment 1 = the resolve/swapchain image.
-            const VkImageView attachments[2] = {msaa ? msaa_view_ : swapchain_views_[index],
-                                                swapchain_views_[index]};
+            // Order must match the render pass: [0]=color, [1]=(resolve|depth), [2]=depth.
+            const VkImageView attachments[3] = {
+                msaa ? msaa_view_ : swapchain_views_[index],   // [0] color
+                msaa ? swapchain_views_[index] : depth_view_,  // [1] resolve (MSAA) or depth
+                depth_view_,                                   // [2] depth (MSAA only)
+            };
             VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             info.renderPass = render_pass_;
-            info.attachmentCount = msaa ? 2u : 1u;
+            info.attachmentCount = msaa ? 3u : 2u;
             info.pAttachments = attachments;
             info.width = extent_.width;
             info.height = extent_.height;
@@ -1052,14 +1136,17 @@ private:
         } else {
             clear.color = {{0.015f, 0.02f, 0.035f, 1.0f}};
         }
-        // Under MSAA the render pass has 2 attachments (color 0 + resolve 1); only the color clears,
-        // but pass a clear value per attachment so validation is happy.
-        const VkClearValue clears[2] = {clear, clear};
+        // Attachments: [0]=color, [1]=(resolve MSAA / depth no-MSAA), [2]=depth (MSAA). Give a
+        // clear value per attachment; the depth slot clears to 1.0 (far).
+        const bool msaa_clear = msaa_samples_ > VK_SAMPLE_COUNT_1_BIT;
+        VkClearValue depth_clear{};
+        depth_clear.depthStencil = {1.0f, 0};
+        VkClearValue clears[3] = {clear, msaa_clear ? clear : depth_clear, depth_clear};
         VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         pass.renderPass = render_pass_;
         pass.framebuffer = framebuffers_[image_index];
         pass.renderArea.extent = extent_;
-        pass.clearValueCount = msaa_samples_ > VK_SAMPLE_COUNT_1_BIT ? 2u : 1u;
+        pass.clearValueCount = msaa_clear ? 3u : 2u;
         pass.pClearValues = clears;
         vkCmdBeginRenderPass(command_buffers_[image_index], &pass, VK_SUBPASS_CONTENTS_INLINE);
         if (game_.frontend.state() == f2::FrontendState::World) {
@@ -1135,6 +1222,7 @@ private:
         video_decoder_.close();
         world_renderer_.destroy();
         destroy_msaa_image();
+        destroy_depth_image();
         if (ui_descriptor_pool_) vkDestroyDescriptorPool(device_, ui_descriptor_pool_, nullptr);
         if (device_) {
             cleanup_swapchain();
@@ -1168,6 +1256,10 @@ private:
     VkImage msaa_image_ = VK_NULL_HANDLE;  // multisampled color target resolved to the swapchain image
     VkDeviceMemory msaa_memory_ = VK_NULL_HANDLE;
     VkImageView msaa_view_ = VK_NULL_HANDLE;
+    static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;  // world depth buffer
+    VkImage depth_image_ = VK_NULL_HANDLE;
+    VkDeviceMemory depth_memory_ = VK_NULL_HANDLE;
+    VkImageView depth_view_ = VK_NULL_HANDLE;
     bool framebuffer_resized_ = false;
     bool com_initialized_ = false;
     bool video_runtime_started_ = false;
