@@ -575,6 +575,54 @@ def read_lights(level_save: Path, level_gdb: Path, lightdump: Path,
     return lights
 
 
+def _build_ehf(ehf_bytes: bytes):
+    """Cook a flat sea/backdrop .ehf vista mesh (the distant coast that fills the void
+    between the town heightfield and the castle). ghidra_out/ehf_vista_re.txt: the 63-byte
+    BE header carries origin (f0/f1), grid dims (u0/u1) and tile (f2); the render surface is
+    a flat plane whose height is the constant repeated across the body's 850A0 vertices.
+    Returns (pos,nrm,uv,idx) in GAME space (X, Y, height) — the writer applies the {x,z,y}
+    swap. Flat-vista path only (the sea_vista is planar)."""
+    if len(ehf_bytes) < 0x3f or ehf_bytes[:23] != b"HeightFieldGraphicsFile":
+        return None
+    ox, oy = struct.unpack_from(">ff", ehf_bytes, 0x1b)
+    u0, u1 = struct.unpack_from(">II", ehf_bytes, 0x23)
+    tile = struct.unpack_from(">f", ehf_bytes, 0x2b)[0]
+    body_off = struct.unpack_from(">I", ehf_bytes, 0x37)[0]
+    if not (0 < u0 <= 4096 and 0 < u1 <= 4096 and tile > 0 and body_off < len(ehf_bytes)):
+        return None
+    # Flat height = the pre-850A0 float in the body, reached via the exact EhfChunkParser
+    # walk (skip the two leading .tex blobs). ghidra_out/ehf_vista_re.txt §7 / EhfChunkParser.
+    def _skip_tex(p):
+        mt = struct.unpack_from(">I", ehf_bytes, p + 0x20)[0]
+        pf = struct.unpack_from(">I", ehf_bytes, p + 0x18)[0]
+        if pf == 98:
+            w = struct.unpack_from(">I", ehf_bytes, p + 0x10)[0]
+            h = struct.unpack_from(">I", ehf_bytes, p + 0x14)[0]
+            return p + mt + w * h * 2
+        comp = struct.unpack_from(">I", ehf_bytes, p + mt + 4)[0]
+        return p + mt + 8 + comp
+    p = _skip_tex(body_off)
+    p = _skip_tex(p)
+    height = struct.unpack_from(">f", ehf_bytes, p)[0]
+    if not math.isfinite(height):
+        return None
+    pos, nrm, uv, idx = [], [], [], []
+    for cy in range(u1):
+        for cx in range(u0):
+            px, py = ox + cx * tile, oy + cy * tile
+            pos.extend((px, py, height))
+            nrm.extend((0.0, 0.0, 1.0))
+            uv.extend((px * 0.02, py * 0.02))
+    for j in range(u1 - 1):
+        for i in range(u0 - 1):
+            v00 = j * u0 + i
+            v10 = v00 + 1
+            v01 = (j + 1) * u0 + i
+            v11 = v01 + 1
+            idx.extend((v00, v01, v10, v10, v01, v11))
+    return (pos, nrm, uv, idx) if idx else None
+
+
 def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
                out_scene: Path, types=(2, 21), max_per_block=None, log=print,
                textures_bnks=None, tex_cook: Path = None,
@@ -588,7 +636,7 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                lights: bool = False, lightdump: Path = None,
                globals_gdb: Path = None, light_limit: int = None,
                props: bool = False, propdump: Path = None,
-               prop_limit: int = None) -> dict:
+               prop_limit: int = None, vista_ehf: Path = None) -> dict:
     """Stage 2: glue every prop model (header++body) and merge instances into one F2SCENE.
 
     Data-driven from ghidra_out/model_glue_lmp_format.txt (the RE'd glue) — no guessing.
@@ -748,6 +796,23 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             instances.append(("water0", (0.0, 0.0, 0.0), 0.0, 1.0))
             n_inst += 1
             log(f"water: {len(w_pos)//3} verts / {len(w_idx)//3} tris")
+
+    # Distant sea/coast backdrop (.ehf) — the flat plane that fills the seaward void
+    # between the town heightfield and Fairfax castle (ghidra_out/ehf_vista_re.txt).
+    if vista_ehf:
+        try:
+            vbuilt = _build_ehf(Path(vista_ehf).read_bytes())
+        except Exception as exc:  # noqa: BLE001
+            vbuilt = None
+            log(f"  vista skip ({type(exc).__name__}: {exc})")
+        if vbuilt:
+            v_pos, v_nrm, v_uv, v_idx = vbuilt
+            v_mat = len(materials)
+            materials.append(("vista", [], (0.28, 0.30, 0.30, 1.0)))
+            meshes.append(("vista0", v_mat, v_pos, v_nrm, v_uv, v_idx))
+            instances.append(("vista0", (0.0, 0.0, 0.0), 0.0, 1.0))
+            n_inst += 1
+            log(f"vista: {len(v_pos)//3} verts / {len(v_idx)//3} tris")
 
     # Hero: cook the child hero (globals body bnk) and drop one instance into the town so the
     # first level isn't empty of characters (ghidra_out/hero_render_re.txt). The model is skinned;
@@ -1137,6 +1202,8 @@ def main() -> int:
                     default=Path(__file__).resolve().parents[2] / "Fable2AssetBrowser" / "source"
                     / "build" / "propdump.exe",
                     help="propdump.exe (resolves .gdb entity -> model + transform)")
+    ap.add_argument("--vista-ehf", type=Path,
+                    help="the level's extracted sea/backdrop .ehf -> emit a distant vista mesh")
     ap.add_argument("--prop-limit", type=int,
                     help="cap the number of DISTINCT prop models cooked (first-pass; e.g. 40)")
     args = ap.parse_args()
@@ -1186,7 +1253,7 @@ def main() -> int:
                    globals_gdb=args.globals_gdb, light_limit=args.light_limit,
                    props=args.props,
                    propdump=args.propdump if (args.propdump and args.propdump.is_file()) else None,
-                   prop_limit=args.prop_limit)
+                   prop_limit=args.prop_limit, vista_ehf=args.vista_ehf)
     return 0
 
 
