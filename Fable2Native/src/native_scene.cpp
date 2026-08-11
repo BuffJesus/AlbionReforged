@@ -162,6 +162,10 @@ bool load_native_scene(const std::filesystem::path& path,
             if (!read_vec3(line, parsed.sun_direction)) {
                 return fail(&error, "invalid sun at line " + std::to_string(line_number));
             }
+        } else if (opcode == "sunlight") {
+            if (!read_vec3(line, parsed.sun_color)) {
+                return fail(&error, "invalid sunlight at line " + std::to_string(line_number));
+            }
         } else if (opcode == "sky") {
             if (!read_value(line, parsed.sky_color[0]) ||
                 !read_value(line, parsed.sky_color[1]) ||
@@ -199,6 +203,8 @@ bool save_native_scene(const std::filesystem::path& path,
     output << "F2SCENE 1\n";
     output << "sun " << scene.sun_direction[0] << ' ' << scene.sun_direction[1] << ' '
            << scene.sun_direction[2] << '\n';
+    output << "sunlight " << scene.sun_color[0] << ' ' << scene.sun_color[1] << ' '
+           << scene.sun_color[2] << '\n';
     output << "sky " << scene.sky_color[0] << ' ' << scene.sky_color[1] << ' ' << scene.sky_color[2]
            << ' ' << scene.sky_color[3] << '\n';
     for (const NativeMaterial& material : scene.materials) {

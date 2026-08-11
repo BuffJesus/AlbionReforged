@@ -1321,6 +1321,9 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
         # environmentthemes.gdb, BE bytes /255): sun = light DIRECTION = -sun_toward
         # (sun_toward Y-up = 0.9135,0.4067,0.0048); sky zenith blue (167,208,255).
         out.write("sun -0.9135 -0.4067 -0.0048\n")
+        # Warm directional sun colour = theme main_light_colour raw (255,230,111)/255
+        # (env_theme_colors_re.txt §0); the world PS tints the N.L term with it.
+        out.write("sunlight 1.0 0.902 0.4353\n")
         out.write("sky 0.6549 0.8157 1.0 1\n")
         for name, opts, base in materials:
             # Repoint albedo at the cooked loose DDS (absolute path; the runtime loads it

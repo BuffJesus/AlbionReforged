@@ -26,6 +26,7 @@ struct Constants {
     float view_projection[4][4]{};
     float sun_direction[4]{0.0f, -1.0f, 0.0f, 0.0f};  // xyz = normalised light dir (world), w unused
     float eye_time[4]{0.0f, 0.0f, 0.0f, 0.0f};         // xyz = camera eye (world), w = elapsed seconds
+    float sun_color[4]{1.0f, 1.0f, 1.0f, 0.0f};        // rgb = directional sun colour (theme)
 };
 
 // b1 point-light cbuffer (level_lights_effects_re.txt §3.1). Mirrors the HLSL layout:
@@ -452,7 +453,7 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     Microsoft::WRL::ComPtr<ID3DBlob> water_pixel_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> shader_errors;
     constexpr char shader_source[] = R"(
-cbuffer Camera : register(b0) { row_major float4x4 view_projection; float4 sun_direction; float4 eye_time; };
+cbuffer Camera : register(b0) { row_major float4x4 view_projection; float4 sun_direction; float4 eye_time; float4 sun_color; };
 // Local point lights (level_lights_effects_re.txt §3.1): lamp posts, lanterns, braziers.
 cbuffer Lights : register(b1) {
     uint light_count; float3 _light_pad;
@@ -503,7 +504,9 @@ float4 ps_main(PSInput input) : SV_TARGET {
     // props get their real baked GI (fixes the dark building faces). No-probe geometry (terrain,
     // foliage) keeps the hemisphere fallback unchanged.
     if (input.probe.w > 0.5) ambient = input.probe.rgb;
-    float3 lit = base.rgb * (ambient + ndl);
+    // Warm directional sun (theme main_light_colour) tints the N.L term; ambient stays the
+    // baked/hemisphere term. Cool ambient + warm sun = the retail daytime split.
+    float3 lit = base.rgb * (ambient + ndl * sun_color.rgb);
     // Additive local point lights (level_lights_effects_re.txt §3.1): diffuse N·L with a
     // soft linear-squared falloff clamped at each light's Range. Added AFTER the
     // hemisphere+sun term so lamps/braziers glow warm over the global lighting.
@@ -732,6 +735,10 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     constants.sun_direction[1] = sun[1];
     constants.sun_direction[2] = sun[2];
     constants.sun_direction[3] = 0.0f;
+    constants.sun_color[0] = scene.sun_color[0];
+    constants.sun_color[1] = scene.sun_color[1];
+    constants.sun_color[2] = scene.sun_color[2];
+    constants.sun_color[3] = 0.0f;
     constants.eye_time[0] = eye[0];
     constants.eye_time[1] = eye[1];
     constants.eye_time[2] = eye[2];

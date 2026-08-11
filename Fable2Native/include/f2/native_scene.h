@@ -59,6 +59,9 @@ struct NativeScene {
     std::vector<NativeInstance> instances;
     std::vector<NativeLight> lights;
     std::array<float, 3> sun_direction{0.3f, -1.0f, 0.2f};
+    // Directional sun colour (theme main_light_colour). Default warm white; the world PS
+    // tints the N.L sun term with it. env_theme_colors_re.txt: chapter2slums = (1.0,0.902,0.435).
+    std::array<float, 3> sun_color{1.0f, 1.0f, 1.0f};
     std::array<float, 4> sky_color{0.35f, 0.48f, 0.68f, 1.0f};
 
     bool validate(std::string* error = nullptr) const;
