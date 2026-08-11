@@ -510,6 +510,26 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
     import fable_mdl_format as mdl  # noqa: E402
     from cook_mdl import add_normals, texture_token  # reuse the per-MDL emit helpers
 
+    # Optional idle-pose baker (Fable2Native/tools/fable_pose.py): bakes a natural standing idle
+    # onto the skinned characters (hero/NPCs) so they aren't in the raw bind A-pose. Any failure
+    # (missing anim bank / numpy) leaves it None and characters fall back to the bind pose.
+    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+    fable_pose = None
+    _anim_clips = _anim_df = None
+    try:
+        import fable_pose  # noqa: E402
+        _anim_clips, _anim_df = fable_pose.load_anim_bank(header_bnk.parent.parent)
+    except Exception as exc:  # noqa: BLE001
+        log(f"  pose: idle-anim bank unavailable ({type(exc).__name__}); characters use bind pose")
+
+    def _make_poser(char_info):
+        if fable_pose is None or _anim_clips is None or _anim_df is None:
+            return None
+        try:
+            return fable_pose.make_poser(char_info, _anim_clips, _anim_df)
+        except Exception:  # noqa: BLE001
+            return None
+
     info = parse_engine_level(engine_level.read_bytes())
     hidx = _bnk_name_index(header_bnk)
     bidx = _bnk_name_index(body_bnk)
@@ -651,7 +671,8 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                 log(f"  hero skip (no bank entry): {hero_model}")
             else:
                 glued = extract(header_bnk, he, "hero_h.bin") + extract(hero_body_bnk, be, "hero_b.bin")
-                _, hgeoms = mdl.parse(glued, log=lambda m: None, file_path=hero_model)
+                hinfo, hgeoms = mdl.parse(glued, log=lambda m: None, file_path=hero_model)
+                hero_poser = _make_poser(hinfo)  # bake a standing idle (None -> bind pose)
                 # chapter2slums PlayerStart (ghidra_out/npc_spawn_re.txt, validated from the
                 # .gdb SimpleTransformComponent 0x619F96CF): game(192.622,169.201,48.637) yaw
                 # -1.288 -> render {x,z,y}. Overridable with --hero-pos.
@@ -667,8 +688,9 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                     if val:
                         opts.append("albedo=" + val.replace(chr(92), "/"))
                     materials.append((f"hero_{gi}", opts, (0.80, 0.70, 0.62, 1.0)))
-                    positions = g.positions
-                    normals = g.normals or add_normals(positions, g.indices)
+                    posed = hero_poser(g) if hero_poser else None
+                    positions = posed if posed else g.positions
+                    normals = add_normals(positions, g.indices)  # recompute from posed tris
                     name = f"hero{gi}"
                     meshes.append((name, mat_idx, positions, normals, g.uvs, g.indices))
                     instances.append((name, (hx, hy, hz), hero_yaw, 1.0))
@@ -699,10 +721,11 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                     continue
                 try:
                     glued = extract(header_bnk, he, "npc_h.bin") + extract(npc_body_bnk, be, "npc_b.bin")
-                    _, pgeoms = mdl.parse(glued, log=lambda m: None, file_path=part)
+                    pinfo, pgeoms = mdl.parse(glued, log=lambda m: None, file_path=part)
                 except Exception as exc:  # noqa: BLE001 - StringBlock parts, etc: skip-and-continue
                     log(f"  npc part skip ({type(exc).__name__}): {part}")
                     continue
+                npc_poser = _make_poser(pinfo)  # same idle pose as the hero (None -> bind)
                 pi = len(part_meshes)
                 geom_recs = []
                 for gi, g in enumerate(pgeoms or []):
@@ -712,8 +735,9 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                     if val:
                         opts.append("albedo=" + val.replace(chr(92), "/"))
                     materials.append((f"npc{pi}_{gi}", opts, (0.80, 0.70, 0.62, 1.0)))
-                    positions = g.positions
-                    normals = g.normals or add_normals(positions, g.indices)
+                    posed = npc_poser(g) if npc_poser else None
+                    positions = posed if posed else g.positions
+                    normals = add_normals(positions, g.indices)
                     name = f"npc{pi}_{gi}"
                     meshes.append((name, mat_idx, positions, normals, g.uvs, g.indices))
                     geom_recs.append(name)
