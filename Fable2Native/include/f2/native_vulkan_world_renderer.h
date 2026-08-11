@@ -4,6 +4,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -45,6 +46,10 @@ private:
     VkBuffer constant_buffer_ = VK_NULL_HANDLE;
     VkDeviceMemory constant_memory_ = VK_NULL_HANDLE;
     void* mapped_constants_ = nullptr;
+    std::array<float, 3> sun_direction_{0.0f, -1.0f, 0.0f};  // from the cooked scene
+    std::array<float, 3> sun_color_{1.0f, 1.0f, 1.0f};
+    std::array<float, 3> scene_center_{0.0f, 0.0f, 0.0f};    // geometry bounds -> auto-frame camera
+    float scene_radius_ = 1.0f;
     VkDescriptorSetLayout descriptor_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> descriptor_sets_;

@@ -15,10 +15,14 @@ struct Vertex {
     std::array<float, 3> position{};
     std::array<float, 4> color{};
     std::array<float, 2> uv{};
+    std::array<float, 3> normal{0.0f, 1.0f, 0.0f};
+    std::array<float, 4> probe{};  // rgb = baked .lmp SH ambient, w = has-probe flag
 };
 
 struct Constants {
     std::array<float, 16> view_projection{};
+    std::array<float, 4> sun_direction{0.0f, -1.0f, 0.0f, 0.0f};  // xyz = light dir (world)
+    std::array<float, 4> sun_color{1.0f, 1.0f, 1.0f, 0.0f};       // rgb = directional sun colour
 };
 
 struct Geometry {
@@ -98,7 +102,21 @@ Geometry make_geometry(const NativeScene& scene) {
         for (const auto& source : mesh.vertices) {
             const auto world = place_vertex(source.position, instance.rotation,
                                             instance.scale, instance.position);
-            geometry.vertices.push_back({world, color, source.uv});
+            const auto world_normal = normalise(
+                place_vertex(source.normal, instance.rotation, 1.0f, {0.0f, 0.0f, 0.0f}));
+            // Per-instance baked order-1 SH ambient (.lmp probe), evaluated against the
+            // object-space normal in game axes (un-swap our {x,z,y} render normal) — the exact
+            // game shader eval (ghidra_out/prop_ambient_shader_re.txt). Mirrors the D3D12 path.
+            std::array<float, 4> probe{0.0f, 0.0f, 0.0f, 0.0f};
+            if (instance.has_probe) {
+                const auto& s = instance.sh;
+                const float gx = source.normal[0], gy = source.normal[2], gz = source.normal[1];
+                probe = {std::max(0.0f, s[0] + gx * s[1] + gy * s[2] + gz * s[3]),
+                         std::max(0.0f, s[4] + gx * s[5] + gy * s[6] + gz * s[7]),
+                         std::max(0.0f, s[8] + gx * s[9] + gy * s[10] + gz * s[11]),
+                         1.0f};
+            }
+            geometry.vertices.push_back({world, color, source.uv, world_normal, probe});
         }
         const auto first_index = static_cast<std::uint32_t>(geometry.indices.size());
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
@@ -407,6 +425,24 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         error = "The native Vulkan world has no renderable geometry.";
         return false;
     }
+    sun_direction_ = normalise(scene.sun_direction);
+    sun_color_ = scene.sun_color;
+    // Bounds -> auto-frame the orbit camera (mirror native_world_renderer.cpp) so the whole
+    // town is in view instead of the old fixed radius-7 demo orbit.
+    {
+        std::array<float, 3> lo{geometry.vertices[0].position};
+        std::array<float, 3> hi = lo;
+        for (const auto& v : geometry.vertices) {
+            for (int a = 0; a < 3; ++a) {
+                lo[a] = std::min(lo[a], v.position[a]);
+                hi[a] = std::max(hi[a], v.position[a]);
+            }
+        }
+        for (int a = 0; a < 3; ++a) scene_center_[a] = 0.5f * (lo[a] + hi[a]);
+        float r = 0.0f;
+        for (int a = 0; a < 3; ++a) r = std::max(r, 0.5f * (hi[a] - lo[a]));
+        scene_radius_ = std::max(r, 1.0f);
+    }
     if (!upload_buffer(physical_device, device, geometry.vertices.data(),
                        geometry.vertices.size() * sizeof(Vertex),
                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vertex_buffer_, vertex_memory_, error) ||
@@ -448,7 +484,7 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     bindings[1].binding = 1;
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[1].descriptorCount = 1;
@@ -541,11 +577,13 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
         {1, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 12},
         {2, 0, VK_FORMAT_R32G32_SFLOAT, 28},
+        {3, 0, VK_FORMAT_R32G32B32_SFLOAT, 36},      // normal
+        {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 48},   // baked SH probe
     };
     VkPipelineVertexInputStateCreateInfo vertex_input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vertex_input.vertexBindingDescriptionCount = 1;
     vertex_input.pVertexBindingDescriptions = &vertex_binding;
-    vertex_input.vertexAttributeDescriptionCount = 3;
+    vertex_input.vertexAttributeDescriptionCount = 5;
     vertex_input.pVertexAttributeDescriptions = attributes;
     VkPipelineInputAssemblyStateCreateInfo input_assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -613,8 +651,11 @@ void NativeVulkanWorldRenderer::render(VkCommandBuffer command_buffer,
     if (!pipeline_ || !mapped_constants_ || width == 0 || height == 0) return;
 
     const float angle = static_cast<float>(elapsed_seconds * 0.25);
-    const std::array<float, 3> eye{std::sin(angle) * 7.0f, 4.0f, std::cos(angle) * 7.0f};
-    const std::array<float, 3> target{0.0f, 0.7f, 0.0f};
+    const float dist = scene_radius_ * 2.4f;
+    const std::array<float, 3> eye{scene_center_[0] + std::sin(angle) * dist,
+                                   scene_center_[1] + dist * 0.55f,
+                                   scene_center_[2] + std::cos(angle) * dist};
+    const std::array<float, 3> target{scene_center_[0], scene_center_[1], scene_center_[2]};
     const std::array<float, 3> up{0.0f, 1.0f, 0.0f};
     const auto forward = normalise(subtract(target, eye));
     const auto right = normalise(cross(forward, up));
@@ -627,8 +668,8 @@ void NativeVulkanWorldRenderer::render(VkCommandBuffer command_buffer,
     view[14] = dot(forward, eye); view[15] = 1.0f;
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
     const float scale = 1.0f / std::tan(0.5f);
-    const float near_plane = 0.1f;
-    const float far_plane = 100.0f;
+    const float near_plane = std::max(0.1f, scene_radius_ * 0.05f);
+    const float far_plane = scene_radius_ * 8.0f + 10.0f;
     std::array<float, 16> projection{};
     projection[0] = scale / aspect;
     projection[5] = scale;
@@ -636,6 +677,8 @@ void NativeVulkanWorldRenderer::render(VkCommandBuffer command_buffer,
     projection[11] = -1.0f;
     projection[14] = (near_plane * far_plane) / (near_plane - far_plane);
     Constants constants{multiply(projection, view)};
+    constants.sun_direction = {sun_direction_[0], sun_direction_[1], sun_direction_[2], 0.0f};
+    constants.sun_color = {sun_color_[0], sun_color_[1], sun_color_[2], 0.0f};
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width),

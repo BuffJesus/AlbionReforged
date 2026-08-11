@@ -253,6 +253,9 @@ public:
             }
         }
         if (command_line_flag(L"--show-fps")) game_.frontend.set_fps_display_enabled(true);
+        if (command_line_flag(L"--start-world")) {
+            game_.frontend.debug_jump_to(f2::FrontendState::World);
+        }
         if (!create_vulkan()) return false;
         std::string renderer_error;
         if (!world_renderer_.initialise(physical_device_, device_, command_pool_, queue_,
