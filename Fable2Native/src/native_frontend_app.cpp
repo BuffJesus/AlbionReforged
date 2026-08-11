@@ -289,6 +289,12 @@ public:
                         MB_OK | MB_ICONERROR);
             return false;
         }
+        // Procedural sky pass (self-contained: own root sig/PSO/LUT/descriptor heap). A
+        // failure here is non-fatal — the World branch falls back to the flat sky_color clear.
+        std::string sky_error;
+        if (!sky_renderer_.initialise(device_.Get(), queue_.Get(), sky_error)) {
+            OutputDebugStringA(("Fable2Native: sky renderer disabled: " + sky_error + "\n").c_str());
+        }
         std::string ui_renderer_error;
         if (!native_ui_renderer_.initialise(device_.Get(), 1, ui_renderer_error)) {
             MessageBoxA(window_, ui_renderer_error.c_str(),
@@ -1225,8 +1231,14 @@ private:
         // Migrated onto the SHARED backend-neutral scene builder (docs/FRONTEND_ARCHITECTURE.md) so the
         // Vulkan frontend renders the identical title. The app just resolves TextureIds -> descriptors.
         f2::render::UiDrawList scene;
+        // Debug A/B hook: FABLE2NATIVE_TITLE_TIME pins the title clock to a fixed value so a
+        // screenshot lands on an exact reveal moment (for matched native-vs-retail comparison).
+        double title_clock = game_.frontend.state_time();
+        if (const char* pin = std::getenv("FABLE2NATIVE_TITLE_TIME")) {
+            title_clock = std::atof(pin);
+        }
         scene_builder().build_title(scene, static_cast<float>(width_), static_cast<float>(height_),
-                                    game_.frontend.state_time(),
+                                    title_clock,
                                     input_.prompt(f2::NativeInputAction::Accept),
                                     input_.using_controller_prompts());
         native_ui_renderer_.render(command_list, width_, height_, scene.quads(),
@@ -1333,6 +1345,16 @@ private:
                 command_list_->OMSetRenderTargets(1, &target_rtv, FALSE, &dsv_handle_);
                 command_list_->ClearDepthStencilView(dsv_handle_, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0,
                                                      0, nullptr);
+            }
+            // Procedural sky FIRST (fills every pixel behind the world; no depth test/write),
+            // replacing the flat sky_color clear as the backdrop. It binds its OWN descriptor
+            // heap, so re-bind the app heap afterwards for the world renderer's material table.
+            if (sky_renderer_.ready()) {
+                const auto sky_camera =
+                    world_renderer_.compute_camera(width_, height_, game_.elapsed_seconds);
+                sky_renderer_.render(command_list_.Get(), game_.scene, sky_camera, width_, height_,
+                                     game_.elapsed_seconds);
+                command_list_->SetDescriptorHeaps(1, heaps);
             }
             world_renderer_.render(command_list_.Get(), game_.scene, width_, height_,
                                    game_.elapsed_seconds);
@@ -1474,6 +1496,7 @@ private:
     bool video_texture_shader_state_ = false;
     D3D12_GPU_DESCRIPTOR_HANDLE video_gpu_handle_{};
     f2::NativeWorldRenderer world_renderer_;
+    f2::NativeSkyRenderer sky_renderer_;  // procedural atmosphere drawn behind the world
     f2::NativeUiRenderer native_ui_renderer_;
     f2::render::TextureRegistry texture_registry_;  // maps ui slots -> stable TextureIds (neutral scene)
     std::optional<f2::FrontendSceneBuilder> scene_builder_;  // shared backend-neutral scene builder

@@ -96,7 +96,8 @@ if(WIN32)
         src/frontend_main.cpp
         src/native_frontend_app.cpp
         src/native_ui_renderer.cpp
-        src/native_world_renderer.cpp)
+        src/native_world_renderer.cpp
+        src/native_sky_renderer.cpp)
     target_link_libraries(f2native_frontend PRIVATE
         f2native_core
         f2native_video

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "native_scene.h"
+#include "native_sky_renderer.h"
 
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -29,6 +30,11 @@ public:
                 std::uint32_t width,
                 std::uint32_t height,
                 double elapsed_seconds);
+
+    // The orbit camera render() flies each frame, exposed so a companion pass (the sky)
+    // can build rays from the EXACT same basis. Uses the same fit-to-scene framing.
+    SkyCamera compute_camera(std::uint32_t width, std::uint32_t height,
+                             double elapsed_seconds) const;
 
 private:
     Microsoft::WRL::ComPtr<ID3D12Resource> vertex_buffer_;
