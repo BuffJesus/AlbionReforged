@@ -44,7 +44,13 @@ Commit `e16428d`.
   (verbatim port of AssetBrowser `LevelLoader.cpp` bake-composite) + `cook_levels.py _terrain_splat_composite()`
   with whole-terrain normalized UVs. Full detail + the ⚠ stale-Release-exe/white-terrain gotcha (uncompressed
   RGBA8 DDS needs the post-2026-08-10 frontend build) in `NATIVE_LEVEL_COOK_PLAN.md` OPEN ITEM 2.
-- **NEXT (specs in hand):** Phase-1 sky colour match (reads brown); WATER (`water_system_re.txt`); SPEC maps
+- **✅ SKY COLOUR (2026-08-11, D3D12, screenshot-verified):** the sky read BROWN because the Phase-0
+  gradient's `ThemeInputs` defaults were EnvironmentTheme.h placeholders (complementary {0.72,0.64,0.54} =
+  tan). Replaced with the RE'd chapter2slums midday keyframe (`ghidra_out/env_theme_colors_re.txt`:
+  sky 0.6549/0.8157/1.0, complementary 0.222/0.579/1.11, bias 0.43, sun_toward 0.9135/0.4067/0.0048) in
+  `native_sky_renderer.cpp` — horizon now reads blue. Per-level theme plumbing via the F2SCENE is the
+  general follow-up. Vulkan sky/world parity still TODO.
+- **NEXT (specs in hand):** per-level sky theme plumbing; WATER (`water_system_re.txt`); SPEC maps
   (t2; cooker already emits material=); exact hero PlayerStart XYZ; foliage LOD/wind; terrain .ehf splat;
   frontend fidelity drifts (`frontend_visual_fidelity_re.txt` P3-5); Vulkan world-renderer parity.
 - New decomp specs this session: `ghidra_out/{model_glue_lmp_format,gdb_component_schemas,worldmap_travel_minigames,ingame_menu_live_achievements}.txt`.

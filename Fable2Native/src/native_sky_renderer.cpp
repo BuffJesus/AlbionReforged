@@ -50,19 +50,22 @@ constexpr float kHorizonDistance = 1900.0f;
 constexpr float kRecipMaxFogDistance = 0.00050000002f;
 constexpr int kLutWidth = 64;
 
-// A resolved theme keyframe. Defaults mirror EnvironmentTheme.h engine defaults
-// (sky_colour {0.42,0.56,0.76}, complementary {0.72,0.64,0.54}, sunset {1.0,0.47,0.22}).
+// A resolved theme keyframe. Defaults = the RE'd chapter2slums (childhood) clear-day MIDDAY
+// keyframe, parsed byte-exact from environmentthemes.gdb (ghidra_out/env_theme_colors_re.txt §0).
+// This replaces the old EnvironmentTheme.h engine placeholders whose complementary {0.72,0.64,0.54}
+// rendered a BROWN horizon; retail's horizon tint is the blue complementary below. (Per-level theme
+// plumbing through the F2SCENE is the general follow-up; these are the values for the level we cook.)
 struct ThemeInputs {
-    float sun_intensity = 1.0f;
+    float sun_intensity = 8.94f;
     float beta_rayleigh_multiplier = 1.0f;
-    float beta_mie_multiplier = 1.0f;
-    float sky_colour[3] = {0.42f, 0.56f, 0.76f};
-    float complementary_colour[3] = {0.72f, 0.64f, 0.54f};
-    float complementary_bias = 0.0f;
-    float sunset_colour[3] = {1.0f, 0.47f, 0.22f};
-    float fogging_start = 0.0f;
+    float beta_mie_multiplier = 0.83f;
+    float sky_colour[3] = {0.6549f, 0.8157f, 1.0f};        // zenith blue (raw 167,208,255)
+    float complementary_colour[3] = {0.222f, 0.5789f, 1.11f};  // horizon tint (raw 56.6,147.6,283; HDR)
+    float complementary_bias = 0.43f;
+    float sunset_colour[3] = {0.8902f, 0.8118f, 0.5137f};  // warm sun-halo (raw 227,207,131)
+    float fogging_start = 35.43f;
     float close_fog_max_distance = 0.0f;
-    float sun_direction[3] = {0.0f, 0.4f, 1.0f};
+    float sun_direction[3] = {0.9135f, 0.4067f, 0.0048f};  // sun_toward, Y-up render space (elev 24°)
 };
 
 struct AtmosphereState {
