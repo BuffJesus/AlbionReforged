@@ -168,6 +168,20 @@ Verify: run on the extracted `chapter2slums.engine_level`, then World `--scene` 
   (resolution order: shared_6281 → shared_2445 → level textures.bnk → 1024mip0 → globals_textures). With
   types 2,21 the cook now resolves 43/43 distinct albedos. General fix (TODO): parse level.vfsconfig to
   collect the shared-bank paths instead of hard-coding.
+- ✅ TERRAIN GROUND (2026-08-10) — the level heightfield renders as ground. cook_levels.py
+  `_build_terrain()` + `--terrain-ghf`/`--terrain-stride` port the validated `ghidra_out/terrain_mesh_re.txt`:
+  `.ghf` = gzip of a 577×577 cell grid (origin vec3 + wCells/hCells + 14-byte cells {f32 height, f32 water,
+  u32 matGUID, u8, u8}); vertex per cell at game(x*0.5, y*0.5, height), central-diff normals, UV*0.125,
+  2 tris/quad; emitted game-space (flows through the same {x,z,y} swap as props) as one earth-tone material
+  + mesh + identity instance. The `.ghf` is a per-region SHARED file in levels.bnk (`worlds\albion\bwsslums\
+  heightfields\ch2_heightfield_slums_id_3a6902ed.ghf`, referenced from the level's `.list`). tile=0.5 wu/cell
+  is a FIXED constant (proven, not the header float). Townhouses sit on the ground w/ height relief; Fairfax
+  castle floats separately (it's at negative game-Y, outside this chunk — expected). Materials now carry a
+  per-material base colour (was hardcoded 0.72 grey). NEXT: the render `.ehf` splat/atlas texture (Phase T2).
+- ✅ HEMISPHERE-AMBIENT SHADING (2026-08-10) — world PS ladder step 1 of `ghidra_out/world_shading_model_re.txt`:
+  replaced flat `0.35+0.65*ndl` with hemisphere ambient (sky above / ground below by world-up N.y) + N·L sun.
+  Shadowed faces read sky-tinted instead of near-black. NEXT (ladder 2-3): cook the normal (2-ch BC5) + spec
+  `.tex` channels, bind t1/t2, derivative-TBN normal mapping + Blinn-Phong (drop-in HLSL in the spec §7).
 - ✅ FOLIAGE RENDERS (2026-08-10) — grass + trees now decode (was: type-21 + tree LODs skipped with
   MdlParseError). Root-caused + fixed per `ghidra_out/foliage_system_re.txt`: taught the MDL parser
   (`Fable2AssetBrowser/source/addons/fable_mdl_format.py`, ⚠ that tree is gitignored — local only) the
