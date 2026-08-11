@@ -143,7 +143,9 @@ def parse_engine_level(data: bytes) -> dict:
                 values = [r.f32() for _ in range(20)]
                 if any(v is None for v in values):
                     raise ParseError("truncated type-2 instance floats")
-                insts.append({"pos": values[0:3], "values": values})
+                # `h` (u64) = PropInstance.hash — the key into the level's .lmp LightmapFile
+                # per-instance baked lighting probes (LevelEdit.cpp patch_lmp_probes @762).
+                insts.append({"pos": values[0:3], "values": values, "hash": h})
             prop_blocks.append({"kind": 2, "model": model_path, "lod": lod, "instances": insts})
 
         elif etype in (4, 5, 32):
@@ -449,6 +451,55 @@ def _terrain_splat_composite(ehf_path: Path, f2tool: Path, tex_cook: Path,
         f"(world X[{bounds[0]:.0f},{bounds[0] + bounds[2]:.0f}] "
         f"Y[{bounds[1]:.0f},{bounds[1] + bounds[3]:.0f}], {res}x{res})")
     return str(out_dds.resolve()), bounds
+
+
+def _load_lmp_probes(lmp_path: Path, log=print):
+    """Load the level's .lmp LightmapFile per-prop-instance baked lighting probes.
+
+    RE'd (no guessing): the .lmp is gzip of inner magic "LightmapFile"; the tail holds
+    n records x 56 bytes, preceded by a u32-BE count `n` at (total - 56*n - 4). Each
+    record = [8-byte PropInstance.hash BE][48-byte payload = 12 BE floats]. The 12 floats
+    are order-1 SPHERICAL HARMONICS per RGB, channel-major: [R0 R1 R2 R3][G0..][B0..],
+    coeff0 = DC/ambient (used ~directly as linear radiance). Authorities: LevelEdit.cpp
+    patch_lmp_probes@762 (record layout) + guest loader Function_82A55140 (48B verbatim,
+    hash-keyed rb-tree). The exact SH directional basis lives in the Xenos shader DB (NOT
+    the exe), so we apply the confirmed DC ambient term only. Returns {hash(u64): (12 floats)}.
+    """
+    import gzip
+    try:
+        raw = gzip.decompress(Path(lmp_path).read_bytes())
+    except Exception as exc:  # noqa: BLE001
+        log(f"  lmp skip ({type(exc).__name__}: {exc})")
+        return {}
+    if raw[:12] != b"LightmapFile":
+        log("  lmp skip (magic mismatch)")
+        return {}
+    total = len(raw)
+    n = 0
+    c = (total - 4) // 56
+    while c >= 1:
+        pos = total - 56 * c - 4
+        if pos >= 16 and struct.unpack_from(">I", raw, pos)[0] == c:
+            n = c
+            break
+        c -= 1
+    if not n:
+        log("  lmp skip (probe section not found)")
+        return {}
+    sec = total - 56 * n
+    probes = {}
+    for i in range(n):
+        off = sec + i * 56
+        h = struct.unpack_from(">Q", raw, off)[0]
+        probes[h] = struct.unpack_from(">12f", raw, off + 8)
+    log(f"  lmp: {n} baked lighting probes loaded")
+    return probes
+
+
+def _probe_dc_ambient(probe):
+    """Order-1 SH DC term per channel (channel-major layout) = the baked ambient radiance
+    for a prop instance. Clamped >=0 (HDR values >1 are kept; the renderer tonemaps)."""
+    return (max(0.0, probe[0]), max(0.0, probe[4]), max(0.0, probe[8]))
 
 
 def _build_terrain(ghf_bytes: bytes, stride: int = 1, uv_scale: float = TERRAIN_UV_PER_WU,
@@ -769,6 +820,7 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                tex_out_dir: Path = None, terrain_ghf: Path = None,
                terrain_ehf: Path = None, terrain_splat: bool = True,
                terrain_splat_res: int = 2048, splat_bake: Path = None,
+               level_lmp: Path = None,
                terrain_stride: int = 1, hero_model: str = None,
                hero_body_bnk: Path = None, hero_pos=None,
                water_file: Path = None, npcs: bool = False,
@@ -885,8 +937,13 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             meshes.append((name, mat_idx, positions, normals, g.uvs, g.indices))
         mesh_names[key] = names
 
+    # Per-prop baked lighting probes (.lmp LightmapFile). Keyed by PropInstance.hash; the
+    # DC/ambient SH term lights each static prop with its baked GI instead of the flat
+    # hemisphere floor (fixes the "dark building faces"). Only type-2 props carry probes.
+    lmp_probes = _load_lmp_probes(level_lmp, log=log) if level_lmp else {}
+
     # Second pass: one instance record per (instance x geom-mesh).
-    instances, n_inst, n_blocks = [], 0, 0
+    instances, n_inst, n_blocks, n_probed = [], 0, 0, 0
     for block in info["prop_blocks"]:
         if block["kind"] not in types or not block.get("model"):
             continue
@@ -899,9 +956,16 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             insts = insts[:max_per_block]
         for inst in insts:
             pos, yaw, scale = _instance_transform(block, inst)
+            amb = None
+            probe = lmp_probes.get(inst.get("hash"))
+            if probe is not None:
+                amb = _probe_dc_ambient(probe)
+                n_probed += 1
             for name in names:
-                instances.append((name, pos, yaw, scale))
+                instances.append((name, pos, yaw, scale, amb))
             n_inst += 1
+    if lmp_probes:
+        log(f"  lmp: {n_probed}/{n_inst} prop instances got a baked lighting probe")
 
     # Terrain: append the level heightfield as one ground mesh (flat earth-tone material,
     # Phase T1 — ghidra_out/terrain_mesh_re.txt). Game-space verts flow through the same
@@ -1291,9 +1355,16 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                           f"{u:.9g} {v:.9g}\n")
             for idx in indices:
                 out.write(f"index {idx}\n")
-        for name, pos, yaw, scale in instances:
-            out.write(f"instance {name} {pos[0]:.9g} {pos[1]:.9g} {pos[2]:.9g} "
-                      f"0 {yaw:.9g} 0 {scale:.9g}\n")
+        for rec in instances:
+            name, pos, yaw, scale = rec[:4]
+            amb = rec[4] if len(rec) > 4 else None
+            line = (f"instance {name} {pos[0]:.9g} {pos[1]:.9g} {pos[2]:.9g} "
+                    f"0 {yaw:.9g} 0 {scale:.9g}")
+            if amb is not None:
+                # Per-instance baked ambient (DC term of the .lmp SH probe). native_scene.cpp
+                # reads `amb r g b` -> the world PS uses it instead of the hemisphere floor.
+                line += f" amb {amb[0]:.6g} {amb[1]:.6g} {amb[2]:.6g}"
+            out.write(line + "\n")
         for (px, py, pz, cr, cg, cb, rng, inten) in scene_lights:
             out.write(f"light {px:.9g} {py:.9g} {pz:.9g} {cr:.6g} {cg:.6g} {cb:.6g} "
                       f"{rng:.9g} {inten:.6g}\n")
@@ -1340,6 +1411,9 @@ def main() -> int:
                     default=Path(__file__).resolve().parents[2] / "Fable2AssetBrowser" / "source"
                     / "build" / "terrain_splat_bake.exe",
                     help="terrain_splat_bake.exe (the .ehf splat-composite baker)")
+    ap.add_argument("--level-lmp", type=Path,
+                    help="the level's .lmp LightmapFile -> per-prop baked lighting probes "
+                         "(DC ambient term lights static props with their baked GI)")
     ap.add_argument("--terrain-stride", type=int, default=1,
                     help="terrain grid decimation (1=full-res 664K tris; 2/4 for lighter)")
     ap.add_argument("--hero", action="store_true",
@@ -1424,6 +1498,7 @@ def main() -> int:
                    tex_out_dir=args.tex_out_dir, terrain_ghf=args.terrain_ghf,
                    terrain_ehf=args.terrain_ehf, terrain_splat=args.terrain_splat,
                    terrain_splat_res=args.terrain_splat_res, splat_bake=args.splat_bake,
+                   level_lmp=args.level_lmp,
                    terrain_stride=args.terrain_stride,
                    hero_model=args.hero_model if args.hero else None,
                    hero_body_bnk=args.hero_body_bnk, hero_pos=args.hero_pos,

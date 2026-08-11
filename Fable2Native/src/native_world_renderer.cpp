@@ -17,6 +17,9 @@ struct Vertex {
     std::array<float, 3> normal{0.0f, 1.0f, 0.0f};
     std::array<float, 4> color{};
     std::array<float, 2> uv{};
+    // Baked per-instance ambient (.lmp SH probe DC term). rgb = ambient radiance,
+    // w = 1 when a probe is present (PS uses it instead of the hemisphere floor), else 0.
+    std::array<float, 4> probe{};
 };
 
 struct Constants {
@@ -143,6 +146,12 @@ Geometry make_geometry(const NativeScene& scene) {
         if (instance.mesh >= scene.meshes.size()) continue;
         const auto& mesh = scene.meshes[instance.mesh];
         const auto color = material_color(scene, mesh.material);
+        // Per-instance baked ambient (.lmp SH probe DC term). w=1 flags "use the probe";
+        // w=0 leaves the PS on its hemisphere-ambient fallback (terrain/foliage/no-probe).
+        const std::array<float, 4> probe = instance.has_ambient
+            ? std::array<float, 4>{instance.ambient[0], instance.ambient[1],
+                                   instance.ambient[2], 1.0f}
+            : std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f};
         const auto base = static_cast<std::uint32_t>(geometry.vertices.size());
         for (const auto& source : mesh.vertices) {
             const auto world = place_vertex(source.position, instance.rotation,
@@ -150,7 +159,7 @@ Geometry make_geometry(const NativeScene& scene) {
             // Rotate the normal into world space (uniform scale + no translation).
             const auto world_normal = normalise(
                 place_vertex(source.normal, instance.rotation, 1.0f, {0.0f, 0.0f, 0.0f}));
-            geometry.vertices.push_back({world, world_normal, color, source.uv});
+            geometry.vertices.push_back({world, world_normal, color, source.uv, probe});
         }
         const auto first_index = static_cast<std::uint32_t>(geometry.indices.size());
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
@@ -445,8 +454,8 @@ cbuffer Lights : register(b1) {
 Texture2D albedo : register(t0);
 Texture2D normalTex : register(t1);
 SamplerState albedo_sampler : register(s0);
-struct VSInput { float3 position : POSITION; float3 normal : NORMAL; float4 color : COLOR; float2 uv : TEXCOORD0; };
-struct PSInput { float4 position : SV_POSITION; float3 normal : NORMAL; float3 world_pos : TEXCOORD1; float4 color : COLOR; float2 uv : TEXCOORD0; };
+struct VSInput { float3 position : POSITION; float3 normal : NORMAL; float4 color : COLOR0; float2 uv : TEXCOORD0; float4 probe : COLOR1; };
+struct PSInput { float4 position : SV_POSITION; float3 normal : NORMAL; float3 world_pos : TEXCOORD1; float4 color : COLOR0; float2 uv : TEXCOORD0; float4 probe : COLOR1; };
 PSInput vs_main(VSInput input) {
     PSInput output;
     output.position = mul(float4(input.position, 1.0), view_projection);
@@ -454,6 +463,7 @@ PSInput vs_main(VSInput input) {
     output.world_pos = input.position;
     output.color = input.color;
     output.uv = input.uv;
+    output.probe = input.probe;
     return output;
 }
 float4 ps_main(PSInput input) : SV_TARGET {
@@ -480,6 +490,11 @@ float4 ps_main(PSInput input) : SV_TARGET {
     float ndl = saturate(dot(N, -sun_direction.xyz));
     float hemi = 0.5 + 0.5 * N.y;
     float3 ambient = lerp(float3(0.18, 0.20, 0.24), float3(0.55, 0.58, 0.62), hemi);
+    // Per-prop baked ambient (.lmp LightmapFile SH probe DC term, world_shading §lmp): when a
+    // probe is present (probe.w>0.5) it replaces the synthetic hemisphere floor, so static
+    // props get their real baked GI (fixes the dark building faces). No-probe geometry (terrain,
+    // foliage) keeps the hemisphere fallback unchanged.
+    if (input.probe.w > 0.5) ambient = input.probe.rgb;
     float3 lit = base.rgb * (ambient + ndl);
     // Additive local point lights (level_lights_effects_re.txt §3.1): diffuse N·L with a
     // soft linear-squared falloff clamped at each light's Range. Added AFTER the
@@ -587,6 +602,8 @@ float4 ps_water(PSInput input) : SV_TARGET {
         {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24,
          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40,
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"COLOR", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 48,
          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
     };
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pipeline{};

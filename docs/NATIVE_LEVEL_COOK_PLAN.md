@@ -301,7 +301,17 @@ resolved: the terrain cook now cooks the level's DOMINANT ground texture from th
   - The EMBEDDED baked-albedo path (`DecodeEhfTerrainAlbedoFromBytes`) is a DEAD END for chapter2slums —
     all 3 decode paths fail (probe tool `Fable2Native/tools/terrain_bake.cpp`; the prior "large_ring"
     scratch was the same dead end). May work for other levels; the splat composite is the general answer.
-  - Cause (2) (ambient/lightmap under-lighting — dark building faces) still open.
+  - **✅ CAUSE (2) — per-prop baked lighting (2026-08-11, D3D12, verified):** the `.lmp` LightmapFile is
+    now RE'd + applied. It is a per-prop-instance baked-lighting probe table (gzip "LightmapFile"; tail =
+    n×56-byte records = [8-byte PropInstance.hash][48-byte payload = 12 BE floats = order-1 SH per RGB,
+    channel-major, DC-first]). Full spec + guest-loader addresses: `ghidra_out/lmp_lightmap_probes_re.txt`.
+    `cook_levels.py --level-lmp <level.lmp>` keys each type-2 prop by its `PropInstance.hash` and emits the
+    DC ambient term on the F2SCENE `instance` line (`amb r g b`); the D3D12 world PS uses it in place of the
+    hemisphere floor (per-vertex COLOR1 probe; no-probe geometry unchanged). chapter2slums: 897 probes,
+    41/~55 type-2 props matched; verified applied (33k px changed, some props notably brighter).
+    ⚠ ONLY the DC (ambient) term is grounded/applied: the SH DIRECTIONAL (L1) basis is provably NOT in the
+    PPC exe (it lives in the Xenos shader DB) and has no data-derivable axis, so applying it would be
+    guessing — deferred to a future shader-DB disassembly. Vulkan world-renderer parity is TODO.
 
 **OPEN ITEM 2 — the scene reads DARK — ROOT-CAUSED this session (see `ghidra_out/dark_props_diagnosis.txt`
 + its SESSION VERIFICATION footer).** The props are NOT actually black: a raw-albedo PS diagnostic

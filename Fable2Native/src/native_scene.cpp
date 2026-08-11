@@ -146,6 +146,15 @@ bool load_native_scene(const std::filesystem::path& path,
                 }
             }
             if (!found) return fail(&error, "instance references unknown mesh: " + mesh_name);
+            // Optional trailing `amb r g b` = per-instance baked ambient (.lmp SH probe DC term).
+            std::string extra;
+            if (read_value(line, extra) && extra == "amb") {
+                if (!read_vec3(line, instance.ambient)) {
+                    return fail(&error, "invalid instance ambient at line " +
+                                std::to_string(line_number));
+                }
+                instance.has_ambient = true;
+            }
             parsed.instances.push_back(instance);
         } else if (opcode == "sun") {
             if (!read_vec3(line, parsed.sun_direction)) {
@@ -213,7 +222,12 @@ bool save_native_scene(const std::filesystem::path& path,
         output << "instance " << scene.meshes[instance.mesh].name << ' ' << instance.position[0]
                << ' ' << instance.position[1] << ' ' << instance.position[2] << ' '
                << instance.rotation[0] << ' ' << instance.rotation[1] << ' ' << instance.rotation[2]
-               << ' ' << instance.scale << '\n';
+               << ' ' << instance.scale;
+        if (instance.has_ambient) {
+            output << " amb " << instance.ambient[0] << ' ' << instance.ambient[1] << ' '
+                   << instance.ambient[2];
+        }
+        output << '\n';
     }
     for (const NativeLight& light : scene.lights) {
         output << "light " << light.position[0] << ' ' << light.position[1] << ' '

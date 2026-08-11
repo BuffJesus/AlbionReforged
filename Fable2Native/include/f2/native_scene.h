@@ -34,6 +34,10 @@ struct NativeInstance {
     std::array<float, 3> position{};
     std::array<float, 3> rotation{};
     float scale = 1.0f;
+    // Optional per-instance baked ambient (DC term of the .lmp LightmapFile SH probe).
+    // has_ambient=false -> the renderer falls back to the global hemisphere ambient.
+    bool has_ambient = false;
+    std::array<float, 3> ambient{};
 };
 
 // A local point light (lamp post, lantern, brazier, placeable accent) — cooked from
