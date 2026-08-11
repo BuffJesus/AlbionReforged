@@ -34,9 +34,24 @@ New tools this line: `f2tool ehf` (EHF LOD/splat dump), `terrain_splat_bake` (of
 `Fable2AssetBrowser` (untracked like npc_markerdump/lightdump/propdump; rebuild via cmake in the VS dev shell).
 
 **NEXT FRONTIER (grounded, needs fresh RE — nothing else is a quick incremental win):**
-1. **SPEC maps (t2)** — the cooker already emits `material=` (spec) tokens but no renderer samples t2. Needs
-   a small RE pass on the spec/gloss lighting model, then a t2 sampler + spec term in both world PS/frag.
-2. **Per-level day/night theme** — the sky/sun theme is currently the hardcoded chapter2slums midday keyframe.
+1. ~~**SPEC maps (t2)**~~ ✅ DONE 2026-08-11 (`c2e800c`, branch `agent/native-spec-maps-and-char`). Grounded in
+   `world_shading_model_re.txt` §3/§7: grayscale spec/"material" mask (MDL material[1]) → Blinn-Phong
+   `pow(N·H,32)·mask` added to the sun term, on BOTH backends. Cooker now cooks+repoints the `material=` token
+   (was dropped); 37 chapter2slums materials gain a spec DDS. D3D12 = 3 SRVs/material (t0/t1/t2), root range 2→3,
+   kMaxMaterialTextures 4096→6144; Vulkan = spec image set + binding 4. Both screenshot-verified, no regression.
+   Also this session: `--vista-ehf sea_vista.ehf` added to the recook so the seaward strip bridges toward the
+   castle (the "void" is otherwise by-design — castle is at negative game-Y outside the slums `.ghf`;
+   `terrain_mesh_re.txt:166-180`). ⚠ `--splat-bake` takes the terrain_splat_bake.exe path, NOT a pre-baked dds.
+   NEXT sub-item: spec is subtle at the fixed world camera; a free/close camera (see §CHAR below) would show it.
+2. **CONTROLLABLE CHARACTER (asked 2026-08-11) — data 100% RE'd, runtime 0% built.** We HAVE: child-hero MDL
+   in-scene (static bind pose, `cook_levels.py` hero block), PlayerStart XYZ from GDB, terrain collision mesh,
+   full idle-clip decode (`anim_pose_re.txt`), Havok char-controller spec (`physics_collision_system.txt`),
+   camera spec (`camera_system.txt`). We LACK (no native code yet): per-frame anim playback + CPU skinning,
+   Havok/collide-and-slide ground queries, WASD/stick→move input, locomotion state machine. Effort: baked idle
+   pose ~2-4h; basic walk-with-input ~3-4d; retail-parity locomotion ~2wk. Cheapest first win = a FREE CAMERA
+   (NativeCamera struct exists in native_game.h; just needs input wiring in native_frontend_app handle_input) —
+   no physics/anim needed, and it lets you fly the level + actually see the new spec highlights.
+3. **Per-level day/night theme** — the sky/sun theme is currently the hardcoded chapter2slums midday keyframe.
    Generalizing needs reversing the `.genv` container (level→theme-GUID TOD map) — a Ghidra-only gap
    (`ghidra_out/env_theme_colors_re.txt` §4). Until then the midday bake is the spec-recommended default.
 3. Foliage LOD/wind; exact hero PlayerStart refinement; frontend fidelity drifts
