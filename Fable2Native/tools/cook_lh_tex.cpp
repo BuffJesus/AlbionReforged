@@ -297,6 +297,32 @@ int main(int argc, char** argv) {
         if (!lh_decode_compressed_mip(bytes.data() + 48, data_size, width, height, bc1,
                                       &error, comp == 11))
             return fail("decode failed: " + error);
+        // Dual body: cutout textures (hair/legs/eyelash) carry a SEPARATE BC4 ALPHA plane at
+        // Unknown_4 (size Unknown_5) after the colour body. cook it into DXT5 so the alpha
+        // survives — otherwise the alpha-tested eyelash/hair render as opaque black cards over
+        // the face (the "weird skin"). hero_appearance_cook_re.txt.
+        const auto unk3 = read_be32(bytes, 12);
+        const auto unk4 = read_be32(bytes, 16);
+        const auto unk5 = read_be32(bytes, 20);
+        if (unk5 > 0 && unk4 == 48u + data_size &&
+            static_cast<std::uint64_t>(unk4) + unk5 <= bytes.size() &&
+            (unk3 == 2 || unk3 == 3 || unk3 == 4)) {
+            std::vector<std::uint8_t> bc4a;
+            std::string aerr;
+            if (lh_decode_variant_2_3_4(bytes.data() + unk4, unk5, 2, width, height, bc4a, &aerr) &&
+                bc4a.size() * 2 >= bc1.size()) {
+                const std::size_t nblk = bc1.size() / 8;
+                std::vector<std::uint8_t> bc3(nblk * 16);
+                for (std::size_t i = 0; i < nblk; ++i) {
+                    std::memcpy(bc3.data() + i * 16, bc4a.data() + i * 8, 8);      // alpha (BC4)
+                    std::memcpy(bc3.data() + i * 16 + 8, bc1.data() + i * 8, 8);   // colour (BC1)
+                }
+                if (!write_dds(output, width, height, bc3, "DXT5"))
+                    return fail("unable to write output: " + output);
+                printf("%dx%d (alpha) -> %s\n", width, height, output.c_str());
+                return 0;
+            }
+        }
         if (!write_dds(output, width, height, bc1, "DXT1"))
             return fail("unable to write output: " + output);
         printf("%dx%d -> %s\n", width, height, output.c_str());
