@@ -41,6 +41,19 @@ public:
     SkyCamera compute_camera(std::uint32_t width, std::uint32_t height,
                              double elapsed_seconds) const;
 
+    // Free-fly camera override (for level inspection). When set, compute_camera and
+    // render() use this eye+yaw+pitch basis instead of the auto-orbit; the sky follows
+    // since it shares compute_camera. Cleared back to orbit with clear_free_camera().
+    void set_free_camera(const std::array<float, 3>& eye, float yaw, float pitch) {
+        free_camera_ = true;
+        free_eye_ = eye;
+        free_yaw_ = yaw;
+        free_pitch_ = pitch;
+    }
+    void clear_free_camera() noexcept { free_camera_ = false; }
+    [[nodiscard]] const std::array<float, 3>& scene_center() const noexcept { return scene_center_; }
+    [[nodiscard]] float scene_radius() const noexcept { return scene_radius_; }
+
 private:
     // Point-light array cap (b1 Lights cbuffer). 64 covers a town square; the cooker
     // caps to the brightest 64 (level_lights_effects_re.txt §3.1).
@@ -62,6 +75,11 @@ private:
     // level (spanning hundreds of units) instead of the origin-orbit test default.
     std::array<float, 3> scene_center_{0.0f, 0.7f, 0.0f};
     float scene_radius_ = 4.0f;
+    // Free-fly camera override state (see set_free_camera).
+    bool free_camera_ = false;
+    std::array<float, 3> free_eye_{0.0f, 0.0f, 0.0f};
+    float free_yaw_ = 0.0f;
+    float free_pitch_ = 0.0f;
     struct DrawRange {
         std::uint32_t first_index = 0;
         std::uint32_t index_count = 0;

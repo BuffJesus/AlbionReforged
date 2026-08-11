@@ -35,6 +35,17 @@ public:
                 double elapsed_seconds);
     void destroy();
 
+    // Free-fly camera override (level inspection) — mirrors the D3D12 renderer.
+    void set_free_camera(const std::array<float, 3>& eye, float yaw, float pitch) {
+        free_camera_ = true;
+        free_eye_ = eye;
+        free_yaw_ = yaw;
+        free_pitch_ = pitch;
+    }
+    void clear_free_camera() noexcept { free_camera_ = false; }
+    [[nodiscard]] const std::array<float, 3>& scene_center() const noexcept { return scene_center_; }
+    [[nodiscard]] float scene_radius() const noexcept { return scene_radius_; }
+
 private:
     VkDevice device_ = VK_NULL_HANDLE;
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
@@ -52,6 +63,10 @@ private:
     std::array<float, 3> sun_color_{1.0f, 1.0f, 1.0f};
     std::array<float, 3> scene_center_{0.0f, 0.0f, 0.0f};    // geometry bounds -> auto-frame camera
     float scene_radius_ = 1.0f;
+    bool free_camera_ = false;
+    std::array<float, 3> free_eye_{0.0f, 0.0f, 0.0f};
+    float free_yaw_ = 0.0f;
+    float free_pitch_ = 0.0f;
     VkDescriptorSetLayout descriptor_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSet> descriptor_sets_;

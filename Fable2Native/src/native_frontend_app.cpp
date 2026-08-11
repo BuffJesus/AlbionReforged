@@ -326,6 +326,7 @@ public:
             update_video();
             input_.poll();
             handle_input();
+            update_free_camera(delta);
             apply_resolution_setting();
             apply_aa_setting();
             audio_.tick();
@@ -1283,6 +1284,65 @@ private:
         // erratic. Arrows/stick move the cursor; Enter/A activates; Esc/B backs out.
     }
 
+    // Free-fly camera for level inspection (World state only): WASD = move on the view plane,
+    // Q/E = down/up, arrow keys = look (yaw/pitch), Shift = boost. Reads the raw keyboard so it
+    // is independent of the frontend action bindings (which drive menu navigation). The camera is
+    // lazily framed to a 3/4 vantage of the cooked scene on the first World frame.
+    void update_free_camera(double delta) {
+        if (game_.frontend.state() != f2::FrontendState::World) {
+            world_cam_initialised_ = false;  // re-frame next time we enter the world
+            world_renderer_.clear_free_camera();
+            return;
+        }
+        const auto center = world_renderer_.scene_center();
+        const float radius = world_renderer_.scene_radius();
+        if (!world_cam_initialised_) {
+            // Match the auto-orbit's default 3/4 framing so the first view is familiar, then hand
+            // control to the keys.
+            game_.camera.yaw = 0.6f;
+            game_.camera.pitch = -0.32f;
+            const float cp = std::cos(game_.camera.pitch);
+            const std::array<float, 3> fwd{cp * std::sin(game_.camera.yaw), std::sin(game_.camera.pitch),
+                                           cp * std::cos(game_.camera.yaw)};
+            const float dist = radius * 2.4f;
+            game_.camera.position = {center[0] - fwd[0] * dist, center[1] - fwd[1] * dist,
+                                     center[2] - fwd[2] * dist};
+            world_cam_initialised_ = true;
+        }
+        const bool focused = GetForegroundWindow() == window_;
+        const auto down = [&](int vk) { return focused && (GetAsyncKeyState(vk) & 0x8000) != 0; };
+        const float dt = static_cast<float>(delta);
+        const float look = 1.6f * dt;  // radians/sec
+        if (down(VK_LEFT)) game_.camera.yaw -= look;
+        if (down(VK_RIGHT)) game_.camera.yaw += look;
+        if (down(VK_UP)) game_.camera.pitch += look;
+        if (down(VK_DOWN)) game_.camera.pitch -= look;
+        const float pit_lim = 1.55f;  // avoid gimbal flip near straight up/down
+        game_.camera.pitch = std::clamp(game_.camera.pitch, -pit_lim, pit_lim);
+        const float cp = std::cos(game_.camera.pitch);
+        const std::array<float, 3> fwd{cp * std::sin(game_.camera.yaw), std::sin(game_.camera.pitch),
+                                       cp * std::cos(game_.camera.yaw)};
+        const std::array<float, 3> world_up{0.0f, 1.0f, 0.0f};
+        std::array<float, 3> rt{fwd[1] * world_up[2] - fwd[2] * world_up[1],
+                                fwd[2] * world_up[0] - fwd[0] * world_up[2],
+                                fwd[0] * world_up[1] - fwd[1] * world_up[0]};
+        const float rl = std::sqrt(rt[0] * rt[0] + rt[1] * rt[1] + rt[2] * rt[2]);
+        if (rl > 1e-4f) { rt[0] /= rl; rt[1] /= rl; rt[2] /= rl; }
+        const float boost = down(VK_SHIFT) ? 4.0f : 1.0f;
+        const float speed = std::max(radius * 0.35f, 2.0f) * boost * dt;
+        auto& p = game_.camera.position;
+        const auto move = [&](const std::array<float, 3>& d, float s) {
+            p[0] += d[0] * s; p[1] += d[1] * s; p[2] += d[2] * s;
+        };
+        if (down('W')) move(fwd, speed);
+        if (down('S')) move(fwd, -speed);
+        if (down('D')) move(rt, speed);
+        if (down('A')) move(rt, -speed);
+        if (down('E')) move(world_up, speed);
+        if (down('Q')) move(world_up, -speed);
+        world_renderer_.set_free_camera(p, game_.camera.yaw, game_.camera.pitch);
+    }
+
     void draw() {
         if ((game_.frontend.state() == f2::FrontendState::IntroVideo ||
              game_.frontend.state() == f2::FrontendState::AttractVideo) &&
@@ -1452,6 +1512,7 @@ private:
     UINT width_ = 1280;
     UINT height_ = 720;
     double current_fps_ = 0.0;  // smoothed FPS for the optional on-screen counter
+    bool world_cam_initialised_ = false;  // free-fly camera lazily framed on first World frame
     int last_resolution_index_ = -1;  // tracks the applied Options "Resolution" value
     int last_aa_index_ = -1;  // tracks the applied Options "Anti-Aliasing" value
     UINT msaa_samples_ = 1;  // current MSAA sample count (1 = off)

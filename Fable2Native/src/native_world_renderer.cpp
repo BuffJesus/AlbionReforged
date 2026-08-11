@@ -691,12 +691,23 @@ SkyCamera NativeWorldRenderer::compute_camera(std::uint32_t width, std::uint32_t
                                               double elapsed_seconds) const {
     const float angle = static_cast<float>(elapsed_seconds * 0.25);
     const float dist = scene_radius_ * 2.4f;
-    const std::array<float, 3> eye{scene_center_[0] + std::sin(angle) * dist,
-                                   scene_center_[1] + dist * 0.55f,
-                                   scene_center_[2] + std::cos(angle) * dist};
-    const std::array<float, 3> target{scene_center_[0], scene_center_[1], scene_center_[2]};
+    // Free-fly override: eye + yaw/pitch look direction (level inspection). Otherwise the
+    // auto-orbit that frames the whole scene.
+    std::array<float, 3> eye;
+    std::array<float, 3> forward;
+    if (free_camera_) {
+        eye = free_eye_;
+        const float cp = std::cos(free_pitch_);
+        forward = normalise({cp * std::sin(free_yaw_), std::sin(free_pitch_),
+                             cp * std::cos(free_yaw_)});
+    } else {
+        eye = {scene_center_[0] + std::sin(angle) * dist,
+               scene_center_[1] + dist * 0.55f,
+               scene_center_[2] + std::cos(angle) * dist};
+        const std::array<float, 3> target{scene_center_[0], scene_center_[1], scene_center_[2]};
+        forward = normalise(subtract(target, eye));
+    }
     const std::array<float, 3> up{0.0f, 1.0f, 0.0f};
-    const auto forward = normalise(subtract(target, eye));
     const auto right = normalise(cross(up, forward));
     const auto camera_up = cross(forward, right);
     const float aspect =
@@ -729,7 +740,9 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     const float aspect = static_cast<float>(width) / static_cast<float>(height);
     const float y_scale = 1.0f / std::tan(0.5f);
     const float x_scale = y_scale / aspect;
-    const float near_plane = std::max(0.1f, scene_radius_ * 0.05f);
+    // A small near plane when free-flying so close geometry doesn't clip; the orbit sits
+    // far enough out to afford a generous near for depth precision.
+    const float near_plane = free_camera_ ? 0.5f : std::max(0.1f, scene_radius_ * 0.05f);
     const float far_plane = scene_radius_ * 8.0f + 10.0f;
     Constants constants{};
     constants.view_projection[0][0] = right[0] * x_scale;
