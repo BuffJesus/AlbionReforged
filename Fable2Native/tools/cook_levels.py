@@ -379,12 +379,79 @@ def _build_terrain(ghf_bytes: bytes, stride: int = 1):
     return positions, normals, uvs, indices
 
 
+def _build_water(water_bytes: bytes):
+    """Parse a .water file → one merged flat water-plane mesh in GAME space (worldX, worldZ,
+    base_height); the F2SCENE writer's {x,z,y} swap puts the plane at render Y=base_height.
+    Faithful port of ghidra_out/water_system_re.txt (BE). Returns (pos,nrm,uv,idx) or None."""
+    MARKER = 0x00000FEC
+    r = BeReader(water_bytes)
+    version = r.u32()
+    body_count = r.u32()
+    if version != 2 or not body_count or body_count > 256:
+        return None  # empty/vista placeholder or corrupt
+    offsets = [r.u32() for _ in range(body_count)]
+    pos, nrm, uv, idx = [], [], [], []
+    for off in offsets:
+        if off is None or off >= r.n:
+            continue
+        r.i = off
+        if r.u32() != MARKER:
+            continue
+        r.f32()                                   # param_a
+        base_h = r.f32()
+        for _ in range(37):                       # material params (shader-side; skip)
+            r.f32()
+        r.cstr()                                  # normal_map path
+        r.cstr()                                  # secondary_map path
+        patch_count = r.u32()
+        if patch_count is None or patch_count > 4096:
+            continue
+        for _t in range(patch_count):
+            if r.u32() != MARKER:
+                break
+            cx, cz = r.f32(), r.f32()
+            ex, ez = r.f32(), r.f32()
+            cwf, chf = r.f32(), r.f32()
+            aux_count = r.u32() or 0
+            for _a in range(min(aux_count, 64)):
+                r.u32()
+            mask_count = r.u32() or 0
+            mask = [r.u8() for _ in range(mask_count)]
+            r.u32()                               # tile-end marker
+            cw = max(int(cwf or 1), 1)
+            ch = max(int(chf or 1), 1)
+            if mask_count != cw * ch or None in (cx, cz, ex, ez, base_h):
+                continue
+            hx, hz = abs(ex) * 0.5, abs(ez) * 0.5
+            x0, x1 = cx - hx, cx + hx
+            z0, z1 = cz - hz, cz + hz
+            base_v = len(pos) // 3
+            for mz in range(ch + 1):
+                for mx in range(cw + 1):
+                    px = x0 + (x1 - x0) * mx / cw
+                    pz = z0 + (z1 - z0) * mz / ch
+                    pos.extend((px, pz, base_h))  # game (X, Z-ground, height)
+                    nrm.extend((0.0, 0.0, 1.0))   # up in game Z
+                    uv.extend((px * 0.05, pz * 0.05))
+            for mz in range(ch):
+                for mx in range(cw):
+                    if not mask[mz * cw + mx]:
+                        continue
+                    v00 = base_v + mz * (cw + 1) + mx
+                    v10 = v00 + 1
+                    v01 = base_v + (mz + 1) * (cw + 1) + mx
+                    v11 = v01 + 1
+                    idx.extend((v00, v11, v10, v00, v01, v11))
+    return (pos, nrm, uv, idx) if idx else None
+
+
 def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
                out_scene: Path, types=(2, 21), max_per_block=None, log=print,
                textures_bnks=None, tex_cook: Path = None,
                tex_out_dir: Path = None, terrain_ghf: Path = None,
                terrain_stride: int = 1, hero_model: str = None,
-               hero_body_bnk: Path = None, hero_pos=None) -> dict:
+               hero_body_bnk: Path = None, hero_pos=None,
+               water_file: Path = None) -> dict:
     """Stage 2: glue every prop model (header++body) and merge instances into one F2SCENE.
 
     Data-driven from ghidra_out/model_glue_lmp_format.txt (the RE'd glue) — no guessing.
@@ -507,6 +574,23 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             n_inst += 1
             log(f"terrain: {len(t_pos)//3} verts / {len(t_idx)//3} tris "
                 f"(stride {terrain_stride or 1})")
+
+    # Water: append the level's water bodies as flat blue planes (Phase A — opaque water-colour
+    # mesh; the animated bump/fresnel shader is a later phase). water_system_re.txt.
+    if water_file:
+        try:
+            wbuilt = _build_water(Path(water_file).read_bytes())
+        except Exception as exc:  # noqa: BLE001
+            wbuilt = None
+            log(f"  water skip ({type(exc).__name__}: {exc})")
+        if wbuilt:
+            w_pos, w_nrm, w_uv, w_idx = wbuilt
+            w_mat = len(materials)
+            materials.append(("water", [], (0.14, 0.34, 0.52, 1.0)))
+            meshes.append(("water0", w_mat, w_pos, w_nrm, w_uv, w_idx))
+            instances.append(("water0", (0.0, 0.0, 0.0), 0.0, 1.0))
+            n_inst += 1
+            log(f"water: {len(w_pos)//3} verts / {len(w_idx)//3} tris")
 
     # Hero: cook the child hero (globals body bnk) and drop one instance into the town so the
     # first level isn't empty of characters (ghidra_out/hero_render_re.txt). The model is skinned;
@@ -650,6 +734,8 @@ def main() -> int:
     ap.add_argument("--hero-body-bnk", type=Path, help="globals_models.bnk (hero polymsh bodies)")
     ap.add_argument("--hero-pos", type=float, nargs=3, metavar=("X", "Y", "Z"),
                     help="hero render-space position (default: building centroid)")
+    ap.add_argument("--water-file", type=Path,
+                    help="the level's extracted .water file -> flat water planes")
     args = ap.parse_args()
 
     data = args.engine_level.read_bytes()
@@ -685,7 +771,8 @@ def main() -> int:
                    tex_out_dir=args.tex_out_dir, terrain_ghf=args.terrain_ghf,
                    terrain_stride=args.terrain_stride,
                    hero_model=args.hero_model if args.hero else None,
-                   hero_body_bnk=args.hero_body_bnk, hero_pos=args.hero_pos)
+                   hero_body_bnk=args.hero_body_bnk, hero_pos=args.hero_pos,
+                   water_file=args.water_file)
     return 0
 
 
