@@ -31,6 +31,13 @@ Commit `e16428d`.
   (gradient default / atmosphere toggle); and the **title reveal matched to retail** frame-by-frame
   (objective per-frame pixel A/B via FABLE2NATIVE_TITLE_TIME). Full detail: memory
   `fable2native-level-cook-renders` (2026-08-10 block) + `NATIVE_LEVEL_COOK_PLAN.md`.
+- **✅ TERRAIN GROUND ALBEDO (2026-08-11, D3D12, screenshot-verified):** OPEN ITEM 2 cause (1) fixed —
+  the terrain was a blown-out WHITE plane (no albedo) making the textured buildings read "dark by
+  contrast". `cook_levels.py` now cooks the level's DOMINANT ground texture from the `.ehf` splat map
+  (new `f2tool ehf` dump → `_terrain_ground_texture()` picks the most-painted LOD; chapter2slums =
+  `cobbles_curvy_dirt` @91%), tiled at its LOD base_scale. New flag `--terrain-ehf`. Details +
+  Rung-2 (full splat composite) in `NATIVE_LEVEL_COOK_PLAN.md` OPEN ITEM 2. ⚠ `f2tool` gained an `ehf`
+  subcommand (source in `Fable2AssetBrowser`, untracked like the other dump tools — rebuild via cmake).
 - **NEXT (specs in hand):** Phase-1 sky colour match (reads brown); WATER (`water_system_re.txt`); SPEC maps
   (t2; cooker already emits material=); exact hero PlayerStart XYZ; foliage LOD/wind; terrain .ehf splat;
   frontend fidelity drifts (`frontend_visual_fidelity_re.txt` P3-5); Vulkan world-renderer parity.

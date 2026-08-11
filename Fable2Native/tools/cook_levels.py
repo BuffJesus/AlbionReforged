@@ -323,10 +323,73 @@ def _cook_textures(tokens, textures_bnks, tex_cook: Path, f2tool: Path,
     return cooked
 
 
-def _build_terrain(ghf_bytes: bytes, stride: int = 1):
+def _terrain_ground_texture(ehf_path: Path, f2tool: Path, log=print):
+    """Pick the dominant ground albedo for a terrain .ehf from its LOD table + splat map.
+
+    Runs `f2tool ehf` (which parses the EHF via the authoritative AssetBrowser
+    EhfChunkParser) and reads the per-LOD `strs0` base-diffuse names plus the splat
+    coverage histogram. The splat index encodes the 16 paint layers as index=lod*17;
+    255 is the unpainted-base sentinel (falls back to LOD 0 in the engine's sampler,
+    per LevelLoader.cpp bake-composite). We sum coverage per LOD and return the base
+    diffuse of the most-painted layer. Returns (tex_token, base_scale) or None.
+
+    This is Rung 1 (single dominant tiled ground texture). Full per-cell splat
+    compositing across all LODs is a later step (the .ehf carries the data).
+    """
+    import subprocess
+    try:
+        out = subprocess.run([str(f2tool), "ehf", str(ehf_path)],
+                             capture_output=True, text=True, check=True).stdout
+    except Exception as exc:  # noqa: BLE001 - skip-and-continue
+        log(f"  terrain ehf skip ({type(exc).__name__}: {exc})")
+        return None
+    lods: dict[int, tuple[str, float]] = {}
+    hist: dict[int, int] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if parts and parts[0] == "lod":
+            li = int(parts[1])
+            base_scale = 0.125
+            strs0 = ""
+            for p in parts[2:]:
+                if p.startswith("base_scale="):
+                    try:
+                        base_scale = float(p.split("=", 1)[1])
+                    except ValueError:
+                        pass
+                elif p.startswith("strs0="):
+                    strs0 = p.split("=", 1)[1]
+            if strs0 and strs0 != "-":
+                lods[li] = (strs0, base_scale)
+        elif parts and parts[0] == "splat_hist":
+            for p in parts[1:]:
+                idx, _, cnt = p.partition(":")
+                if cnt:
+                    hist[int(idx)] = int(cnt)
+    if not lods:
+        return None
+    # Sum splat coverage per LOD (index = lod*17; 255 sentinel -> LOD 0 fallback).
+    cover: dict[int, int] = {}
+    for idx, cnt in hist.items():
+        lod = 0 if idx == 255 else int(round(idx / 17.0))
+        if lod not in lods:
+            lod = 0
+        cover[lod] = cover.get(lod, 0) + cnt
+    dom = max(cover, key=cover.get) if cover else min(lods)
+    tex, scale = lods[dom]
+    total = sum(cover.values()) or 1
+    log(f"  terrain ground = LOD {dom} '{tex}' (base_scale {scale}, "
+        f"{100 * cover.get(dom, 0) // total}% splat coverage)")
+    return tex, scale
+
+
+def _build_terrain(ghf_bytes: bytes, stride: int = 1, uv_scale: float = TERRAIN_UV_PER_WU):
     """Decode a .ghf heightfield and build a render mesh (positions/normals/uvs/indices)
     in RENDER axes. Faithful port of ghidra_out/terrain_mesh_re.txt §1-4 (validated
     byte-exact on chapter2slums). Returns (positions, normals, uvs, indices) or None.
+
+    `uv_scale` = texture repeats per world unit (default 0.125). When a ground albedo is
+    cooked from the .ehf its LOD base_scale is passed here so the tiling matches the game.
 
     .ghf = gzip stream; raw = origin(3×be_f32) + wCells(be_u32 @0xC) + hCells(be_u32 @0x10)
     + W*H cells of 14 bytes {f32 height, f32 water, u32 materialGUID, u8, u8}. Vertex per
@@ -367,7 +430,7 @@ def _build_terrain(ghf_bytes: bytes, stride: int = 1):
             nx, ny, nz = (hl - hr), (hd - hu), 2.0 * eff
             nlen = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
             normals.extend((nx / nlen, ny / nlen, nz / nlen))
-            uvs.extend((gx * TERRAIN_UV_PER_WU, gy * TERRAIN_UV_PER_WU))
+            uvs.extend((gx * uv_scale, gy * uv_scale))
     indices = []
     for j in range(gh - 1):
         for i in range(gw - 1):
@@ -627,6 +690,7 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                out_scene: Path, types=(2, 21), max_per_block=None, log=print,
                textures_bnks=None, tex_cook: Path = None,
                tex_out_dir: Path = None, terrain_ghf: Path = None,
+               terrain_ehf: Path = None,
                terrain_stride: int = 1, hero_model: str = None,
                hero_body_bnk: Path = None, hero_pos=None,
                water_file: Path = None, npcs: bool = False,
@@ -765,15 +829,28 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
     # Phase T1 — ghidra_out/terrain_mesh_re.txt). Game-space verts flow through the same
     # emit swap as props; identity instance (mesh is already world-placed).
     if terrain_ghf:
+        # Pick the dominant ground albedo from the level's .ehf splat map (data-driven).
+        # The texture cooks through the normal albedo pass below (it lives in the same
+        # 1024mip0/shared tex banks as the building albedos), tiled at its LOD base_scale.
+        t_ground = None
+        if terrain_ehf:
+            t_ground = _terrain_ground_texture(Path(terrain_ehf), f2tool, log=log)
+        t_uv_scale = t_ground[1] if t_ground else TERRAIN_UV_PER_WU
         try:
-            built = _build_terrain(Path(terrain_ghf).read_bytes(), stride=terrain_stride or 1)
+            built = _build_terrain(Path(terrain_ghf).read_bytes(), stride=terrain_stride or 1,
+                                   uv_scale=t_uv_scale)
         except Exception as exc:  # noqa: BLE001
             built = None
             log(f"  terrain skip ({type(exc).__name__}: {exc})")
         if built:
             t_pos, t_nrm, t_uv, t_idx = built
             t_mat = len(materials)
-            materials.append(("terrain", [], (0.33, 0.30, 0.24, 1.0)))
+            if t_ground:
+                # White base_colour so the sampled ground albedo shows at full fidelity
+                # (base = base_colour * albedo, per native_world_renderer PS).
+                materials.append(("terrain", ["albedo=" + t_ground[0]], (1.0, 1.0, 1.0, 1.0)))
+            else:
+                materials.append(("terrain", [], (0.33, 0.30, 0.24, 1.0)))
             meshes.append(("terrain0", t_mat, t_pos, t_nrm, t_uv, t_idx))
             instances.append(("terrain0", (0.0, 0.0, 0.0), 0.0, 1.0))
             n_inst += 1
@@ -1157,6 +1234,9 @@ def main() -> int:
                     help="where to write cooked albedo DDS (default <scene>.textures/)")
     ap.add_argument("--terrain-ghf", type=Path,
                     help="the level's extracted .ghf heightfield -> emit a ground mesh")
+    ap.add_argument("--terrain-ehf", type=Path,
+                    help="the level's main heightfield .ehf -> pick the dominant ground "
+                         "albedo (from the LOD table + splat map) and texture the terrain")
     ap.add_argument("--terrain-stride", type=int, default=1,
                     help="terrain grid decimation (1=full-res 664K tris; 2/4 for lighter)")
     ap.add_argument("--hero", action="store_true",
@@ -1239,6 +1319,7 @@ def main() -> int:
                    args.cook, types=types, max_per_block=args.max_per_block,
                    textures_bnks=args.textures_bnk, tex_cook=tex_cook,
                    tex_out_dir=args.tex_out_dir, terrain_ghf=args.terrain_ghf,
+                   terrain_ehf=args.terrain_ehf,
                    terrain_stride=args.terrain_stride,
                    hero_model=args.hero_model if args.hero else None,
                    hero_body_bnk=args.hero_body_bnk, hero_pos=args.hero_pos,

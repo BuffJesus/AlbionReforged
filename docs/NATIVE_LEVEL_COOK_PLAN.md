@@ -265,6 +265,24 @@ MEASURED world bounds (render space, `native_full_vista.f2scene`):
   — there may be more than one tile. (c) does the vista carry a world PLACEMENT transform (level/.save)
   rather than the identity we assumed? (d) does `bs_market_fairfaxcastle` include its own island/plinth?
 
+**✅ OPEN ITEM 2 cause (1) FIXED (2026-08-11, D3D12, screenshot-verified) — terrain now has a real
+ground albedo.** Cause (1) below (terrain = blown-out WHITE → buildings read "dark by contrast") is
+resolved: the terrain cook now cooks the level's DOMINANT ground texture from the `.ehf` and tiles it.
+- **How (data-driven, no guess):** new `f2tool ehf <file.ehf>` (source
+  `Fable2AssetBrowser/source/tools/F2Tool.cpp` + its two parser sources added to the f2tool CMake
+  target — REBUILD f2tool via cmake in the VS dev shell) dumps, via the authoritative
+  `EhfChunkParser`, the per-LOD `strs0` base-diffuse names + the splat-coverage histogram.
+  `cook_levels.py _terrain_ground_texture()` sums splat coverage per LOD (splat index = lod×17; 255 =
+  unpainted-base sentinel → LOD 0 fallback) and picks the most-painted layer. For chapter2slums that is
+  **LOD 0 `art\environment\_groundtextures\cobbles_curvy_dirt.tex` at 91% coverage** (cobbles+base).
+  The texture cooks through the normal albedo pass (it lives in `1024mip0_textures.bnk`), tiled at its
+  LOD `base_scale` (0.25), terrain `base_colour` set white.
+- **New flag:** `--terrain-ehf <level main .ehf>` (the `ch2_heightfield_slums_*.ehf` in `streaming.bnk`,
+  NOT the sea `sea_vista` .ehf). Render: cobble/dirt ground under the town, buildings sit naturally on it.
+- **NEXT (Rung 2):** full per-cell splat COMPOSITE across all 14 LODs (grass/dirt/path variety) — the
+  `.ehf` carries splat_indices + per-chunk layers; AssetBrowser `LevelLoader.cpp` bake-composite +
+  `TerrainSplat.cpp` are the CPU/GPU reference. Cause (2) (ambient/lightmap under-lighting) still open.
+
 **OPEN ITEM 2 — the scene reads DARK — ROOT-CAUSED this session (see `ghidra_out/dark_props_diagnosis.txt`
 + its SESSION VERIFICATION footer).** The props are NOT actually black: a raw-albedo PS diagnostic
 (`return albedo.Sample(uv)`, no lighting) showed the buildings FULLY TEXTURED (brick/stone/timber) — the
@@ -279,6 +297,13 @@ today) or lift ambient. **A latent renderer bug WAS found+fixed in passing:** ma
 (the draw bound SRVs beyond the 128 created for 661 materials — committed). ⚠ The background agent's
 "just raise the cap" conclusion was DISPROVEN by the A/B measurements above — don't chase the cap for the
 dark look.
+
+**Terrain-albedo cook (add to the recook):** stage the level `.ehf`
+(`streaming.bnk` → `worlds\albion\bwsslums\heightfields\chapter2slums\ch2_heightfield_slums_id_3a6902ed.ehf`)
+and pass `--terrain-ehf <that .ehf>` alongside `--terrain-ghf`, with `1024mip0_textures.bnk` in the
+`--textures-bnk` list. A fast isolated check: cook with `--types 99` (0 props) + `--terrain-stride 4`.
+Render+screenshot: `scratchpad/world_shot.ps1 -Scene <f2scene> -Tag <t>` (launches
+`f2native_frontend.exe --start-world --scene <f2scene> --game-dir <assets/game>`, PrintWindow capture).
 
 **Recook command of record:** `scratchpad/recook_full.sh` (all inputs staged in `scratchpad/lvl/` +
 `scratchpad/*.ehf/.water/.ghf` + game `Globals/`; tex-cook =
