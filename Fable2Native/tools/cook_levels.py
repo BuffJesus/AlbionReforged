@@ -445,13 +445,58 @@ def _build_water(water_bytes: bytes):
     return (pos, nrm, uv, idx) if idx else None
 
 
+# Default child-male villager part set (all validated through fable_mdl_format's
+# 28-byte skinned path, NO StringBlock — ghidra_out/npc_spawn_re.txt §2.3). A matched
+# {head,torso,legs} authored in one shared rig space stacks into a standing villager.
+NPC_CHILD_MALE_PARTS = [
+    r"Art\Characters\Npc\Random Villagers\Children\dotXSI\CH_mchild_head_01\CH_mchild_head_01.mdl",
+    r"Art\Characters\Npc\Random Villagers\Children\dotXSI\CH_mchild_torso_01\CH_mchild_torso_01.mdl",
+    r"Art\Characters\Npc\Random Villagers\Children\dotXSI\CH_mchild_legs_01\CH_mchild_legs_01.mdl",
+]
+NPC_CHILD_FEMALE_PARTS = [
+    r"Art\Characters\Npc\Random Villagers\Children\dotXSI\CH_fchild_head_01\CH_fchild_head_01.mdl",
+    r"Art\Characters\Npc\Random Villagers\Children\dotXSI\CH_fchild_torso_01\CH_fchild_torso_01.mdl",
+    r"Art\Characters\Npc\Random Villagers\Children\dotXSI\CH_fchild_legs_01\CH_fchild_legs_01.mdl",
+]
+
+
+def read_npc_markers(level_save: Path, level_gdb: Path, markerdump: Path,
+                     log=print) -> list:
+    """Read creature-spawn markers from <level>.save + <level>.gdb via npc_markerdump.
+
+    npc_markerdump follows the SimpleTransformComponent 0x619F96CF -> Position/Rotation
+    chain that GdbParser::LookupPlacement skips (ghidra_out/npc_spawn_re.txt §1.2). It is
+    the ONE piece of new read code the NPC cook needs; everything else reuses cook helpers.
+    Returns [{"name","pos":[gx,gy,gz],"yaw"}] in GAME space (the caller applies {x,z,y}).
+    """
+    import subprocess, tempfile
+    if not markerdump or not Path(markerdump).is_file():
+        log(f"  npc skip (markerdump tool not found: {markerdump})")
+        return []
+    tmp_json = Path(tempfile.mkdtemp(prefix="f2npc_")) / "markers.json"
+    try:
+        subprocess.run([str(markerdump), str(level_save), str(level_gdb),
+                        "--out", str(tmp_json)], check=True, capture_output=True)
+        data = json.loads(tmp_json.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        log(f"  npc skip (marker read failed: {type(exc).__name__}: {exc})")
+        return []
+    markers = data.get("markers", [])
+    log(f"npc markers: {len(markers)} creature-spawn points "
+        f"(hit={data.get('hit')} miss={data.get('miss')})")
+    return markers
+
+
 def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
                out_scene: Path, types=(2, 21), max_per_block=None, log=print,
                textures_bnks=None, tex_cook: Path = None,
                tex_out_dir: Path = None, terrain_ghf: Path = None,
                terrain_stride: int = 1, hero_model: str = None,
                hero_body_bnk: Path = None, hero_pos=None,
-               water_file: Path = None) -> dict:
+               water_file: Path = None, npcs: bool = False,
+               npc_body_bnk: Path = None, npc_markerdump: Path = None,
+               npc_level_save: Path = None, npc_level_gdb: Path = None,
+               npc_limit: int = None, npc_parts=None) -> dict:
     """Stage 2: glue every prop model (header++body) and merge instances into one F2SCENE.
 
     Data-driven from ghidra_out/model_glue_lmp_format.txt (the RE'd glue) — no guessing.
@@ -633,6 +678,62 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
         except Exception as exc:  # noqa: BLE001
             log(f"  hero skip ({type(exc).__name__}: {exc})")
 
+    # NPCs: populate the town with posed (bind-pose) villagers at the creature-spawn
+    # markers (ghidra_out/npc_spawn_re.txt). Mirrors the --hero cook, generalised to a
+    # modular {head,torso,legs} part-set placed at N marker transforms. The parts share
+    # the rig bind pose, so all three stack at ONE instance transform per marker.
+    if npcs and npc_body_bnk:
+        try:
+            markers = read_npc_markers(npc_level_save, npc_level_gdb, npc_markerdump, log=log)
+            if npc_limit and npc_limit > 0:
+                markers = markers[:npc_limit]
+            parts = npc_parts or NPC_CHILD_MALE_PARTS
+            nidx = _bnk_name_index(npc_body_bnk)  # globals_models.bnk (villager polymsh bodies)
+            # Cook each part MDL ONCE -> list of (mesh_name, mat_idx) for its geoms.
+            part_meshes = []  # [[(mesh_name, mat_idx), ...] per part]
+            for part in parts:
+                he = _resolve(hidx, part)
+                be = _resolve(nidx, part)
+                if not (he and be):
+                    log(f"  npc part skip (no bank entry): {part}")
+                    continue
+                try:
+                    glued = extract(header_bnk, he, "npc_h.bin") + extract(npc_body_bnk, be, "npc_b.bin")
+                    _, pgeoms = mdl.parse(glued, log=lambda m: None, file_path=part)
+                except Exception as exc:  # noqa: BLE001 - StringBlock parts, etc: skip-and-continue
+                    log(f"  npc part skip ({type(exc).__name__}): {part}")
+                    continue
+                pi = len(part_meshes)
+                geom_recs = []
+                for gi, g in enumerate(pgeoms or []):
+                    mat_idx = len(materials)
+                    opts = []
+                    val = getattr(g, "diffuse", "")
+                    if val:
+                        opts.append("albedo=" + val.replace(chr(92), "/"))
+                    materials.append((f"npc{pi}_{gi}", opts, (0.80, 0.70, 0.62, 1.0)))
+                    positions = g.positions
+                    normals = g.normals or add_normals(positions, g.indices)
+                    name = f"npc{pi}_{gi}"
+                    meshes.append((name, mat_idx, positions, normals, g.uvs, g.indices))
+                    geom_recs.append(name)
+                if geom_recs:
+                    part_meshes.append(geom_recs)
+            # One instance per (marker x part-geom): render pos = game {x,z,y}; yaw = Rotation.VecX.
+            n_npc = 0
+            for m in markers:
+                gp = m.get("pos") or [0.0, 0.0, 0.0]
+                rx, ry, rz = gp[0], gp[2], gp[1]  # game (x,y,z) -> render (x,z,y)
+                yaw = float(m.get("yaw", 0.0))
+                for geom_recs in part_meshes:
+                    for name in geom_recs:
+                        instances.append((name, (rx, ry, rz), yaw, 1.0))
+                n_npc += 1
+                n_inst += 1
+            log(f"npcs: {n_npc} villagers ({len(part_meshes)} parts each) at creature markers")
+        except Exception as exc:  # noqa: BLE001
+            log(f"  npc skip ({type(exc).__name__}: {exc})")
+
     # Cook the referenced albedo textures (globals_textures.bnk .tex -> loose DDS). The runtime
     # only samples albedo (t0), so albedo is what turns the flat-grey buildings textured.
     albedo_tokens = []
@@ -739,6 +840,22 @@ def main() -> int:
                     help="hero render-space position (default: building centroid)")
     ap.add_argument("--water-file", type=Path,
                     help="the level's extracted .water file -> flat water planes")
+    ap.add_argument("--npcs", action="store_true",
+                    help="populate the town with bind-pose villagers at creature-spawn markers")
+    ap.add_argument("--npc-body-bnk", type=Path,
+                    help="globals_models.bnk (villager polymsh bodies; usually = --hero-body-bnk)")
+    ap.add_argument("--npc-markerdump", type=Path,
+                    default=Path(__file__).resolve().parents[2] / "Fable2AssetBrowser" / "source"
+                    / "build" / "npc_markerdump.exe",
+                    help="npc_markerdump.exe (reads .save+.gdb creature markers)")
+    ap.add_argument("--level-save", type=Path,
+                    help="the level's extracted .save (XML entity name->GUID registry)")
+    ap.add_argument("--level-gdb", type=Path,
+                    help="the level's extracted .gdb (per-GUID record table)")
+    ap.add_argument("--npc-limit", type=int,
+                    help="cap the number of villagers cooked (first-pass; e.g. 20)")
+    ap.add_argument("--npc-female", action="store_true",
+                    help="use the child-female part set instead of child-male")
     args = ap.parse_args()
 
     data = args.engine_level.read_bytes()
@@ -775,7 +892,12 @@ def main() -> int:
                    terrain_stride=args.terrain_stride,
                    hero_model=args.hero_model if args.hero else None,
                    hero_body_bnk=args.hero_body_bnk, hero_pos=args.hero_pos,
-                   water_file=args.water_file)
+                   water_file=args.water_file, npcs=args.npcs,
+                   npc_body_bnk=args.npc_body_bnk or args.hero_body_bnk,
+                   npc_markerdump=args.npc_markerdump,
+                   npc_level_save=args.level_save, npc_level_gdb=args.level_gdb,
+                   npc_limit=args.npc_limit,
+                   npc_parts=(NPC_CHILD_FEMALE_PARTS if args.npc_female else NPC_CHILD_MALE_PARTS))
     return 0
 
 

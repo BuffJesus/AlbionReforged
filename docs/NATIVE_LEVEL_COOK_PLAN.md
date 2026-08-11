@@ -194,6 +194,47 @@ Verify: run on the extracted `chapter2slums.engine_level`, then World `--scene` 
   heightfield. (f) VULKAN world-renderer parity — behind D3D12 (old origin-orbit camera, no scene-AABB fit,
   no depth attachment in its render pass, no lighting, no textures).
 
+- ✅ NPC TOWNSPEOPLE (2026-08-10, D3D12, screenshot-verified) — the slums now populate with bind-pose
+  child villagers at the level's creature-spawn markers. Data-driven from `ghidra_out/npc_spawn_re.txt`,
+  no guessing. Impl:
+  - New C++ tool `Fable2Native/tools/npc_markerdump.cpp` (added to the AssetBrowser CMake as target
+    `npc_markerdump`, header-only dep `Skybox/GdbReaderInternal.h`): parses `<level>.save` (XML
+    name→GUID) + `<level>.gdb`, and for each creature-spawn marker follows the SimpleTransformComponent
+    (`0x619F96CF`) → Position (`0xBD7C27D4`) / Rotation (`0x21EBC83B`) vec3 chain that
+    `GdbParser::LookupPlacement` does NOT traverse. Emits `markers.json` (name, game pos, yaw).
+    VALIDATED: **124/124** markers on chapter2slums (109 MarkerCreatureGeneratorSpawnPoint + 15
+    "Creature Generator Spawn Point"), miss=0, positions match the reference markerdump exactly.
+    Unlike the RE-session's throwaway markerdump.cpp (baked `save_map.h`), this parses the `.save`
+    XML at runtime — reusable for any level.
+  - `cook_levels.py` gained `cook_npcs()` (via `read_npc_markers()` + a block in `cook_level()`),
+    mirroring `--hero`: for a matched child villager part-set (`CH_mchild_{head,torso,legs}_01`, all
+    validated through the 28-byte skinned path — NO StringBlock) it glues header++body per part
+    (globals_model_headers.bnk + globals_models.bnk), parses via fable_mdl_format, emits each geom as
+    an F2SCENE mesh (same `{x,z,y}` swap), and drops one instance per (marker × part-geom) at the
+    marker render transform. Part diffuse `.tex` cook alongside via the existing `_cook_textures()`.
+    New flags: `--npcs`, `--npc-limit N`, `--level-save`, `--level-gdb`, `--npc-body-bnk`
+    (defaults to `--hero-body-bnk`), `--npc-female` (child-female set), `--npc-markerdump`.
+  - VERIFIED: `--npcs --npc-limit 20` cooks **20 villagers × 3 parts = 100 instances** + 5 diffuse DDS
+    (mchild_face/torso/legs) with hit=124 miss=0. A single-villager cook renders as a correct standing
+    child — head+torso+legs stack with ZERO offset (they share the rig bind pose, as the spec predicted);
+    at full-scene zoom the villagers are small (child ≈1.5 wu tall vs the ~130-wu-wide town spread), but
+    present and on-ground at the real marker positions.
+  - CAVEATS (from `npc_spawn_re.txt`, all expected): adult head parts (e.g. CH_mnormal_strong_head_01)
+    use the StringBlock layout fable_mdl_format doesn't port → the cook uses the child set (no
+    StringBlock) and skip-and-continues any failing part. Runtime appearance tint/clothing
+    (VillagerComponent) + which archetype each marker actually spawns (the *_Generator payload) are
+    runtime AI, out of scope for a static cook (a first pass places the same child set at every marker).
+  - Cook command (full level + 20 NPCs):
+    `python Fable2Native/tools/cook_levels.py <chapter2slums.engine_level> --cook out.f2scene
+    --header-bnk Globals/globals_model_headers.bnk --body-bnk <chapter2slums_models.bnk> --types 2,21
+    --terrain-ghf <slums.ghf> --terrain-stride 2 --water-file <slums.water>
+    --hero --hero-body-bnk Globals/globals_models.bnk
+    --npcs --npc-limit 20 --npc-body-bnk Globals/globals_models.bnk
+    --level-save <chapter2slums.save> --level-gdb <chapter2slums.gdb>
+    --textures-bnk <shared_6281> --textures-bnk <shared_2445> --textures-bnk <level textures.bnk>
+    --textures-bnk Globals/1024mip0_textures.bnk --textures-bnk Globals/globals_textures.bnk`.
+    (`npc_markerdump.exe` auto-located in `Fable2AssetBrowser/source/build/`.)
+
 ## Ground-truth references
 `ghidra_out/world_level_format.txt`, `newgame_handoff.txt`, `gdb_instantiation_re.txt`,
 `physics_collision_system.txt`, `hero_appearance_morph.txt`; `Fable2AssetBrowser/source/src/Level/
