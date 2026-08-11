@@ -13,7 +13,10 @@ namespace f2 {
 
 class NativeVulkanWorldRenderer {
 public:
-    static constexpr std::uint32_t kMaxMaterialTextures = 64;
+    // See native_world_renderer.h: the full chapter2slums cook emits ~661 materials
+    // (2 textures each); a low cap clamps later (prop) materials to a wrong texture →
+    // near-black props. 4096 = 2048 materials (ghidra_out/dark_props_diagnosis.txt).
+    static constexpr std::uint32_t kMaxMaterialTextures = 4096;
     bool initialise(VkPhysicalDevice physical_device,
                     VkDevice device,
                     VkCommandPool command_pool,

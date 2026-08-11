@@ -16,9 +16,12 @@ namespace f2 {
 class NativeWorldRenderer {
 public:
     // Descriptor slots reserved for world material textures. Each material uses TWO
-    // (albedo t0 + normal t1), so the material cap is kMaxMaterialTextures/2 = 128
-    // (chapter2slums has ~86 materials — 64 was clamping the last ~22 to wrong textures).
-    static constexpr std::uint32_t kMaxMaterialTextures = 256;
+    // (albedo t0 + normal t1), so the material cap is kMaxMaterialTextures/2. The full
+    // chapter2slums cook (props + terrain + vista + hero + NPCs) emits ~661 materials;
+    // props are emitted LAST, so a low cap clamped materials 128+ to a wrong texture →
+    // near-black props (ghidra_out/dark_props_diagnosis.txt). 4096 = 2048 materials, with
+    // headroom. The SRV heap auto-sizes off this constant (native_frontend_app.cpp:464).
+    static constexpr std::uint32_t kMaxMaterialTextures = 4096;
     bool initialise(ID3D12Device* device,
                     ID3D12CommandQueue* queue,
                     const NativeScene& scene,
