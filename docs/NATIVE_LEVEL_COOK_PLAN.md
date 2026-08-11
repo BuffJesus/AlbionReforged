@@ -265,11 +265,20 @@ MEASURED world bounds (render space, `native_full_vista.f2scene`):
   — there may be more than one tile. (c) does the vista carry a world PLACEMENT transform (level/.save)
   rather than the identity we assumed? (d) does `bs_market_fairfaxcastle` include its own island/plinth?
 
-**OPEN ITEM 2 — most PROPS render near-black** (townhouses/walls/foliage). NOT missing albedo — the
-cooked materials DO carry `albedo=`/`normal=` DDS (e.g. `mat_4_*`, `mat_6_*` = bs_townhouse textures).
-So it's a lighting/normals/base-colour issue. A background agent (running at session end) is root-causing
-it → report will be at **`ghidra_out/dark_props_diagnosis.txt`** with a minimal cook_levels.py fix plan.
-READ THAT FIRST next session.
+**OPEN ITEM 2 — the scene reads DARK — ROOT-CAUSED this session (see `ghidra_out/dark_props_diagnosis.txt`
++ its SESSION VERIFICATION footer).** The props are NOT actually black: a raw-albedo PS diagnostic
+(`return albedo.Sample(uv)`, no lighting) showed the buildings FULLY TEXTURED (brick/stone/timber) — the
+SRV bind is correct — and showed the **TERRAIN as solid WHITE** (its material has NO albedo → default 1×1
+white). Ruled out by measurement: black DDS (bs_stone_wall mean (98,88,71)), dark base_colour (all 0.72),
+zero normals (0/661 meshes), missing-texture (defaults WHITE not black), low ambient (a +0.35 fill didn't
+brighten → base≈0 at those pixels). **REAL causes, ranked:** (1) **terrain has no albedo** → blown-out
+white plane makes the correctly-textured mid-tone buildings read "dark by contrast" — FIX = cook the
+terrain ground/splat albedo (`--terrain-ghf` emits geometry only); #1 visual win. (2) ambient floor 0.18 +
+near-horizontal sun under-lights vertical walls — proper fix = bake the level `.lmp` LightmapFile (skipped
+today) or lift ambient. **A latent renderer bug WAS found+fixed in passing:** material-texture cap 256→4096
+(the draw bound SRVs beyond the 128 created for 661 materials — committed). ⚠ The background agent's
+"just raise the cap" conclusion was DISPROVEN by the A/B measurements above — don't chase the cap for the
+dark look.
 
 **Recook command of record:** `scratchpad/recook_full.sh` (all inputs staged in `scratchpad/lvl/` +
 `scratchpad/*.ehf/.water/.ghf` + game `Globals/`; tex-cook =
