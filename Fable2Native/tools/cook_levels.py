@@ -487,6 +487,58 @@ def read_npc_markers(level_save: Path, level_gdb: Path, markerdump: Path,
     return markers
 
 
+def read_props(level_save: Path, level_gdb: Path, propdump: Path,
+               model_indices, globals_gdb: Path = None, log=print) -> list:
+    """Read the level's renderable .gdb/.save ENTITY PROPS via the propdump tool.
+
+    The engine_level's type-2/21 blocks only carry the ~16 static prop archetypes;
+    the town's real density (furniture, crates, barrels, doors, walls, railings,
+    ~37 townhouse facades — ~1800 entities) lives in the .save/.gdb layer. propdump
+    resolves each entity -> GraphicAppearanceStaticMeshComponent (0x29CF50D1) ->
+    model-resource -> ModelFile (0x0C17DB4E) model-path HASH, plus the transform
+    chain, exactly like lightdump/npc_markerdump (ghidra_out/gdb_component_schemas.txt
+    + gdb_instantiation_re.txt). The model-path strings aren't in the gdb (verified);
+    they are the MODEL-BANK entry names, so we feed propdump the bank name tables
+    (from the same header/body bnks the cooker glues from) as --models-list files and
+    it reverse-maps the FNV-1(lower) hash -> the literal .mdl path.
+
+    Returns [{"name","pos":[gx,gy,gz],"yaw","model"}] in GAME space (caller applies
+    the {x,z,y} swap). Entities with no static model / no transform are dropped by
+    the tool (counted in no_model / no_xform).
+    """
+    import subprocess, tempfile
+    if not propdump or not Path(propdump).is_file():
+        log(f"  props skip (propdump tool not found: {propdump})")
+        return []
+    tmpd = Path(tempfile.mkdtemp(prefix="f2props_"))
+    # Write the model-bank name tables so propdump can reverse the model-path hash.
+    list_args = []
+    for tag, index in model_indices:
+        by_norm, _by_leaf = index
+        # The bnk stores the EXACT (original-case) names; recover them from by_norm's
+        # values (by_norm maps norm->exact). propdump hashes each (and the .gmd-strip).
+        names = sorted(set(by_norm.values()))
+        lf = tmpd / f"models_{tag}.txt"
+        lf.write_text("\n".join(names), encoding="utf-8")
+        list_args += ["--models-list", str(lf)]
+    out_json = tmpd / "props.json"
+    cmd = [str(propdump), str(level_save), str(level_gdb)]
+    if globals_gdb and Path(globals_gdb).is_file():
+        cmd += ["--globals-gdb", str(globals_gdb)]
+    cmd += list_args + ["--out", str(out_json)]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        data = json.loads(out_json.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        log(f"  props skip (read failed: {type(exc).__name__}: {exc})")
+        return []
+    props = data.get("props", [])
+    log(f"props: {len(props)} renderable gdb entities "
+        f"(no_model={data.get('no_model')} unresolved={data.get('unresolved_name')} "
+        f"no_xform={data.get('no_xform')} markers_skipped={data.get('markers_skipped')})")
+    return props
+
+
 def read_lights(level_save: Path, level_gdb: Path, lightdump: Path,
                 globals_gdb: Path = None, log=print) -> list:
     """Read a level's LOCAL POINT LIGHTS (lamp posts, lanterns, braziers, placeable
@@ -534,7 +586,9 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                npc_level_save: Path = None, npc_level_gdb: Path = None,
                npc_limit: int = None, npc_parts=None,
                lights: bool = False, lightdump: Path = None,
-               globals_gdb: Path = None, light_limit: int = None) -> dict:
+               globals_gdb: Path = None, light_limit: int = None,
+               props: bool = False, propdump: Path = None,
+               prop_limit: int = None) -> dict:
     """Stage 2: glue every prop model (header++body) and merge instances into one F2SCENE.
 
     Data-driven from ghidra_out/model_glue_lmp_format.txt (the RE'd glue) — no guessing.
@@ -796,6 +850,122 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
         except Exception as exc:  # noqa: BLE001
             log(f"  npc skip ({type(exc).__name__}: {exc})")
 
+    # GDB entity props: the town's real density (furniture/crates/barrels/doors/walls/
+    # railings + the ~37 townhouse facades — ~1800 placed entities) lives in the
+    # .save/.gdb layer, NOT the engine_level. read_props() resolves each entity ->
+    # GraphicAppearanceStaticMeshComponent -> ModelFile model-path (via propdump), and
+    # here we glue+place each like a static prop: cook each DISTINCT model once (dedup),
+    # then emit one instance per entity at its transform (same {x,z,y} swap + yaw).
+    # The models live in EITHER the level body bnk (most) or globals_models (a few), so
+    # we try both bodies. Textures cook through the same _cook_textures() pass below.
+    if props and propdump:
+        try:
+            # Build the model-bank name tables propdump needs to reverse the hash:
+            # the level body bnk (bidx) + the header bnk (hidx, has every model name).
+            model_indices = [("level", bidx), ("headers", hidx)]
+            prop_body_bnk = npc_body_bnk or hero_body_bnk  # globals_models for the ~33
+            prop_bidx = _bnk_name_index(prop_body_bnk) if prop_body_bnk else None
+            found = read_props(npc_level_save, npc_level_gdb, propdump, model_indices,
+                               globals_gdb=globals_gdb, log=log)
+            if prop_limit and prop_limit > 0:
+                # Cap by DISTINCT model (cook fewer meshes) while keeping all instances
+                # of the kept models — a representative dense first pass.
+                seen_models, kept = set(), []
+                for p in found:
+                    m = p.get("model", "")
+                    if m and m not in seen_models and len(seen_models) >= prop_limit:
+                        continue
+                    seen_models.add(m)
+                    kept.append(p)
+                found = kept
+
+            def cook_prop_model(model_path: str):
+                """Glue+parse a prop model, trying the level body bnk then globals_models."""
+                key = _norm(model_path)
+                if key in model_geoms:
+                    return model_geoms[key]
+                he = _resolve(hidx, model_path)
+                if not he:
+                    model_geoms[key] = None
+                    return None
+                for bnk, idx in ((body_bnk, bidx),
+                                 (prop_body_bnk, prop_bidx) if prop_bidx else (None, None)):
+                    if not bnk or not idx:
+                        continue
+                    be = _resolve(idx, model_path)
+                    if not be:
+                        continue
+                    try:
+                        glued = extract(header_bnk, he, "ph.bin") + extract(bnk, be, "pb.bin")
+                        _, geoms = mdl.parse(glued, log=lambda m: None, file_path=model_path)
+                    except Exception as exc:  # noqa: BLE001 - skip-and-continue (unsupported stride/StringBlock)
+                        model_geoms[key] = None
+                        return None
+                    model_geoms[key] = geoms or None
+                    return model_geoms[key]
+                model_geoms[key] = None
+                return None
+
+            # Distant-backdrop VISTA models (RS_/TS_Vista_*, FarMountains, skydome) are
+            # enormous scenery meant to sit at the horizon behind a special vista shader.
+            # As town props they render dark AND blow up the scene AABB (shrinking the
+            # town to a dot under the auto-fit camera), so skip them — they're backdrop,
+            # not the street density this pass adds.
+            def _is_backdrop(mp: str) -> bool:
+                low = mp.lower()
+                return ("vista" in low or "farmountain" in low or "skydome" in low
+                        or "backdrop" in low)
+
+            prop_mesh_names: dict[str, list] = {}   # model key -> [mesh_name per geom]
+            n_prop_inst, n_prop_models, n_prop_skip, n_backdrop = 0, 0, 0, 0
+            for p in found:
+                model_path = p.get("model", "")
+                if not model_path:
+                    continue
+                if _is_backdrop(model_path):
+                    n_backdrop += 1
+                    continue
+                key = _norm(model_path)
+                if key not in prop_mesh_names:
+                    geoms = cook_prop_model(model_path)
+                    if not geoms:
+                        prop_mesh_names[key] = None
+                        n_prop_skip += 1
+                    else:
+                        pid = f"p{len(prop_mesh_names)}"
+                        names = []
+                        for gi, g in enumerate(geoms):
+                            mat_idx = len(materials)
+                            opts = []
+                            for attr, tok in (("diffuse", "albedo"), ("normal_tex", "normal"),
+                                              ("specular_tex", "material")):
+                                val = getattr(g, attr, "")
+                                if val:
+                                    opts.append(f"{tok}={val.replace(chr(92), '/')}")
+                            materials.append((f"mat_{pid}_{gi}", opts, (0.72, 0.72, 0.72, 1.0)))
+                            positions = g.positions
+                            normals = g.normals or add_normals(positions, g.indices)
+                            name = f"{pid}_{gi}"
+                            names.append(name)
+                            meshes.append((name, mat_idx, positions, normals, g.uvs, g.indices))
+                        prop_mesh_names[key] = names
+                        n_prop_models += 1
+                names = prop_mesh_names.get(key)
+                if not names:
+                    continue
+                gp = p.get("pos") or [0.0, 0.0, 0.0]
+                rx, ry, rz = gp[0], gp[2], gp[1]  # game (x,y,z) -> render (x,z,y)
+                yaw = float(p.get("yaw", 0.0))
+                for name in names:
+                    instances.append((name, (rx, ry, rz), yaw, 1.0))
+                n_prop_inst += 1
+                n_inst += 1
+            log(f"props: cooked {n_prop_models} distinct models -> {n_prop_inst} instances "
+                f"({n_prop_skip} models skipped: unsupported mesh/no body; "
+                f"{n_backdrop} backdrop-vista entities skipped)")
+        except Exception as exc:  # noqa: BLE001
+            log(f"  props skip ({type(exc).__name__}: {exc})")
+
     # Local point lights: read the level's lamp/lantern/brazier/placeable light entities
     # (ghidra_out/level_lights_effects_re.txt §1) and emit `light` records. Cap the count
     # so the b1 cbuffer array (64) isn't exceeded — keep the brightest (I*R^2 ~ reach).
@@ -960,6 +1130,15 @@ def main() -> int:
                     help="data/Globals/globals.gdb (light Colour/LightType archetypes chain here)")
     ap.add_argument("--light-limit", type=int,
                     help="cap the number of cooked lights (default 64 = b1 cbuffer array size)")
+    ap.add_argument("--props", action="store_true",
+                    help="cook the level's renderable .gdb/.save ENTITY props (furniture, crates, "
+                         "walls, railings, townhouse facades — the town's real density)")
+    ap.add_argument("--propdump", type=Path,
+                    default=Path(__file__).resolve().parents[2] / "Fable2AssetBrowser" / "source"
+                    / "build" / "propdump.exe",
+                    help="propdump.exe (resolves .gdb entity -> model + transform)")
+    ap.add_argument("--prop-limit", type=int,
+                    help="cap the number of DISTINCT prop models cooked (first-pass; e.g. 40)")
     args = ap.parse_args()
 
     data = args.engine_level.read_bytes()
@@ -1004,7 +1183,10 @@ def main() -> int:
                    npc_parts=(NPC_CHILD_FEMALE_PARTS if args.npc_female else NPC_CHILD_MALE_PARTS),
                    lights=args.lights,
                    lightdump=args.lightdump if (args.lightdump and args.lightdump.is_file()) else None,
-                   globals_gdb=args.globals_gdb, light_limit=args.light_limit)
+                   globals_gdb=args.globals_gdb, light_limit=args.light_limit,
+                   props=args.props,
+                   propdump=args.propdump if (args.propdump and args.propdump.is_file()) else None,
+                   prop_limit=args.prop_limit)
     return 0
 
 
