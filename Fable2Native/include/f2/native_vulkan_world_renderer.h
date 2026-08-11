@@ -59,6 +59,11 @@ private:
     std::vector<VkDeviceMemory> texture_memories_;
     std::vector<VkImageView> texture_views_;
     std::vector<VkSampler> texture_samplers_;
+    // Per-material tangent-space normal maps (t1), parallel to the albedo arrays above.
+    std::vector<VkImage> normal_images_;
+    std::vector<VkDeviceMemory> normal_memories_;
+    std::vector<VkImageView> normal_views_;
+    std::vector<VkSampler> normal_samplers_;
     std::uint32_t index_count_ = 0;
     struct DrawRange {
         std::uint32_t first_index = 0;

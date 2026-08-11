@@ -16,6 +16,7 @@ layout(location = 0) out vec4 color;
 layout(location = 1) out vec2 uv;
 layout(location = 2) out vec3 normal;
 layout(location = 3) out vec4 probe;
+layout(location = 4) out vec3 world_pos;
 
 void main() {
     gl_Position = camera.view_projection * vec4(in_position, 1.0);
@@ -23,4 +24,5 @@ void main() {
     uv = in_uv;
     normal = in_normal;
     probe = in_probe;
+    world_pos = in_position;   // make_geometry bakes world-space positions
 }
