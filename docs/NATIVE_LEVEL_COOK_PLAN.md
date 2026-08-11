@@ -279,9 +279,29 @@ resolved: the terrain cook now cooks the level's DOMINANT ground texture from th
   LOD `base_scale` (0.25), terrain `base_colour` set white.
 - **New flag:** `--terrain-ehf <level main .ehf>` (the `ch2_heightfield_slums_*.ehf` in `streaming.bnk`,
   NOT the sea `sea_vista` .ehf). Render: cobble/dirt ground under the town, buildings sit naturally on it.
-- **NEXT (Rung 2):** full per-cell splat COMPOSITE across all 14 LODs (grass/dirt/path variety) — the
-  `.ehf` carries splat_indices + per-chunk layers; AssetBrowser `LevelLoader.cpp` bake-composite +
-  `TerrainSplat.cpp` are the CPU/GPU reference. Cause (2) (ambient/lightmap under-lighting) still open.
+- **✅ RUNG 2 DONE (2026-08-11, D3D12, screenshot-verified) — full per-cell splat COMPOSITE.** The
+  terrain now bakes the game's real ground painting (grass slopes / rocky peak / dirt basin / cobble /
+  tan footpath), not one tiled texture. Default when `--terrain-ehf` is given (`--no-terrain-splat`
+  falls back to Rung 1).
+  - New standalone baker `Fable2Native/tools/terrain_splat_bake.cpp` (built by the AssetBrowser CMake as
+    `terrain_splat_bake`, deps EhfChunkParser + TextureAtlasDecoder + zlib): a VERBATIM port of the
+    AssetBrowser `LevelLoader.cpp` `BakeEhfTerrainCompositeWithBnk` splat path (~11040-11285) —
+    `ParseEhfBody` → per-LOD DDS via `--lod i=<dds>` → `sample_mat` (LOD tiled by world pos at its
+    base_scale) + `sample_mask` (splat) + per-chunk-layer blend → writes an uncompressed RGBA8 DDS +
+    prints `BOUNDS minx minz spanx spanz`. CLI `terrain_splat_bake <ehf> <out.dds> --res N --lod i=<dds>...`.
+  - `cook_levels.py _terrain_splat_composite()`: `f2tool ehf` → cook all 14 LOD diffuses → run the baker
+    → attach the baked DDS as the terrain albedo (via `albedo_abs=` which bypasses the bnk cook) with
+    **whole-terrain normalized UVs** ((gx-minx)/spanx) from the printed BOUNDS. Flags `--terrain-splat-res`
+    (default 2048), `--no-terrain-splat`, `--splat-bake`.
+  - ⚠ **GOTCHA (cost this session ~1h):** the baked albedo is an UNCOMPRESSED RGBA8 DDS; the runtime
+    only gained that decode path on 2026-08-10 18:51 (commit cb32ab6). The **Release** `f2native_frontend.exe`
+    was stale (17:02) → terrain rendered WHITE (silent load-fail → 1×1 white default; the renderer ignores
+    `load_dds_rgba8`'s return). RelWithDebInfo (20:54) worked; Release has since been rebuilt. If terrain is
+    white, REBUILD the frontend exe.
+  - The EMBEDDED baked-albedo path (`DecodeEhfTerrainAlbedoFromBytes`) is a DEAD END for chapter2slums —
+    all 3 decode paths fail (probe tool `Fable2Native/tools/terrain_bake.cpp`; the prior "large_ring"
+    scratch was the same dead end). May work for other levels; the splat composite is the general answer.
+  - Cause (2) (ambient/lightmap under-lighting — dark building faces) still open.
 
 **OPEN ITEM 2 — the scene reads DARK — ROOT-CAUSED this session (see `ghidra_out/dark_props_diagnosis.txt`
 + its SESSION VERIFICATION footer).** The props are NOT actually black: a raw-albedo PS diagnostic

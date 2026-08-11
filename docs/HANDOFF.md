@@ -38,6 +38,12 @@ Commit `e16428d`.
   `cobbles_curvy_dirt` @91%), tiled at its LOD base_scale. New flag `--terrain-ehf`. Details +
   Rung-2 (full splat composite) in `NATIVE_LEVEL_COOK_PLAN.md` OPEN ITEM 2. ⚠ `f2tool` gained an `ehf`
   subcommand (source in `Fable2AssetBrowser`, untracked like the other dump tools — rebuild via cmake).
+- **✅ TERRAIN SPLAT COMPOSITE / RUNG 2 (2026-08-11, D3D12, screenshot-verified):** terrain now bakes the
+  game's full ground painting (grass/rock/dirt/cobble/path regions blended by the `.ehf` splat map), not
+  one tiled texture — default when `--terrain-ehf` given. New baker `Fable2Native/tools/terrain_splat_bake.cpp`
+  (verbatim port of AssetBrowser `LevelLoader.cpp` bake-composite) + `cook_levels.py _terrain_splat_composite()`
+  with whole-terrain normalized UVs. Full detail + the ⚠ stale-Release-exe/white-terrain gotcha (uncompressed
+  RGBA8 DDS needs the post-2026-08-10 frontend build) in `NATIVE_LEVEL_COOK_PLAN.md` OPEN ITEM 2.
 - **NEXT (specs in hand):** Phase-1 sky colour match (reads brown); WATER (`water_system_re.txt`); SPEC maps
   (t2; cooker already emits material=); exact hero PlayerStart XYZ; foliage LOD/wind; terrain .ehf splat;
   frontend fidelity drifts (`frontend_visual_fidelity_re.txt` P3-5); Vulkan world-renderer parity.

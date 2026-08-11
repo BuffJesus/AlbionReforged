@@ -383,13 +383,85 @@ def _terrain_ground_texture(ehf_path: Path, f2tool: Path, log=print):
     return tex, scale
 
 
-def _build_terrain(ghf_bytes: bytes, stride: int = 1, uv_scale: float = TERRAIN_UV_PER_WU):
+def _terrain_splat_composite(ehf_path: Path, f2tool: Path, tex_cook: Path,
+                             tex_sources, splat_bake: Path, out_dir: Path,
+                             tmp: Path, res: int = 2048, log=print):
+    """Bake a full per-cell ground albedo by compositing ALL LOD ground textures
+    through the level's `.ehf` splat map (Rung 2 — the game's real terrain painting:
+    grass / dirt / cobble / path regions, not one tiled texture).
+
+    Pipeline: `f2tool ehf` -> each LOD's strs0 base diffuse -> cook to DDS (the normal
+    albedo pass) -> `terrain_splat_bake <ehf> <out.dds> --res N --lod i=<dds>...` which
+    ports the AssetBrowser LevelLoader bake-composite (sample_mat tiled by world pos,
+    sample_mask from the splat, per-chunk-layer blend). Returns (abs_dds_path, (minx,
+    minz, spanx, spanz)) where the bounds map the baked map across the terrain in game
+    XY (the caller sets whole-terrain UVs from them), or None on any failure.
+    """
+    import subprocess, re
+    if not (splat_bake and Path(splat_bake).is_file()):
+        log("  terrain splat skip (terrain_splat_bake.exe not built)")
+        return None
+    if not (tex_cook and tex_sources):
+        return None
+    try:
+        out = subprocess.run([str(f2tool), "ehf", str(ehf_path)],
+                             capture_output=True, text=True, check=True).stdout
+    except Exception as exc:  # noqa: BLE001
+        log(f"  terrain splat skip (ehf dump: {type(exc).__name__})")
+        return None
+    lods: dict[int, str] = {}
+    for line in out.splitlines():
+        p = line.split()
+        if p and p[0] == "lod":
+            li = int(p[1])
+            for t in p[2:]:
+                if t.startswith("strs0="):
+                    v = t.split("=", 1)[1]
+                    if v and v != "-":
+                        lods[li] = v
+    if not lods:
+        return None
+    tex_map = _cook_textures(list(lods.values()), tex_sources, tex_cook, f2tool,
+                             out_dir, tmp, log=lambda s: None)
+    lod_args = []
+    for li, tok in sorted(lods.items()):
+        dds = tex_map.get(tok, "")
+        if dds:
+            lod_args += ["--lod", f"{li}={dds}"]
+    if not lod_args:
+        log("  terrain splat skip (no LOD textures cooked)")
+        return None
+    out_dds = out_dir / "terrain_splat.dds"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [str(splat_bake), str(ehf_path), str(out_dds), "--res", str(res)] + lod_args
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except Exception as exc:  # noqa: BLE001
+        detail = getattr(exc, "stderr", "") or getattr(exc, "stdout", "") or type(exc).__name__
+        log(f"  terrain splat skip (bake failed: {str(detail).strip()[:200]})")
+        return None
+    m = re.search(r"BOUNDS minx=(\S+) minz=(\S+) spanx=(\S+) spanz=(\S+)", r.stdout)
+    if not m or not out_dds.is_file():
+        log("  terrain splat skip (no BOUNDS / no output DDS)")
+        return None
+    bounds = tuple(float(m.group(i)) for i in range(1, 5))
+    log(f"  terrain splat composite: {len(lod_args) // 2} LODs -> {out_dds.name} "
+        f"(world X[{bounds[0]:.0f},{bounds[0] + bounds[2]:.0f}] "
+        f"Y[{bounds[1]:.0f},{bounds[1] + bounds[3]:.0f}], {res}x{res})")
+    return str(out_dds.resolve()), bounds
+
+
+def _build_terrain(ghf_bytes: bytes, stride: int = 1, uv_scale: float = TERRAIN_UV_PER_WU,
+                   uv_world=None):
     """Decode a .ghf heightfield and build a render mesh (positions/normals/uvs/indices)
     in RENDER axes. Faithful port of ghidra_out/terrain_mesh_re.txt §1-4 (validated
     byte-exact on chapter2slums). Returns (positions, normals, uvs, indices) or None.
 
     `uv_scale` = texture repeats per world unit (default 0.125). When a ground albedo is
     cooked from the .ehf its LOD base_scale is passed here so the tiling matches the game.
+    `uv_world` = (minx, minz, spanx, spanz) in game XY; when set, UVs map the WHOLE terrain
+    0..1 across those bounds (for a pre-baked splat-composite albedo that already tiles
+    internally), overriding `uv_scale`.
 
     .ghf = gzip stream; raw = origin(3×be_f32) + wCells(be_u32 @0xC) + hCells(be_u32 @0x10)
     + W*H cells of 14 bytes {f32 height, f32 water, u32 materialGUID, u8, u8}. Vertex per
@@ -430,7 +502,12 @@ def _build_terrain(ghf_bytes: bytes, stride: int = 1, uv_scale: float = TERRAIN_
             nx, ny, nz = (hl - hr), (hd - hu), 2.0 * eff
             nlen = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
             normals.extend((nx / nlen, ny / nlen, nz / nlen))
-            uvs.extend((gx * uv_scale, gy * uv_scale))
+            if uv_world:
+                mnx, mnz, spx, spz = uv_world
+                uvs.extend(((gx - mnx) / spx if spx else 0.0,
+                            (gy - mnz) / spz if spz else 0.0))
+            else:
+                uvs.extend((gx * uv_scale, gy * uv_scale))
     indices = []
     for j in range(gh - 1):
         for i in range(gw - 1):
@@ -690,7 +767,8 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                out_scene: Path, types=(2, 21), max_per_block=None, log=print,
                textures_bnks=None, tex_cook: Path = None,
                tex_out_dir: Path = None, terrain_ghf: Path = None,
-               terrain_ehf: Path = None,
+               terrain_ehf: Path = None, terrain_splat: bool = True,
+               terrain_splat_res: int = 2048, splat_bake: Path = None,
                terrain_stride: int = 1, hero_model: str = None,
                hero_body_bnk: Path = None, hero_pos=None,
                water_file: Path = None, npcs: bool = False,
@@ -829,25 +907,37 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
     # Phase T1 — ghidra_out/terrain_mesh_re.txt). Game-space verts flow through the same
     # emit swap as props; identity instance (mesh is already world-placed).
     if terrain_ghf:
-        # Pick the dominant ground albedo from the level's .ehf splat map (data-driven).
-        # The texture cooks through the normal albedo pass below (it lives in the same
-        # 1024mip0/shared tex banks as the building albedos), tiled at its LOD base_scale.
-        t_ground = None
+        # Ground albedo from the level's .ehf (data-driven). Prefer the FULL per-cell splat
+        # COMPOSITE (all LOD textures blended by the splat map = grass/dirt/cobble/path
+        # regions, Rung 2); fall back to the single dominant ground texture (Rung 1) if the
+        # composite baker isn't built or fails; else a flat earth colour.
+        t_ground = t_composite = None
+        _tex_out = tex_out_dir or (out_scene.parent / (out_scene.stem + ".textures"))
+        _tex_sources = [b for b in (textures_bnks or []) if b]
         if terrain_ehf:
-            t_ground = _terrain_ground_texture(Path(terrain_ehf), f2tool, log=log)
+            if terrain_splat:
+                t_composite = _terrain_splat_composite(
+                    Path(terrain_ehf), f2tool, tex_cook, _tex_sources, splat_bake,
+                    _tex_out, tmp, res=terrain_splat_res or 2048, log=log)
+            if not t_composite:
+                t_ground = _terrain_ground_texture(Path(terrain_ehf), f2tool, log=log)
         t_uv_scale = t_ground[1] if t_ground else TERRAIN_UV_PER_WU
+        t_uv_world = t_composite[1] if t_composite else None
         try:
             built = _build_terrain(Path(terrain_ghf).read_bytes(), stride=terrain_stride or 1,
-                                   uv_scale=t_uv_scale)
+                                   uv_scale=t_uv_scale, uv_world=t_uv_world)
         except Exception as exc:  # noqa: BLE001
             built = None
             log(f"  terrain skip ({type(exc).__name__}: {exc})")
         if built:
             t_pos, t_nrm, t_uv, t_idx = built
             t_mat = len(materials)
-            if t_ground:
-                # White base_colour so the sampled ground albedo shows at full fidelity
-                # (base = base_colour * albedo, per native_world_renderer PS).
+            # White base_colour so the sampled ground albedo shows at full fidelity
+            # (base = base_colour * albedo, per native_world_renderer PS).
+            if t_composite:
+                # Pre-baked absolute DDS -> bypass the bnk albedo cook via albedo_abs=.
+                materials.append(("terrain", ["albedo_abs=" + t_composite[0]], (1.0, 1.0, 1.0, 1.0)))
+            elif t_ground:
                 materials.append(("terrain", ["albedo=" + t_ground[0]], (1.0, 1.0, 1.0, 1.0)))
             else:
                 materials.append(("terrain", [], (0.33, 0.30, 0.24, 1.0)))
@@ -1168,7 +1258,11 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             # base colour instead of the unresolved .tex name (which would sample white).
             emit = []
             for o in opts:
-                if o.startswith("albedo="):
+                if o.startswith("albedo_abs="):
+                    # Pre-baked absolute DDS (e.g. the terrain splat composite) — emit as the
+                    # albedo directly; it was never a bnk .tex token so skip the cook/repoint.
+                    emit.append("albedo=" + o[len("albedo_abs="):].replace("\\", "/"))
+                elif o.startswith("albedo="):
                     dds = tex_map.get(o[len("albedo="):], "")
                     if dds:
                         emit.append("albedo=" + dds.replace("\\", "/"))
@@ -1235,8 +1329,17 @@ def main() -> int:
     ap.add_argument("--terrain-ghf", type=Path,
                     help="the level's extracted .ghf heightfield -> emit a ground mesh")
     ap.add_argument("--terrain-ehf", type=Path,
-                    help="the level's main heightfield .ehf -> pick the dominant ground "
-                         "albedo (from the LOD table + splat map) and texture the terrain")
+                    help="the level's main heightfield .ehf -> texture the terrain from its "
+                         "LOD table + splat map (full splat composite by default)")
+    ap.add_argument("--no-terrain-splat", dest="terrain_splat", action="store_false",
+                    help="disable the full splat composite; use the single dominant ground "
+                         "texture (Rung 1) instead")
+    ap.add_argument("--terrain-splat-res", type=int, default=2048,
+                    help="splat-composite baked albedo resolution NxN (default 2048)")
+    ap.add_argument("--splat-bake", type=Path,
+                    default=Path(__file__).resolve().parents[2] / "Fable2AssetBrowser" / "source"
+                    / "build" / "terrain_splat_bake.exe",
+                    help="terrain_splat_bake.exe (the .ehf splat-composite baker)")
     ap.add_argument("--terrain-stride", type=int, default=1,
                     help="terrain grid decimation (1=full-res 664K tris; 2/4 for lighter)")
     ap.add_argument("--hero", action="store_true",
@@ -1319,7 +1422,8 @@ def main() -> int:
                    args.cook, types=types, max_per_block=args.max_per_block,
                    textures_bnks=args.textures_bnk, tex_cook=tex_cook,
                    tex_out_dir=args.tex_out_dir, terrain_ghf=args.terrain_ghf,
-                   terrain_ehf=args.terrain_ehf,
+                   terrain_ehf=args.terrain_ehf, terrain_splat=args.terrain_splat,
+                   terrain_splat_res=args.terrain_splat_res, splat_bake=args.splat_bake,
                    terrain_stride=args.terrain_stride,
                    hero_model=args.hero_model if args.hero else None,
                    hero_body_bnk=args.hero_body_bnk, hero_pos=args.hero_pos,
