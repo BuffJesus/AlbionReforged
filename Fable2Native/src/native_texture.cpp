@@ -138,6 +138,20 @@ bool decode_dds_rgba8(std::span<const std::uint8_t> bytes,
     if (header_size != 124 || pixel_format_size != 32 || width == 0 || height == 0) {
         return fail(error, "DDS header is invalid");
     }
+    // Uncompressed 32-bpp RGBA8 (DDPF flags lack DDPF_FOURCC 0x04; masks R,G,B,A byte-order) —
+    // the format cook_lh_tex writes for decoded BC5 normal maps. Copy the payload straight through.
+    const auto pf_flags = read_u32(bytes, 80);
+    const auto rgb_bit_count = read_u32(bytes, 88);
+    if ((pf_flags & 0x4u) == 0 && rgb_bit_count == 32) {
+        const auto required = 128ull + static_cast<std::uint64_t>(width) * height * 4;
+        if (required > bytes.size()) return fail(error, "DDS payload is truncated");
+        texture.width = width;
+        texture.height = height;
+        texture.rgba8.assign(bytes.data() + 128, bytes.data() + 128 +
+                             static_cast<std::size_t>(width) * height * 4);
+        return true;
+    }
+
     const std::string four_cc(reinterpret_cast<const char*>(bytes.data() + 84), 4);
     std::size_t block_bytes = 0;
     enum class Format { Dxt1, Dxt5 } format;

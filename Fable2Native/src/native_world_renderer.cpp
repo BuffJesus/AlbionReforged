@@ -144,7 +144,7 @@ Geometry make_geometry(const NativeScene& scene) {
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
         geometry.draw_ranges.push_back({first_index,
                                         static_cast<std::uint32_t>(mesh.indices.size()),
-                                        std::min(mesh.material, NativeWorldRenderer::kMaxMaterialTextures - 1)});
+                                        std::min(mesh.material, NativeWorldRenderer::kMaxMaterialTextures / 2 - 1)});
     }
 
     if (!geometry.vertices.empty()) return geometry;
@@ -338,30 +338,41 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
         return false;
     }
 
+    // Two descriptor slots per material: albedo (t0) + normal (t1), interleaved.
     const auto material_count = std::max<std::size_t>(
-        1, std::min<std::size_t>(scene.materials.size(), kMaxMaterialTextures));
+        1, std::min<std::size_t>(scene.materials.size(), kMaxMaterialTextures / 2));
     texture_descriptor_stride_ = device->GetDescriptorHandleIncrementSize(
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    textures_.resize(material_count);
+    textures_.resize(material_count * 2);
     D3D12_SHADER_RESOURCE_VIEW_DESC texture_view{};
     texture_view.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     texture_view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     texture_view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     texture_view.Texture2D.MipLevels = 1;
+    const auto make_srv = [&](std::size_t slot, const NativeTexture& src, std::string& err) -> bool {
+        if (!create_texture(device, queue, src, textures_[slot], err)) return false;
+        auto handle = texture_cpu_handle;
+        handle.ptr += slot * texture_descriptor_stride_;
+        device->CreateShaderResourceView(textures_[slot].Get(), &texture_view, handle);
+        return true;
+    };
     for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
-        NativeTexture native_texture{1, 1, {255, 255, 255, 255}};
+        NativeTexture albedo{1, 1, {255, 255, 255, 255}};
+        NativeTexture normal{1, 1, {128, 128, 255, 255}};  // flat tangent-space normal default
         if (material_index < scene.materials.size()) {
-            const auto texture_path = resolve_texture(scene.materials[material_index], texture_root);
-            if (!texture_path.empty()) {
-                std::string texture_error;
-                load_dds_rgba8(texture_path, native_texture, texture_error);
+            const auto& material = scene.materials[material_index];
+            const auto albedo_path = resolve_texture(material, texture_root);
+            std::string texture_error;
+            if (!albedo_path.empty()) load_dds_rgba8(albedo_path, albedo, texture_error);
+            if (!material.normal.empty()) {
+                NativeMaterial normal_ref;
+                normal_ref.albedo = material.normal;  // reuse resolve_texture for the normal path
+                const auto normal_path = resolve_texture(normal_ref, texture_root);
+                if (!normal_path.empty()) load_dds_rgba8(normal_path, normal, texture_error);
             }
         }
-        if (!create_texture(device, queue, native_texture, textures_[material_index], error)) return false;
-        auto material_cpu_handle = texture_cpu_handle;
-        material_cpu_handle.ptr += material_index * texture_descriptor_stride_;
-        device->CreateShaderResourceView(textures_[material_index].Get(), &texture_view,
-                                         material_cpu_handle);
+        if (!make_srv(material_index * 2, albedo, error)) return false;
+        if (!make_srv(material_index * 2 + 1, normal, error)) return false;
     }
     texture_gpu_handle_ = texture_gpu_handle;
     draw_ranges_.clear();
@@ -387,13 +398,15 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     constexpr char shader_source[] = R"(
 cbuffer Camera : register(b0) { row_major float4x4 view_projection; float4 sun_direction; };
 Texture2D albedo : register(t0);
+Texture2D normalTex : register(t1);
 SamplerState albedo_sampler : register(s0);
 struct VSInput { float3 position : POSITION; float3 normal : NORMAL; float4 color : COLOR; float2 uv : TEXCOORD0; };
-struct PSInput { float4 position : SV_POSITION; float3 normal : NORMAL; float4 color : COLOR; float2 uv : TEXCOORD0; };
+struct PSInput { float4 position : SV_POSITION; float3 normal : NORMAL; float3 world_pos : TEXCOORD1; float4 color : COLOR; float2 uv : TEXCOORD0; };
 PSInput vs_main(VSInput input) {
     PSInput output;
     output.position = mul(float4(input.position, 1.0), view_projection);
     output.normal = input.normal;
+    output.world_pos = input.position;
     output.color = input.color;
     output.uv = input.uv;
     return output;
@@ -404,11 +417,21 @@ float4 ps_main(PSInput input) : SV_TARGET {
     // 1-bit), so discard transparent texels — otherwise leaf quads render as solid cards.
     // Opaque building textures decode to alpha=1, so they are unaffected.
     clip(base.a - 0.5);
-    // Light model (world_shading_model_re.txt §7, ladder step 1): a HEMISPHERE ambient
-    // (cool sky above, dim ground bounce below, by world-up N.y) plus an N·L sun diffuse
-    // — replaces the flat 0.35 that made everything read dark/flat. Normal/spec maps
-    // (steps 2-3) come once those textures are cooked + bound.
-    float3 N = normalize(input.normal);
+    // Normal mapping (world_shading_model_re.txt §7, ladder step 2): perturb the geometric
+    // normal by the 2-channel BC5 tangent-space normal, using a derivative (ddx/ddy) cotangent
+    // frame so no per-vertex tangent is needed. A flat (128,128,255) default = no perturbation.
+    float3 Ngeo = normalize(input.normal);
+    float3 dp1 = ddx(input.world_pos), dp2 = ddy(input.world_pos);
+    float2 du1 = ddx(input.uv), du2 = ddy(input.uv);
+    float3 dp2perp = cross(dp2, Ngeo), dp1perp = cross(Ngeo, dp1);
+    float3 T = dp2perp * du1.x + dp1perp * du2.x;
+    float3 B = dp2perp * du1.y + dp1perp * du2.y;
+    float invmax = rsqrt(max(dot(T, T), dot(B, B)));
+    float2 nxy = normalTex.Sample(albedo_sampler, input.uv).rg * 2.0 - 1.0;
+    float nz = sqrt(saturate(1.0 - dot(nxy, nxy)));
+    float3 N = normalize(nxy.x * T * invmax + nxy.y * B * invmax + nz * Ngeo);
+    // Light model (§7): hemisphere ambient (cool sky above, dim ground bounce below by world-up
+    // N.y) + N·L sun diffuse — replaces the flat 0.35 that read dark/flat.
     float ndl = saturate(dot(N, -sun_direction.xyz));
     float hemi = 0.5 + 0.5 * N.y;
     float3 ambient = lerp(float3(0.18, 0.20, 0.24), float3(0.55, 0.58, 0.62), hemi);
@@ -433,7 +456,7 @@ float4 ps_main(PSInput input) : SV_TARGET {
     root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // PS reads sun_direction too
     D3D12_DESCRIPTOR_RANGE texture_range{};
     texture_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    texture_range.NumDescriptors = 1;
+    texture_range.NumDescriptors = 2;  // t0 albedo + t1 normal
     texture_range.BaseShaderRegister = 0;
     root_parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     root_parameters[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -571,7 +594,8 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     command_list->IASetIndexBuffer(&index_view_);
     for (const auto& range : draw_ranges_) {
         auto texture_handle = texture_gpu_handle_;
-        texture_handle.ptr += static_cast<std::size_t>(range.material_index) *
+        // Two SRVs per material (albedo, normal): the table base is material_index*2.
+        texture_handle.ptr += static_cast<std::size_t>(range.material_index) * 2 *
                              texture_descriptor_stride_;
         command_list->SetGraphicsRootDescriptorTable(1, texture_handle);
         command_list->DrawIndexedInstanced(range.index_count, 1, range.first_index, 0, 0);

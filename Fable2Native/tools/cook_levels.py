@@ -554,8 +554,10 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
     albedo_tokens = []
     for _name, opts, _base in materials:
         for o in opts:
-            if o.startswith("albedo="):
-                albedo_tokens.append(o[len("albedo="):])
+            if o.startswith("albedo=") or o.startswith("normal="):
+                # normal maps cook too now (cook_lh_tex decodes comp-3 BC5 -> RGBA8 DDS,
+                # which the runtime loader reads); the world PS samples t1 for bump detail.
+                albedo_tokens.append(o.split("=", 1)[1])
     tex_sources = [b for b in (textures_bnks or []) if b]
     tex_map = _cook_textures(albedo_tokens, tex_sources, tex_cook, f2tool,
                              tex_out_dir or (out_scene.parent / (out_scene.stem + ".textures")),
@@ -582,8 +584,13 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                     if dds:
                         emit.append("albedo=" + dds.replace("\\", "/"))
                     # else: skip albedo -> flat base colour fallback
-                elif o.startswith("normal=") or o.startswith("material="):
-                    continue  # runtime samples albedo only; drop uncooked normal/spec tokens
+                elif o.startswith("normal="):
+                    dds = tex_map.get(o[len("normal="):], "")
+                    if dds:
+                        emit.append("normal=" + dds.replace("\\", "/"))
+                    # else: drop -> PS falls back to the geometric normal
+                elif o.startswith("material="):
+                    continue  # spec map not sampled yet (renderer t2 TODO)
                 else:
                     emit.append(o)
             out.write(f"material {name} {base[0]:.4g} {base[1]:.4g} {base[2]:.4g} {base[3]:.4g}"
