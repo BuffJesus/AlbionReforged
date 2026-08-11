@@ -180,12 +180,12 @@ void FrontendSceneBuilder::build_title(f2::render::UiDrawList& scene, float widt
     // Enter at ignite (0.86s) even though logo_fade is still 0 — the ignition BLOOM + sparkle
     // band flash BEFORE the solid wordmark fades in (the letters emerge from the burst).
     if (logo && access_.id(NativeUiAsset::Logo) && title_time >= 0.86f) {
-        const float logo_scale = width / (logo->width * 1.8f);
+        const float logo_scale = width / (logo->width * 1.72f);  // measured wordmark width ~0.581*W
         const float logo_width = logo->width * logo_scale;
         const float logo_height = logo->height * logo_scale;
         const float logo_x = (width - logo_width) * 0.5f;
-        // Wordmark vertical center measured at ~0.43·H in the retail reveal frames (was 0.47).
-        const float logo_y = height * 0.43f - logo_height * 0.5f;
+        // Wordmark vertical center measured at ~0.432·H in the retail reveal frames (was 0.47).
+        const float logo_y = height * 0.432f - logo_height * 0.5f;
         add(NativeUiAsset::Logo, logo_x, logo_y, logo_x + logo_width, logo_y + logo_height, 0.0f,
             0.0f, 1.0f, 1.0f, rgba(255, 255, 255, alpha_byte(logo_fade)));
 
@@ -327,7 +327,7 @@ void FrontendSceneBuilder::build_title(f2::render::UiDrawList& scene, float widt
         const float prompt_pulse =
             0.25f + 0.75f * (0.5f + 0.5f * std::sin(title_time * 2.4f - 1.5708f));
         const std::uint32_t prompt_a = alpha_byte(prompt_in * prompt_pulse);
-        const float prompt_y = height * 0.56f;
+        const float prompt_y = height * 0.525f;  // measured: hugs the wordmark bottom (was 0.56)
         const bool use_accept_glyph =
             using_controller_prompts && access_.shader_ready(NativeUiAsset::Accept);
         const auto text_col = rgba(235, 235, 235, prompt_a);
@@ -355,17 +355,20 @@ void FrontendSceneBuilder::build_title(f2::render::UiDrawList& scene, float widt
         const float legal_in = std::clamp((title_time - 0.20f) / 0.45f, 0.0f, 1.0f);
         const float legal_out = 1.0f - std::clamp((title_time - 5.90f) / 0.65f, 0.0f, 1.0f);
         const std::uint32_t legal_a = alpha_byte(legal_in * legal_out);
-        const auto legal_col = rgba(242, 242, 242, legal_a);
+        // Retail legal block is LEFT-aligned (common left edge x=0.244) in a soft grey, not centered
+        // white (frontend_visual_fidelity_re.txt P4, measured on t021882.png).
+        const auto legal_col = rgba(205, 205, 205, legal_a);
         const auto legal_shadow = rgba(0, 0, 0, legal_a * 3 / 5);
+        const float legal_x = width * 0.244f;
         const auto legal_line = [&](std::string_view text, float y) {
-            const float x = (width - text_width(text, legal_font_size)) * 0.5f;
+            const float x = legal_x;
             emit_text(scene, text, x + 2.0f, y + 2.0f, legal_font_size, legal_shadow);
             emit_text(scene, text, x, y, legal_font_size, legal_col);
         };
         legal_line("\xC2\xA9 & \xC2\xAE 2008 Microsoft Corporation. All rights reserved. Developed by",
-                   height * 0.73f);
-        legal_line("Lionhead Studios.", height * 0.79f);
-        legal_line("Online Interactions Not Rated by the ESRB", height * 0.87f);
+                   height * 0.732f);
+        legal_line("Lionhead Studios.", height * 0.770f);
+        legal_line("Online Interactions Not Rated by the ESRB", height * 0.851f);
     }
 }
 
