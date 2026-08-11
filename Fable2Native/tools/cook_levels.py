@@ -655,8 +655,11 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
         out.write(f"# Cooked from {engine_level.name} (v{info['version']}) — "
                   f"{len(meshes)} meshes / {n_inst} instances / {n_blocks} blocks\n")
         out.write("F2SCENE 1\n")
-        out.write("sun -0.4 -0.82 -0.4\n")
-        out.write("sky 0.52 0.62 0.78 1\n")
+        # Real chapter2slums midday theme (ghidra_out/env_theme_colors_re.txt, from
+        # environmentthemes.gdb, BE bytes /255): sun = light DIRECTION = -sun_toward
+        # (sun_toward Y-up = 0.9135,0.4067,0.0048); sky zenith blue (167,208,255).
+        out.write("sun -0.9135 -0.4067 -0.0048\n")
+        out.write("sky 0.6549 0.8157 1.0 1\n")
         for name, opts, base in materials:
             # Repoint albedo at the cooked loose DDS (absolute path; the runtime loads it
             # directly). Drop albedo tokens that didn't cook so the material shows its flat
