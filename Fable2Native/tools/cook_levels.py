@@ -383,7 +383,8 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                out_scene: Path, types=(2, 21), max_per_block=None, log=print,
                textures_bnks=None, tex_cook: Path = None,
                tex_out_dir: Path = None, terrain_ghf: Path = None,
-               terrain_stride: int = 1) -> dict:
+               terrain_stride: int = 1, hero_model: str = None,
+               hero_body_bnk: Path = None, hero_pos=None) -> dict:
     """Stage 2: glue every prop model (header++body) and merge instances into one F2SCENE.
 
     Data-driven from ghidra_out/model_glue_lmp_format.txt (the RE'd glue) — no guessing.
@@ -507,6 +508,47 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             log(f"terrain: {len(t_pos)//3} verts / {len(t_idx)//3} tris "
                 f"(stride {terrain_stride or 1})")
 
+    # Hero: cook the child hero (globals body bnk) and drop one instance into the town so the
+    # first level isn't empty of characters (ghidra_out/hero_render_re.txt). The model is skinned;
+    # fable_mdl_format decodes the bind pose (child standing) and the emit swap stands it upright.
+    # Placement: PlayerStart XYZ needs a .gdb walk (GAP-P1); for a first render use the building
+    # centroid (render space) at the median prop height.
+    if hero_model and hero_body_bnk:
+        try:
+            gidx = _bnk_name_index(hero_body_bnk)  # globals_models.bnk (hero polymsh bodies)
+            he = _resolve(hidx, hero_model)
+            be = _resolve(gidx, hero_model)
+            if not (he and be):
+                log(f"  hero skip (no bank entry): {hero_model}")
+            else:
+                glued = extract(header_bnk, he, "hero_h.bin") + extract(hero_body_bnk, be, "hero_b.bin")
+                _, hgeoms = mdl.parse(glued, log=lambda m: None, file_path=hero_model)
+                if hero_pos:
+                    hx, hy, hz = hero_pos
+                elif instances:
+                    xs = [p[0] for _, p, _, _ in instances]
+                    ys = sorted(p[1] for _, p, _, _ in instances)
+                    zs = [p[2] for _, p, _, _ in instances]
+                    hx, hy, hz = sum(xs) / len(xs), ys[len(ys) // 2], sum(zs) / len(zs)
+                else:
+                    hx, hy, hz = 0.0, 0.0, 0.0
+                for gi, g in enumerate(hgeoms or []):
+                    mat_idx = len(materials)
+                    opts = []
+                    val = getattr(g, "diffuse", "")
+                    if val:
+                        opts.append("albedo=" + val.replace(chr(92), "/"))
+                    materials.append((f"hero_{gi}", opts, (0.80, 0.70, 0.62, 1.0)))
+                    positions = g.positions
+                    normals = g.normals or add_normals(positions, g.indices)
+                    name = f"hero{gi}"
+                    meshes.append((name, mat_idx, positions, normals, g.uvs, g.indices))
+                    instances.append((name, (hx, hy, hz), 0.0, 1.0))
+                    n_inst += 1
+                log(f"hero: {len(hgeoms or [])} geoms at render ({hx:.1f},{hy:.1f},{hz:.1f})")
+        except Exception as exc:  # noqa: BLE001
+            log(f"  hero skip ({type(exc).__name__}: {exc})")
+
     # Cook the referenced albedo textures (globals_textures.bnk .tex -> loose DDS). The runtime
     # only samples albedo (t0), so albedo is what turns the flat-grey buildings textured.
     albedo_tokens = []
@@ -593,6 +635,14 @@ def main() -> int:
                     help="the level's extracted .ghf heightfield -> emit a ground mesh")
     ap.add_argument("--terrain-stride", type=int, default=1,
                     help="terrain grid decimation (1=full-res 664K tris; 2/4 for lighter)")
+    ap.add_argument("--hero", action="store_true",
+                    help="cook the child hero (CH_HeroChild_Male) into the scene")
+    ap.add_argument("--hero-model",
+                    default=r"Art\Characters\Heros\Child Male\dotXSI\CH_HeroChild_Male\CH_HeroChild_Male.mdl",
+                    help="hero model path (in globals_model_headers.bnk + --hero-body-bnk)")
+    ap.add_argument("--hero-body-bnk", type=Path, help="globals_models.bnk (hero polymsh bodies)")
+    ap.add_argument("--hero-pos", type=float, nargs=3, metavar=("X", "Y", "Z"),
+                    help="hero render-space position (default: building centroid)")
     args = ap.parse_args()
 
     data = args.engine_level.read_bytes()
@@ -626,7 +676,9 @@ def main() -> int:
                    args.cook, types=types, max_per_block=args.max_per_block,
                    textures_bnks=args.textures_bnk, tex_cook=tex_cook,
                    tex_out_dir=args.tex_out_dir, terrain_ghf=args.terrain_ghf,
-                   terrain_stride=args.terrain_stride)
+                   terrain_stride=args.terrain_stride,
+                   hero_model=args.hero_model if args.hero else None,
+                   hero_body_bnk=args.hero_body_bnk, hero_pos=args.hero_pos)
     return 0
 
 
