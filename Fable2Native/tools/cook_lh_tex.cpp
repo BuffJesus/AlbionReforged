@@ -10,6 +10,7 @@
 // decoder (Fable2AssetBrowser/source/src/UI/ModelPreview.cpp). Output DXT1/DXT5 loads directly in
 // the runtime (native_texture.cpp decode_dds_rgba8 supports DXT1 + DXT5).
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -60,6 +61,94 @@ bool write_dds(const std::filesystem::path& output, std::uint32_t width, std::ui
     stream.write(reinterpret_cast<const char*>(dds.data()),
                  static_cast<std::streamsize>(dds.size()));
     return static_cast<bool>(stream);
+}
+
+// Write an UNCOMPRESSED 32-bpp RGBA8 DDS (no FourCC; DDPF_RGB|DDPF_ALPHAPIXELS).
+bool write_dds_rgba8(const std::filesystem::path& output, std::uint32_t width,
+                     std::uint32_t height, const std::vector<std::uint8_t>& rgba) {
+    std::vector<std::uint8_t> dds(128 + rgba.size(), 0);
+    dds[0] = 'D'; dds[1] = 'D'; dds[2] = 'S'; dds[3] = ' ';
+    write_le32(dds, 4, 124);
+    write_le32(dds, 8, 0x0000100F);  // CAPS | HEIGHT | WIDTH | PITCH | PIXELFORMAT
+    write_le32(dds, 12, height);
+    write_le32(dds, 16, width);
+    write_le32(dds, 20, width * 4);  // pitch = w*4 (uncompressed)
+    write_le32(dds, 28, 1);
+    write_le32(dds, 76, 32);
+    write_le32(dds, 80, 0x00000041);  // DDPF_RGB | DDPF_ALPHAPIXELS
+    write_le32(dds, 84, 0);           // no FourCC
+    write_le32(dds, 88, 32);          // RGBBitCount
+    write_le32(dds, 92, 0x000000FF);  // R mask
+    write_le32(dds, 96, 0x0000FF00);  // G mask
+    write_le32(dds, 100, 0x00FF0000); // B mask
+    write_le32(dds, 104, 0xFF000000); // A mask
+    write_le32(dds, 108, 0x00001000); // DDSCAPS_TEXTURE
+    std::copy(rgba.begin(), rgba.end(), dds.begin() + 128);
+
+    std::ofstream stream(output, std::ios::binary);
+    if (!stream) return false;
+    stream.write(reinterpret_cast<const char*>(dds.data()),
+                 static_cast<std::streamsize>(dds.size()));
+    return static_cast<bool>(stream);
+}
+
+// ---- BC4/BC5 decode (ported from AssetBrowser ModelPreview.cpp) -------------------------------
+void decode_bc4_block(const std::uint8_t* b, std::uint8_t* out16) {
+    std::uint8_t a0 = b[0], a1 = b[1];
+    std::uint64_t abits = 0;
+    for (int i = 0; i < 6; ++i) abits |= static_cast<std::uint64_t>(b[2 + i]) << (8 * i);
+    std::uint8_t atab[8];
+    atab[0] = a0; atab[1] = a1;
+    if (a0 > a1) {
+        for (int i = 1; i <= 6; i++)
+            atab[i + 1] = static_cast<std::uint8_t>(((7 - i) * a0 + i * a1 + 3) / 7);
+    } else {
+        for (int i = 1; i <= 4; i++)
+            atab[i + 1] = static_cast<std::uint8_t>(((5 - i) * a0 + i * a1 + 2) / 5);
+        atab[6] = 0;
+        atab[7] = 255;
+    }
+    for (int i = 0; i < 16; ++i)
+        out16[i] = atab[(abits >> (3 * i)) & 7];
+}
+
+// Decode a linear BC5 (dual-BC4: 8B X + 8B Y) block stream to RGBA8, reconstructing z.
+void blit_bc5_to_rgba(const std::uint8_t* src, int w, int h, std::vector<std::uint8_t>& rgba) {
+    const int bx = (w + 3) / 4;
+    const int by = (h + 3) / 4;
+    rgba.assign(static_cast<std::size_t>(w) * h * 4, 0xFF);
+    std::size_t off = 0;
+    for (int byy = 0; byy < by; ++byy) {
+        for (int bxx = 0; bxx < bx; ++bxx) {
+            std::uint8_t xch[16], ych[16];
+            decode_bc4_block(src + off, xch);
+            decode_bc4_block(src + off + 8, ych);
+            off += 16;
+            for (int py = 0; py < 4; ++py) {
+                int yy = byy * 4 + py;
+                if (yy >= h) break;
+                for (int px = 0; px < 4; ++px) {
+                    int xx = bxx * 4 + px;
+                    if (xx >= w) break;
+                    int idx = py * 4 + px;
+                    int xi = xch[idx];
+                    int yi = ych[idx];
+                    float nx = (xi / 255.0f) * 2.0f - 1.0f;
+                    float ny = (yi / 255.0f) * 2.0f - 1.0f;
+                    float nz2 = 1.0f - nx * nx - ny * ny;
+                    float nz = nz2 > 0.0f ? std::sqrt(nz2) : 0.0f;
+                    int zi = static_cast<int>((nz * 0.5f + 0.5f) * 255.0f + 0.5f);
+                    if (zi < 0) zi = 0;
+                    if (zi > 255) zi = 255;
+                    std::uint8_t* p = rgba.data() + (static_cast<std::size_t>(yy) * w + xx) * 4;
+                    p[0] = static_cast<std::uint8_t>(xi);
+                    p[1] = static_cast<std::uint8_t>(yi);
+                    p[2] = static_cast<std::uint8_t>(zi);
+                    p[3] = 0xFF;
+                }
+            }
+        }
+    }
 }
 
 // ---- Xbox-360 tiling (ported verbatim from AssetBrowser ModelPreview.cpp) --------------------
@@ -211,6 +300,65 @@ int main(int argc, char** argv) {
         if (!write_dds(output, width, height, bc1, "DXT1"))
             return fail("unable to write output: " + output);
         printf("%dx%d -> %s\n", width, height, output.c_str());
+        return 0;
+    }
+
+    // comp 3 : 2-channel BC5 normal map (dual-BC4 X+Y). X body at def+48 (DataSize), Y body at
+    // def+Unknown_4 (Unknown_5). Decode each via lh_decode_variant_2_3_4(mode=2) -> BC4, interleave
+    // to BC5, reconstruct z, write uncompressed RGBA8. (Ported from AssetBrowser ModelPreview.cpp.)
+    if (comp == 3) {
+        if (bytes.size() < 52) return fail("comp=3 input too small for w/h");
+        const int w = (bytes[48] << 8) | bytes[49];  // BE u16 width  at def+48
+        const int h = (bytes[50] << 8) | bytes[51];  // BE u16 height at def+50
+        if (w <= 0 || h <= 0 || (w % 4) || (h % 4))
+            return fail("comp=3 bad dims " + std::to_string(w) + "x" + std::to_string(h));
+
+        const auto unk3 = read_be32(bytes, 12);  // Unknown_3
+        const auto unk4 = read_be32(bytes, 16);  // Unknown_4  (Y body start, rel to def=0)
+        const auto unk5 = read_be32(bytes, 20);  // Unknown_5  (Y body size)
+
+        const std::size_t x_body_start = 48;
+        const std::size_t x_body_size = data_size;
+        const bool has_y_sub =
+            (unk3 == 3) && (unk5 > 0) && (unk4 == 48 + data_size) &&
+            (static_cast<std::uint64_t>(unk4) + unk5 <= bytes.size());
+        const std::size_t y_body_start = unk4;
+        const std::size_t y_body_size = unk5;
+
+        if (x_body_start + x_body_size > bytes.size())
+            return fail("comp=3 X body out of bounds");
+
+        std::vector<std::uint8_t> bc4_x, bc4_y;
+        std::string err_x, err_y;
+        if (!lh_decode_variant_2_3_4(bytes.data() + x_body_start, x_body_size, 2, w, h, bc4_x,
+                                     &err_x))
+            return fail("comp=3 variant_2_3_4 X-channel failed: " + err_x);
+        const bool ok_y =
+            has_y_sub &&
+            lh_decode_variant_2_3_4(bytes.data() + y_body_start, y_body_size, 2, w, h, bc4_y, &err_y);
+
+        const std::size_t n_blocks =
+            (static_cast<std::size_t>(w) / 4u + (w % 4u != 0u)) *
+            (static_cast<std::size_t>(h) / 4u + (h % 4u != 0u));
+        std::vector<std::uint8_t> bc5_blocks(n_blocks * 16);
+        for (std::size_t i = 0; i < n_blocks; ++i) {
+            std::memcpy(bc5_blocks.data() + i * 16, bc4_x.data() + i * 8, 8);
+            if (ok_y) {
+                std::memcpy(bc5_blocks.data() + i * 16 + 8, bc4_y.data() + i * 8, 8);
+            } else {
+                // X-only fallback: flat Y = 0x80 (matches ModelPreview.cpp).
+                bc5_blocks[i * 16 + 8] = 0x80;
+                bc5_blocks[i * 16 + 9] = 0x80;
+                for (int k = 10; k < 16; ++k) bc5_blocks[i * 16 + k] = 0;
+            }
+        }
+
+        std::vector<std::uint8_t> rgba;
+        blit_bc5_to_rgba(bc5_blocks.data(), w, h, rgba);
+        if (!write_dds_rgba8(output, static_cast<std::uint32_t>(w),
+                             static_cast<std::uint32_t>(h), rgba))
+            return fail("unable to write output: " + output);
+        printf("%dx%d (normal%s) -> %s\n", w, h, ok_y ? ", XY" : ", X-only", output.c_str());
         return 0;
     }
 
