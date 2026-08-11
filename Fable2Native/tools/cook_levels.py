@@ -940,8 +940,20 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
     # hemisphere floor (fixes the "dark building faces"). Only type-2 props carry probes.
     lmp_probes = _load_lmp_probes(level_lmp, log=log) if level_lmp else {}
 
+    # Level-average baked ambient: the mean of every baked probe (12 SH coeffs). The
+    # directional terms (C1..C3) largely cancel across differently-oriented probes, leaving
+    # essentially the level's mean DC ambient. Used as the fallback for STRUCTURES (type-2)
+    # that ship WITHOUT their own probe — e.g. the Fairfax castle, whose hash isn't in the
+    # .lmp — so they light like their probed neighbours instead of dropping to the synthetic
+    # gray hemisphere (which, under the grazing midday sun, renders them near-black). This is
+    # the level's OWN baked GI, not an invented lift. Foliage/terrain keep the hemisphere.
+    mean_sh = None
+    if lmp_probes:
+        cols = list(zip(*lmp_probes.values()))  # 12 columns
+        mean_sh = tuple(sum(c) / len(c) for c in cols)
+
     # Second pass: one instance record per (instance x geom-mesh).
-    instances, n_inst, n_blocks, n_probed = [], 0, 0, 0
+    instances, n_inst, n_blocks, n_probed, n_fallback = [], 0, 0, 0, 0
     for block in info["prop_blocks"]:
         if block["kind"] not in types or not block.get("model"):
             continue
@@ -959,11 +971,17 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             sh = lmp_probes.get(inst.get("hash"))
             if sh is not None:
                 n_probed += 1
+            elif block["kind"] == 2 and mean_sh is not None:
+                # Unprobed STRUCTURE (castle/wall/townhouse) → level-average baked ambient
+                # so it matches its probed neighbours rather than the near-black hemisphere.
+                sh = mean_sh
+                n_fallback += 1
             for name in names:
                 instances.append((name, pos, yaw, scale, sh))
             n_inst += 1
     if lmp_probes:
-        log(f"  lmp: {n_probed}/{n_inst} prop instances got a baked lighting probe")
+        log(f"  lmp: {n_probed}/{n_inst} prop instances got a baked lighting probe"
+            f" (+{n_fallback} unprobed structures use the level-mean ambient fallback)")
 
     # Terrain: append the level heightfield as one ground mesh (flat earth-tone material,
     # Phase T1 — ghidra_out/terrain_mesh_re.txt). Game-space verts flow through the same
