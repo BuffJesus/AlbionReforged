@@ -319,12 +319,17 @@ resolved: the terrain cook now cooks the level's DOMINANT ground texture from th
     n×56-byte records = [8-byte PropInstance.hash][48-byte payload = 12 BE floats = order-1 SH per RGB,
     channel-major, DC-first]). Full spec + guest-loader addresses: `ghidra_out/lmp_lightmap_probes_re.txt`.
     `cook_levels.py --level-lmp <level.lmp>` keys each type-2 prop by its `PropInstance.hash` and emits the
-    DC ambient term on the F2SCENE `instance` line (`amb r g b`); the D3D12 world PS uses it in place of the
-    hemisphere floor (per-vertex COLOR1 probe; no-probe geometry unchanged). chapter2slums: 897 probes,
-    41/~55 type-2 props matched; verified applied (33k px changed, some props notably brighter).
-    ⚠ ONLY the DC (ambient) term is grounded/applied: the SH DIRECTIONAL (L1) basis is provably NOT in the
-    PPC exe (it lives in the Xenos shader DB) and has no data-derivable axis, so applying it would be
-    guessing — deferred to a future shader-DB disassembly. Vulkan world-renderer parity is TODO.
+    full 12-coeff probe on the F2SCENE `instance` line (`sh <12>`); the D3D12 world renderer evaluates it
+    per-vertex (COLOR1) in place of the hemisphere floor (no-probe geometry unchanged). chapter2slums: 897
+    probes, 41/~55 type-2 props matched; verified applied (38k px changed).
+    **✅ EXACT EVAL RECOVERED (no guessing) — the full order-1 SH is now applied.** Disassembled the shipped
+    Xenos shader `VSHADER_STANDARDMATERIAL_..._AMB2` (const `g_PRTConstants`, PRT ambient): the eval is
+    `amb.c = C0 + (N.x*C1 + N.y*C2 + N.z*C3)` per channel, against the OBJECT-space normal in game axes, with
+    **NO scale** (coeffs pre-folded at bake) — which is why the exe-scan found no SH constants. Full report +
+    the reusable `shader_bank_extract` tool: `ghidra_out/prop_ambient_shader_re.txt`. The renderer un-swaps
+    our stored `{x,z,y}` mesh normal to game axes and evaluates the exact formula. Effect is subtle (the baked
+    probes for this level sit close to our synthetic hemisphere for wall orientations) but now byte-faithful
+    to the game. Vulkan world-renderer parity is TODO.
 
 **OPEN ITEM 2 — the scene reads DARK — ROOT-CAUSED this session (see `ghidra_out/dark_props_diagnosis.txt`
 + its SESSION VERIFICATION footer).** The props are NOT actually black: a raw-albedo PS diagnostic

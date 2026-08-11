@@ -146,12 +146,6 @@ Geometry make_geometry(const NativeScene& scene) {
         if (instance.mesh >= scene.meshes.size()) continue;
         const auto& mesh = scene.meshes[instance.mesh];
         const auto color = material_color(scene, mesh.material);
-        // Per-instance baked ambient (.lmp SH probe DC term). w=1 flags "use the probe";
-        // w=0 leaves the PS on its hemisphere-ambient fallback (terrain/foliage/no-probe).
-        const std::array<float, 4> probe = instance.has_ambient
-            ? std::array<float, 4>{instance.ambient[0], instance.ambient[1],
-                                   instance.ambient[2], 1.0f}
-            : std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.0f};
         const auto base = static_cast<std::uint32_t>(geometry.vertices.size());
         for (const auto& source : mesh.vertices) {
             const auto world = place_vertex(source.position, instance.rotation,
@@ -159,6 +153,20 @@ Geometry make_geometry(const NativeScene& scene) {
             // Rotate the normal into world space (uniform scale + no translation).
             const auto world_normal = normalise(
                 place_vertex(source.normal, instance.rotation, 1.0f, {0.0f, 0.0f, 0.0f}));
+            // Per-instance baked order-1 SH ambient (.lmp probe, exact game shader eval,
+            // ghidra_out/prop_ambient_shader_re.txt): amb.c = C0 + N.(C1,C2,C3) per channel,
+            // against the OBJECT-space normal in GAME axes. Our mesh normals are stored render-
+            // axes ({x,z,y} swap), so un-swap: game (x,y,z) = source.normal (x,z,y). w=1 flags
+            // "use the probe"; w=0 -> PS keeps its hemisphere fallback (terrain/foliage/no-probe).
+            std::array<float, 4> probe{0.0f, 0.0f, 0.0f, 0.0f};
+            if (instance.has_probe) {
+                const auto& s = instance.sh;
+                const float gx = source.normal[0], gy = source.normal[2], gz = source.normal[1];
+                probe = {std::max(0.0f, s[0] + gx * s[1] + gy * s[2] + gz * s[3]),
+                         std::max(0.0f, s[4] + gx * s[5] + gy * s[6] + gz * s[7]),
+                         std::max(0.0f, s[8] + gx * s[9] + gy * s[10] + gz * s[11]),
+                         1.0f};
+            }
             geometry.vertices.push_back({world, world_normal, color, source.uv, probe});
         }
         const auto first_index = static_cast<std::uint32_t>(geometry.indices.size());

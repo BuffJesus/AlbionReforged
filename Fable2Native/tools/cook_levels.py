@@ -460,10 +460,12 @@ def _load_lmp_probes(lmp_path: Path, log=print):
     n records x 56 bytes, preceded by a u32-BE count `n` at (total - 56*n - 4). Each
     record = [8-byte PropInstance.hash BE][48-byte payload = 12 BE floats]. The 12 floats
     are order-1 SPHERICAL HARMONICS per RGB, channel-major: [R0 R1 R2 R3][G0..][B0..],
-    coeff0 = DC/ambient (used ~directly as linear radiance). Authorities: LevelEdit.cpp
-    patch_lmp_probes@762 (record layout) + guest loader Function_82A55140 (48B verbatim,
-    hash-keyed rb-tree). The exact SH directional basis lives in the Xenos shader DB (NOT
-    the exe), so we apply the confirmed DC ambient term only. Returns {hash(u64): (12 floats)}.
+    coeff0 = DC/ambient. Authorities: LevelEdit.cpp patch_lmp_probes@762 (record layout) +
+    guest loader Function_82A55140 (48B verbatim, hash-keyed rb-tree) + the shipped Xenos
+    shader VSHADER_STANDARDMATERIAL_..._AMB2 (const g_PRTConstants) which gives the EXACT
+    eval (ghidra_out/prop_ambient_shader_re.txt):  amb.c = C0 + (N.x*C1 + N.y*C2 + N.z*C3)
+    per channel, against the OBJECT-space normal, NO scale (coeffs pre-folded at bake). The
+    renderer evaluates this per-vertex. Returns {hash(u64): (12 floats)} in channel-major order.
     """
     import gzip
     try:
@@ -496,10 +498,6 @@ def _load_lmp_probes(lmp_path: Path, log=print):
     return probes
 
 
-def _probe_dc_ambient(probe):
-    """Order-1 SH DC term per channel (channel-major layout) = the baked ambient radiance
-    for a prop instance. Clamped >=0 (HDR values >1 are kept; the renderer tonemaps)."""
-    return (max(0.0, probe[0]), max(0.0, probe[4]), max(0.0, probe[8]))
 
 
 def _build_terrain(ghf_bytes: bytes, stride: int = 1, uv_scale: float = TERRAIN_UV_PER_WU,
@@ -956,13 +954,13 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             insts = insts[:max_per_block]
         for inst in insts:
             pos, yaw, scale = _instance_transform(block, inst)
-            amb = None
-            probe = lmp_probes.get(inst.get("hash"))
-            if probe is not None:
-                amb = _probe_dc_ambient(probe)
+            # Full order-1 SH probe (12 coeffs, channel-major) — the renderer evaluates
+            # amb = C0 + N.(C1,C2,C3) per channel per-vertex (the exact game shader eval).
+            sh = lmp_probes.get(inst.get("hash"))
+            if sh is not None:
                 n_probed += 1
             for name in names:
-                instances.append((name, pos, yaw, scale, amb))
+                instances.append((name, pos, yaw, scale, sh))
             n_inst += 1
     if lmp_probes:
         log(f"  lmp: {n_probed}/{n_inst} prop instances got a baked lighting probe")
@@ -1365,13 +1363,14 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                 out.write(f"index {idx}\n")
         for rec in instances:
             name, pos, yaw, scale = rec[:4]
-            amb = rec[4] if len(rec) > 4 else None
+            sh = rec[4] if len(rec) > 4 else None
             line = (f"instance {name} {pos[0]:.9g} {pos[1]:.9g} {pos[2]:.9g} "
                     f"0 {yaw:.9g} 0 {scale:.9g}")
-            if amb is not None:
-                # Per-instance baked ambient (DC term of the .lmp SH probe). native_scene.cpp
-                # reads `amb r g b` -> the world PS uses it instead of the hemisphere floor.
-                line += f" amb {amb[0]:.6g} {amb[1]:.6g} {amb[2]:.6g}"
+            if sh is not None:
+                # Per-instance baked order-1 SH probe (.lmp, 12 coeffs channel-major). The
+                # renderer evaluates amb=C0+N.(C1,C2,C3) per channel per-vertex against the
+                # object normal (native_world_renderer), replacing the hemisphere floor.
+                line += " sh " + " ".join(f"{c:.6g}" for c in sh)
             out.write(line + "\n")
         for (px, py, pz, cr, cg, cb, rng, inten) in scene_lights:
             out.write(f"light {px:.9g} {py:.9g} {pz:.9g} {cr:.6g} {cg:.6g} {cb:.6g} "

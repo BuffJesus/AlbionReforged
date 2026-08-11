@@ -34,10 +34,12 @@ struct NativeInstance {
     std::array<float, 3> position{};
     std::array<float, 3> rotation{};
     float scale = 1.0f;
-    // Optional per-instance baked ambient (DC term of the .lmp LightmapFile SH probe).
-    // has_ambient=false -> the renderer falls back to the global hemisphere ambient.
-    bool has_ambient = false;
-    std::array<float, 3> ambient{};
+    // Optional per-instance baked order-1 SH lighting probe (.lmp LightmapFile), 12 coeffs
+    // channel-major [R0 R1 R2 R3][G0..][B0..]. The renderer evaluates amb = C0 + N.(C1,C2,C3)
+    // per channel against the object-space normal (the exact game shader eval). has_probe=false
+    // -> the renderer falls back to the global hemisphere ambient.
+    bool has_probe = false;
+    std::array<float, 12> sh{};
 };
 
 // A local point light (lamp post, lantern, brazier, placeable accent) — cooked from

@@ -146,14 +146,16 @@ bool load_native_scene(const std::filesystem::path& path,
                 }
             }
             if (!found) return fail(&error, "instance references unknown mesh: " + mesh_name);
-            // Optional trailing `amb r g b` = per-instance baked ambient (.lmp SH probe DC term).
+            // Optional trailing `sh <12 floats>` = per-instance baked order-1 SH probe (.lmp).
             std::string extra;
-            if (read_value(line, extra) && extra == "amb") {
-                if (!read_vec3(line, instance.ambient)) {
-                    return fail(&error, "invalid instance ambient at line " +
-                                std::to_string(line_number));
+            if (read_value(line, extra) && extra == "sh") {
+                for (float& coeff : instance.sh) {
+                    if (!read_value(line, coeff)) {
+                        return fail(&error, "invalid instance sh probe at line " +
+                                    std::to_string(line_number));
+                    }
                 }
-                instance.has_ambient = true;
+                instance.has_probe = true;
             }
             parsed.instances.push_back(instance);
         } else if (opcode == "sun") {
@@ -223,9 +225,9 @@ bool save_native_scene(const std::filesystem::path& path,
                << ' ' << instance.position[1] << ' ' << instance.position[2] << ' '
                << instance.rotation[0] << ' ' << instance.rotation[1] << ' ' << instance.rotation[2]
                << ' ' << instance.scale;
-        if (instance.has_ambient) {
-            output << " amb " << instance.ambient[0] << ' ' << instance.ambient[1] << ' '
-                   << instance.ambient[2];
+        if (instance.has_probe) {
+            output << " sh";
+            for (float coeff : instance.sh) output << ' ' << coeff;
         }
         output << '\n';
     }
