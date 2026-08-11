@@ -16,8 +16,9 @@ namespace f2 {
 class NativeWorldRenderer {
 public:
     // Descriptor slots reserved for world material textures. Each material uses TWO
-    // (albedo t0 + normal t1), so the material cap is kMaxMaterialTextures/2.
-    static constexpr std::uint32_t kMaxMaterialTextures = 128;
+    // (albedo t0 + normal t1), so the material cap is kMaxMaterialTextures/2 = 128
+    // (chapter2slums has ~86 materials — 64 was clamping the last ~22 to wrong textures).
+    static constexpr std::uint32_t kMaxMaterialTextures = 256;
     bool initialise(ID3D12Device* device,
                     ID3D12CommandQueue* queue,
                     const NativeScene& scene,
@@ -42,6 +43,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> constant_buffer_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_state_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> water_pipeline_;  // translucent animated water
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> textures_;
     D3D12_VERTEX_BUFFER_VIEW vertex_view_{};
     D3D12_INDEX_BUFFER_VIEW index_view_{};
@@ -55,6 +57,7 @@ private:
         std::uint32_t first_index = 0;
         std::uint32_t index_count = 0;
         std::uint32_t material_index = 0;
+        bool is_water = false;  // drawn in the translucent water pass with the water shader
     };
     std::vector<DrawRange> draw_ranges_;
     void* mapped_constants_ = nullptr;

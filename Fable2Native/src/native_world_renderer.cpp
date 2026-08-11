@@ -22,6 +22,7 @@ struct Vertex {
 struct Constants {
     float view_projection[4][4]{};
     float sun_direction[4]{0.0f, -1.0f, 0.0f, 0.0f};  // xyz = normalised light dir (world), w unused
+    float eye_time[4]{0.0f, 0.0f, 0.0f, 0.0f};         // xyz = camera eye (world), w = elapsed seconds
 };
 
 struct Geometry {
@@ -31,6 +32,7 @@ struct Geometry {
         std::uint32_t first_index = 0;
         std::uint32_t index_count = 0;
         std::uint32_t material_index = 0;
+        bool is_water = false;
     };
     std::vector<DrawRange> draw_ranges;
 };
@@ -142,9 +144,12 @@ Geometry make_geometry(const NativeScene& scene) {
         }
         const auto first_index = static_cast<std::uint32_t>(geometry.indices.size());
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
+        const bool is_water = mesh.material < scene.materials.size() &&
+                              scene.materials[mesh.material].name == "water";
         geometry.draw_ranges.push_back({first_index,
                                         static_cast<std::uint32_t>(mesh.indices.size()),
-                                        std::min(mesh.material, NativeWorldRenderer::kMaxMaterialTextures / 2 - 1)});
+                                        std::min(mesh.material, NativeWorldRenderer::kMaxMaterialTextures / 2 - 1),
+                                        is_water});
     }
 
     if (!geometry.vertices.empty()) return geometry;
@@ -377,7 +382,8 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     texture_gpu_handle_ = texture_gpu_handle;
     draw_ranges_.clear();
     for (const auto& range : geometry.draw_ranges) {
-        draw_ranges_.push_back({range.first_index, range.index_count, range.material_index});
+        draw_ranges_.push_back({range.first_index, range.index_count, range.material_index,
+                                range.is_water});
     }
 
     const auto constant_size = (sizeof(Constants) + 255u) & ~255u;
@@ -394,9 +400,10 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
 
     Microsoft::WRL::ComPtr<ID3DBlob> vertex_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> pixel_shader;
+    Microsoft::WRL::ComPtr<ID3DBlob> water_pixel_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> shader_errors;
     constexpr char shader_source[] = R"(
-cbuffer Camera : register(b0) { row_major float4x4 view_projection; float4 sun_direction; };
+cbuffer Camera : register(b0) { row_major float4x4 view_projection; float4 sun_direction; float4 eye_time; };
 Texture2D albedo : register(t0);
 Texture2D normalTex : register(t1);
 SamplerState albedo_sampler : register(s0);
@@ -438,6 +445,30 @@ float4 ps_main(PSInput input) : SV_TARGET {
     float3 color = base.rgb * (ambient + ndl);
     return float4(color, base.a);
 }
+// Animated translucent WATER (water_system_re.txt §5, retail params): a procedural dual-scrolled
+// ripple normal (no bump texture needed), fresnel deep↔surface colour, sky reflection, sun glitter.
+float4 ps_water(PSInput input) : SV_TARGET {
+    float3 wp = input.world_pos;
+    float t = eye_time.w;
+    float2 p = wp.xz;
+    float2 uv0 = p * 0.188 + float2(0.052, 0.011) * t;   // NM_SCALE0 / NM_SPEED0 * time
+    float2 uv1 = p * 0.220 + float2(-0.019, 0.019) * t;  // NM_SCALE1 / NM_SPEED1
+    float2 n0 = float2(sin(uv0.x * 6.2831853), sin(uv0.y * 6.2831853));
+    float2 n1 = float2(sin(uv1.x * 6.2831853 + 1.7), sin(uv1.y * 6.2831853 + 1.7));
+    float2 nxy = (n0 + n1) * 0.12;                       // NORMAL_SCALE-ish ripple slope
+    float3 N = normalize(float3(nxy.x, 1.0, nxy.y));
+    float3 V = normalize(eye_time.xyz - wp);
+    float fres = 0.20 + 0.80 * pow(1.0 - saturate(dot(V, N)), 5.0);  // FRESNEL_BIAS 0.20
+    float3 DEEP = float3(0.370, 0.470, 0.750);           // c127
+    float3 SURFACE = float3(0.000, 0.1275, 0.1913);      // c126
+    float3 watercol = lerp(DEEP, SURFACE, fres);
+    float3 sky = float3(0.6549, 0.8157, 1.0);            // zenith blue (env theme) as reflection
+    float3 col = lerp(watercol, sky, 0.75 * fres);       // REFLECTION_STRENGTH 0.75
+    float3 L = -normalize(sun_direction.xyz);            // toward the sun
+    float glit = pow(saturate(dot(V, reflect(-L, N))), 128.0) * 5.0;  // GLITTER_POWER 128 / STRENGTH 5
+    col += glit;
+    return float4(col, saturate(0.72 + 0.22 * fres));    // translucent, more opaque at grazing
+}
 )";
     const auto compile = [&](const char* entry, const char* target,
                              Microsoft::WRL::ComPtr<ID3DBlob>& blob) {
@@ -445,7 +476,8 @@ float4 ps_main(PSInput input) : SV_TARGET {
                           nullptr, nullptr, entry, target, 0, 0, &blob, &shader_errors);
     };
     if (FAILED(compile("vs_main", "vs_5_0", vertex_shader)) ||
-        FAILED(compile("ps_main", "ps_5_0", pixel_shader))) {
+        FAILED(compile("ps_main", "ps_5_0", pixel_shader)) ||
+        FAILED(compile("ps_water", "ps_5_0", water_pixel_shader))) {
         error = "The native world shaders could not be compiled.";
         return false;
     }
@@ -516,6 +548,25 @@ float4 ps_main(PSInput input) : SV_TARGET {
     pipeline.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     if (FAILED(device->CreateGraphicsPipelineState(&pipeline, IID_PPV_ARGS(&pipeline_state_)))) {
         error = "The native world pipeline could not be created.";
+        return false;
+    }
+
+    // Water pipeline: same VS/layout, the animated water PS, alpha blend (SRC_ALPHA/INV_SRC_ALPHA),
+    // depth-test on but depth-WRITE off (translucent surface over the terrain).
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC water = pipeline;
+    water.PS = {water_pixel_shader->GetBufferPointer(), water_pixel_shader->GetBufferSize()};
+    auto& wt = water.BlendState.RenderTarget[0];
+    wt.BlendEnable = TRUE;
+    wt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    wt.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    wt.BlendOp = D3D12_BLEND_OP_ADD;
+    wt.SrcBlendAlpha = D3D12_BLEND_ONE;
+    wt.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    wt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    wt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    water.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    if (FAILED(device->CreateGraphicsPipelineState(&water, IID_PPV_ARGS(&water_pipeline_)))) {
+        error = "The native world water pipeline could not be created.";
         return false;
     }
 
@@ -596,6 +647,10 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     constants.sun_direction[1] = sun[1];
     constants.sun_direction[2] = sun[2];
     constants.sun_direction[3] = 0.0f;
+    constants.eye_time[0] = eye[0];
+    constants.eye_time[1] = eye[1];
+    constants.eye_time[2] = eye[2];
+    constants.eye_time[3] = static_cast<float>(elapsed_seconds);
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     // The world render must set its OWN viewport/scissor — nothing else does before it,
@@ -606,21 +661,27 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     command_list->RSSetViewports(1, &viewport);
     command_list->RSSetScissorRects(1, &scissor);
 
-    command_list->SetPipelineState(pipeline_state_.Get());
     command_list->SetGraphicsRootSignature(root_signature_.Get());
     command_list->SetGraphicsRootConstantBufferView(0, constant_address_);
     command_list->SetGraphicsRootDescriptorTable(1, texture_gpu_handle_);
     command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     command_list->IASetVertexBuffers(0, 1, &vertex_view_);
     command_list->IASetIndexBuffer(&index_view_);
-    for (const auto& range : draw_ranges_) {
-        auto texture_handle = texture_gpu_handle_;
-        // Two SRVs per material (albedo, normal): the table base is material_index*2.
-        texture_handle.ptr += static_cast<std::size_t>(range.material_index) * 2 *
-                             texture_descriptor_stride_;
-        command_list->SetGraphicsRootDescriptorTable(1, texture_handle);
-        command_list->DrawIndexedInstanced(range.index_count, 1, range.first_index, 0, 0);
-    }
+    // Opaque pass first, then the translucent water pass over it (so water blends with the
+    // terrain/riverbed already in the depth+colour buffers).
+    const auto draw_pass = [&](bool water, ID3D12PipelineState* pso) {
+        command_list->SetPipelineState(pso);
+        for (const auto& range : draw_ranges_) {
+            if (range.is_water != water) continue;
+            auto texture_handle = texture_gpu_handle_;
+            texture_handle.ptr += static_cast<std::size_t>(range.material_index) * 2 *
+                                 texture_descriptor_stride_;
+            command_list->SetGraphicsRootDescriptorTable(1, texture_handle);
+            command_list->DrawIndexedInstanced(range.index_count, 1, range.first_index, 0, 0);
+        }
+    };
+    draw_pass(false, pipeline_state_.Get());
+    draw_pass(true, water_pipeline_.Get());
 }
 
 }  // namespace f2
