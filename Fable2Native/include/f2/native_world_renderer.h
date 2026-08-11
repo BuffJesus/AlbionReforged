@@ -38,9 +38,14 @@ public:
                              double elapsed_seconds) const;
 
 private:
+    // Point-light array cap (b1 Lights cbuffer). 64 covers a town square; the cooker
+    // caps to the brightest 64 (level_lights_effects_re.txt §3.1).
+    static constexpr std::uint32_t kMaxPointLights = 64;
     Microsoft::WRL::ComPtr<ID3D12Resource> vertex_buffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> index_buffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> constant_buffer_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> light_buffer_;  // b1 point-light array
+    D3D12_GPU_VIRTUAL_ADDRESS light_address_ = 0;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_state_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> water_pipeline_;  // translucent animated water

@@ -487,6 +487,42 @@ def read_npc_markers(level_save: Path, level_gdb: Path, markerdump: Path,
     return markers
 
 
+def read_lights(level_save: Path, level_gdb: Path, lightdump: Path,
+                globals_gdb: Path = None, log=print) -> list:
+    """Read a level's LOCAL POINT LIGHTS (lamp posts, lanterns, braziers, placeable
+    accents) via the lightdump tool (ghidra_out/level_lights_effects_re.txt §1).
+
+    lightdump reads <level>.save + <level>.gdb and the 0xBB61B654 light component
+    (Intensity/Range/Colour/LightType), chaining kHashParent into globals.gdb so a
+    placed light inherits its archetype Colour. Returns
+    [{"name","pos":[gx,gy,gz],"rgb":[r,g,b],"intensity","range","type"}] in GAME
+    space (caller applies {x,z,y} + rgb/255). Off/culled lights (range<=0) are
+    already filtered by the tool.
+    """
+    import subprocess, tempfile
+    if not lightdump or not Path(lightdump).is_file():
+        log(f"  lights skip (lightdump tool not found: {lightdump})")
+        return []
+    tmp_json = Path(tempfile.mkdtemp(prefix="f2lights_")) / "lights.json"
+    cmd = [str(lightdump), str(level_save), str(level_gdb)]
+    if globals_gdb and Path(globals_gdb).is_file():
+        cmd += ["--globals-gdb", str(globals_gdb)]
+    else:
+        log("  lights: no globals.gdb -> colours may fall back to white")
+    cmd += ["--out", str(tmp_json)]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        data = json.loads(tmp_json.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        log(f"  lights skip (read failed: {type(exc).__name__}: {exc})")
+        return []
+    lights = data.get("lights", [])
+    log(f"lights: {len(lights)} local point lights "
+        f"(hit={data.get('hit')} miss={data.get('miss')} off={data.get('off')} "
+        f"no_colour={data.get('no_colour')})")
+    return lights
+
+
 def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
                out_scene: Path, types=(2, 21), max_per_block=None, log=print,
                textures_bnks=None, tex_cook: Path = None,
@@ -496,7 +532,9 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                water_file: Path = None, npcs: bool = False,
                npc_body_bnk: Path = None, npc_markerdump: Path = None,
                npc_level_save: Path = None, npc_level_gdb: Path = None,
-               npc_limit: int = None, npc_parts=None) -> dict:
+               npc_limit: int = None, npc_parts=None,
+               lights: bool = False, lightdump: Path = None,
+               globals_gdb: Path = None, light_limit: int = None) -> dict:
     """Stage 2: glue every prop model (header++body) and merge instances into one F2SCENE.
 
     Data-driven from ghidra_out/model_glue_lmp_format.txt (the RE'd glue) — no guessing.
@@ -758,6 +796,33 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
         except Exception as exc:  # noqa: BLE001
             log(f"  npc skip ({type(exc).__name__}: {exc})")
 
+    # Local point lights: read the level's lamp/lantern/brazier/placeable light entities
+    # (ghidra_out/level_lights_effects_re.txt §1) and emit `light` records. Cap the count
+    # so the b1 cbuffer array (64) isn't exceeded — keep the brightest (I*R^2 ~ reach).
+    scene_lights = []  # [(px,py,pz, r,g,b, range, intensity)] render-space, colour 0..1
+    if lights and lightdump:
+        try:
+            found = read_lights(npc_level_save, npc_level_gdb, lightdump,
+                                globals_gdb=globals_gdb, log=log)
+            for L in found:
+                gp = L.get("pos") or [0.0, 0.0, 0.0]
+                rx, ry, rz = gp[0], gp[2], gp[1]  # game (x,y,z) -> render (x,z,y)
+                rgb = L.get("rgb") or [255, 255, 255]
+                cr, cg, cb = rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0
+                rng = float(L.get("range", 0.0))
+                inten = float(L.get("intensity", 1.0))
+                if rng <= 0.0 or inten <= 0.0:
+                    continue
+                scene_lights.append((rx, ry, rz, cr, cg, cb, rng, inten))
+            # Rank by approximate visual reach (intensity * range^2) and cap.
+            cap = light_limit if (light_limit and light_limit > 0) else 64
+            scene_lights.sort(key=lambda l: l[7] * l[6] * l[6], reverse=True)
+            if len(scene_lights) > cap:
+                log(f"lights: capping {len(scene_lights)} -> {cap} brightest (b1 cbuffer cap)")
+                scene_lights = scene_lights[:cap]
+        except Exception as exc:  # noqa: BLE001
+            log(f"  lights skip ({type(exc).__name__}: {exc})")
+
     # Cook the referenced albedo textures (globals_textures.bnk .tex -> loose DDS). The runtime
     # only samples albedo (t0), so albedo is what turns the flat-grey buildings textured.
     albedo_tokens = []
@@ -823,9 +888,14 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
         for name, pos, yaw, scale in instances:
             out.write(f"instance {name} {pos[0]:.9g} {pos[1]:.9g} {pos[2]:.9g} "
                       f"0 {yaw:.9g} 0 {scale:.9g}\n")
+        for (px, py, pz, cr, cg, cb, rng, inten) in scene_lights:
+            out.write(f"light {px:.9g} {py:.9g} {pz:.9g} {cr:.6g} {cg:.6g} {cb:.6g} "
+                      f"{rng:.9g} {inten:.6g}\n")
 
-    log(f"cooked {len(meshes)} meshes, {n_inst} instances ({n_blocks} blocks) -> {out_scene}")
-    return {"meshes": len(meshes), "instances": n_inst, "blocks": n_blocks}
+    log(f"cooked {len(meshes)} meshes, {n_inst} instances ({n_blocks} blocks), "
+        f"{len(scene_lights)} lights -> {out_scene}")
+    return {"meshes": len(meshes), "instances": n_inst, "blocks": n_blocks,
+            "lights": len(scene_lights)}
 
 
 def main() -> int:
@@ -880,6 +950,16 @@ def main() -> int:
                     help="cap the number of villagers cooked (first-pass; e.g. 20)")
     ap.add_argument("--npc-female", action="store_true",
                     help="use the child-female part set instead of child-male")
+    ap.add_argument("--lights", action="store_true",
+                    help="cook the level's local point lights (lamp posts, lanterns, braziers)")
+    ap.add_argument("--lightdump", type=Path,
+                    default=Path(__file__).resolve().parents[2] / "Fable2AssetBrowser" / "source"
+                    / "build" / "lightdump.exe",
+                    help="lightdump.exe (reads .save+.gdb light entities)")
+    ap.add_argument("--globals-gdb", type=Path,
+                    help="data/Globals/globals.gdb (light Colour/LightType archetypes chain here)")
+    ap.add_argument("--light-limit", type=int,
+                    help="cap the number of cooked lights (default 64 = b1 cbuffer array size)")
     args = ap.parse_args()
 
     data = args.engine_level.read_bytes()
@@ -921,7 +1001,10 @@ def main() -> int:
                    npc_markerdump=args.npc_markerdump,
                    npc_level_save=args.level_save, npc_level_gdb=args.level_gdb,
                    npc_limit=args.npc_limit,
-                   npc_parts=(NPC_CHILD_FEMALE_PARTS if args.npc_female else NPC_CHILD_MALE_PARTS))
+                   npc_parts=(NPC_CHILD_FEMALE_PARTS if args.npc_female else NPC_CHILD_MALE_PARTS),
+                   lights=args.lights,
+                   lightdump=args.lightdump if (args.lightdump and args.lightdump.is_file()) else None,
+                   globals_gdb=args.globals_gdb, light_limit=args.light_limit)
     return 0
 
 

@@ -36,10 +36,22 @@ struct NativeInstance {
     float scale = 1.0f;
 };
 
+// A local point light (lamp post, lantern, brazier, placeable accent) — cooked from
+// the level's .save/.gdb light entities (ghidra_out/level_lights_effects_re.txt §1).
+// position = render space (game {x,z,y}); color = linear-ish RGB (source 0..255 / 255);
+// range = falloff radius in world units; intensity = brightness multiplier.
+struct NativeLight {
+    std::array<float, 3> position{};
+    std::array<float, 3> color{1.0f, 1.0f, 1.0f};
+    float range = 0.0f;
+    float intensity = 1.0f;
+};
+
 struct NativeScene {
     std::vector<NativeMaterial> materials;
     std::vector<NativeMesh> meshes;
     std::vector<NativeInstance> instances;
+    std::vector<NativeLight> lights;
     std::array<float, 3> sun_direction{0.3f, -1.0f, 0.2f};
     std::array<float, 4> sky_color{0.35f, 0.48f, 0.68f, 1.0f};
 

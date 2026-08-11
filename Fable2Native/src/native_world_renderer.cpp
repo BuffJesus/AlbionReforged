@@ -25,6 +25,16 @@ struct Constants {
     float eye_time[4]{0.0f, 0.0f, 0.0f, 0.0f};         // xyz = camera eye (world), w = elapsed seconds
 };
 
+// b1 point-light cbuffer (level_lights_effects_re.txt §3.1). Mirrors the HLSL layout:
+// light_count (uint + float3 pad), then two float4 arrays. pos_range[i] = (x,y,z,range),
+// color_intensity[i] = (r,g,b,intensity). Populated once from the cooked scene lights.
+struct Lights {
+    std::uint32_t light_count = 0;
+    float pad[3]{0.0f, 0.0f, 0.0f};
+    float pos_range[64][4]{};
+    float color_intensity[64][4]{};
+};
+
 struct Geometry {
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
@@ -398,12 +408,40 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     }
     constant_address_ = constant_buffer_->GetGPUVirtualAddress();
 
+    // b1 Lights cbuffer: upload the cooked point lights once. Static (the light set
+    // is fixed for a level), so it's an upload buffer written at init and never mapped
+    // per frame. Additive to the sun/hemisphere term in the PS.
+    Lights lights{};
+    const auto light_n = std::min<std::size_t>(scene.lights.size(), kMaxPointLights);
+    lights.light_count = static_cast<std::uint32_t>(light_n);
+    for (std::size_t i = 0; i < light_n; ++i) {
+        const auto& src = scene.lights[i];
+        lights.pos_range[i][0] = src.position[0];
+        lights.pos_range[i][1] = src.position[1];
+        lights.pos_range[i][2] = src.position[2];
+        lights.pos_range[i][3] = src.range;
+        lights.color_intensity[i][0] = src.color[0];
+        lights.color_intensity[i][1] = src.color[1];
+        lights.color_intensity[i][2] = src.color[2];
+        lights.color_intensity[i][3] = src.intensity;
+    }
+    if (!create_upload_buffer(device, &lights, sizeof(lights), light_buffer_, error)) {
+        return false;
+    }
+    light_address_ = light_buffer_->GetGPUVirtualAddress();
+
     Microsoft::WRL::ComPtr<ID3DBlob> vertex_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> pixel_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> water_pixel_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> shader_errors;
     constexpr char shader_source[] = R"(
 cbuffer Camera : register(b0) { row_major float4x4 view_projection; float4 sun_direction; float4 eye_time; };
+// Local point lights (level_lights_effects_re.txt §3.1): lamp posts, lanterns, braziers.
+cbuffer Lights : register(b1) {
+    uint light_count; float3 _light_pad;
+    float4 light_pos_range[64];        // xyz = render-space pos, w = range (wu)
+    float4 light_color_intensity[64];  // rgb = colour (0..1), w = intensity
+};
 Texture2D albedo : register(t0);
 Texture2D normalTex : register(t1);
 SamplerState albedo_sampler : register(s0);
@@ -442,7 +480,24 @@ float4 ps_main(PSInput input) : SV_TARGET {
     float ndl = saturate(dot(N, -sun_direction.xyz));
     float hemi = 0.5 + 0.5 * N.y;
     float3 ambient = lerp(float3(0.18, 0.20, 0.24), float3(0.55, 0.58, 0.62), hemi);
-    float3 color = base.rgb * (ambient + ndl);
+    float3 lit = base.rgb * (ambient + ndl);
+    // Additive local point lights (level_lights_effects_re.txt §3.1): diffuse N·L with a
+    // soft linear-squared falloff clamped at each light's Range. Added AFTER the
+    // hemisphere+sun term so lamps/braziers glow warm over the global lighting.
+    [loop] for (uint li = 0; li < light_count; ++li) {
+        float3 d = light_pos_range[li].xyz - input.world_pos;
+        float r = light_pos_range[li].w;
+        float dist = length(d);
+        if (dist < r) {
+            float3 L = d / max(dist, 1e-3);
+            float ndl_p = saturate(dot(N, L));
+            float atten = saturate(1.0 - dist / r);
+            atten *= atten;  // ~inverse-square feel
+            lit += base.rgb * light_color_intensity[li].rgb *
+                   (ndl_p * atten * light_color_intensity[li].w);
+        }
+    }
+    float3 color = lit;
     return float4(color, base.a);
 }
 // Animated translucent WATER (water_system_re.txt §5, retail params): a procedural dual-scrolled
@@ -482,7 +537,7 @@ float4 ps_water(PSInput input) : SV_TARGET {
         return false;
     }
 
-    D3D12_ROOT_PARAMETER root_parameters[2]{};
+    D3D12_ROOT_PARAMETER root_parameters[3]{};
     root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     root_parameters[0].Descriptor.ShaderRegister = 0;
     root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // PS reads sun_direction too
@@ -494,6 +549,11 @@ float4 ps_water(PSInput input) : SV_TARGET {
     root_parameters[1].DescriptorTable.NumDescriptorRanges = 1;
     root_parameters[1].DescriptorTable.pDescriptorRanges = &texture_range;
     root_parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    // b1 point-light array (PS only). New param index 2 — leaves b0 (index 0) and the
+    // texture table (index 1) undisturbed.
+    root_parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    root_parameters[2].Descriptor.ShaderRegister = 1;
+    root_parameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_STATIC_SAMPLER_DESC sampler{};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -503,7 +563,7 @@ float4 ps_water(PSInput input) : SV_TARGET {
     sampler.ShaderRegister = 0;
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_ROOT_SIGNATURE_DESC root_description{};
-    root_description.NumParameters = 2;
+    root_description.NumParameters = 3;
     root_description.pParameters = root_parameters;
     root_description.NumStaticSamplers = 1;
     root_description.pStaticSamplers = &sampler;
@@ -664,6 +724,7 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     command_list->SetGraphicsRootSignature(root_signature_.Get());
     command_list->SetGraphicsRootConstantBufferView(0, constant_address_);
     command_list->SetGraphicsRootDescriptorTable(1, texture_gpu_handle_);
+    command_list->SetGraphicsRootConstantBufferView(2, light_address_);  // b1 point lights
     command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     command_list->IASetVertexBuffers(0, 1, &vertex_view_);
     command_list->IASetIndexBuffer(&index_view_);

@@ -158,6 +158,15 @@ bool load_native_scene(const std::filesystem::path& path,
                 !read_value(line, parsed.sky_color[3])) {
                 return fail(&error, "invalid sky at line " + std::to_string(line_number));
             }
+        } else if (opcode == "light") {
+            // light <px> <py> <pz> <r> <g> <b> <range> <intensity>
+            // (render-space position, linear-ish colour 0..1, wu radius, brightness).
+            NativeLight light;
+            if (!read_vec3(line, light.position) || !read_vec3(line, light.color) ||
+                !read_value(line, light.range) || !read_value(line, light.intensity)) {
+                return fail(&error, "invalid light at line " + std::to_string(line_number));
+            }
+            parsed.lights.push_back(light);
         } else {
             return fail(&error, "unknown opcode '" + opcode + "' at line " +
                                   std::to_string(line_number));
@@ -205,6 +214,11 @@ bool save_native_scene(const std::filesystem::path& path,
                << ' ' << instance.position[1] << ' ' << instance.position[2] << ' '
                << instance.rotation[0] << ' ' << instance.rotation[1] << ' ' << instance.rotation[2]
                << ' ' << instance.scale << '\n';
+    }
+    for (const NativeLight& light : scene.lights) {
+        output << "light " << light.position[0] << ' ' << light.position[1] << ' '
+               << light.position[2] << ' ' << light.color[0] << ' ' << light.color[1] << ' '
+               << light.color[2] << ' ' << light.range << ' ' << light.intensity << '\n';
     }
     return static_cast<bool>(output);
 }
