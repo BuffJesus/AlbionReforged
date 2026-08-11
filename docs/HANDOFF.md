@@ -23,9 +23,17 @@ Commit `e16428d`.
   extract+cook each albedo `.tex`→DDS and emit an absolute loose-DDS path (no renderer change). 15/27
   chapter2slums albedos cook; the rest live in comp-7 tiled `1024mip0_textures.bnk` (+ header bnk). See
   `NATIVE_LEVEL_COOK_PLAN.md` (b).
-- **NEXT (priority):** (b-cont) comp-7 tiled textures from `1024mip0_textures.bnk` + `globals_texture_headers.bnk`
-  (tool already supports `--pf/--width/--height`), (c) normal maps, (d) foliage MDL strides, (e) terrain,
-  (f) Vulkan world-renderer parity (behind D3D12).
+- **★ FULL 2026-08-10 SESSION (supersedes the two lines above — screenshot-verified, each grounded in a
+  validated ghidra_out spec, NO guessing):** on top of depth+lighting, also shipped: **43/43 albedo textures**
+  (found the shared_6281/2445 banks via level.vfsconfig + fixed the space-name bug); **foliage** grass/trees
+  (MDL stride decode) + alpha cutout; **terrain** ground (heightfield→mesh); **normal-mapped shading**
+  (comp-3 BC5 cook → 2-SRV/material → derivative-TBN); **child hero** in the scene; **procedural sky**
+  (gradient default / atmosphere toggle); and the **title reveal matched to retail** frame-by-frame
+  (objective per-frame pixel A/B via FABLE2NATIVE_TITLE_TIME). Full detail: memory
+  `fable2native-level-cook-renders` (2026-08-10 block) + `NATIVE_LEVEL_COOK_PLAN.md`.
+- **NEXT (specs in hand):** Phase-1 sky colour match (reads brown); WATER (`water_system_re.txt`); SPEC maps
+  (t2; cooker already emits material=); exact hero PlayerStart XYZ; foliage LOD/wind; terrain .ehf splat;
+  frontend fidelity drifts (`frontend_visual_fidelity_re.txt` P3-5); Vulkan world-renderer parity.
 - New decomp specs this session: `ghidra_out/{model_glue_lmp_format,gdb_component_schemas,worldmap_travel_minigames,ingame_menu_live_achievements}.txt`.
 
 ## ▶▶ ACTIVE TRACK (2026-08-06) — RETAIL FRONTEND DECOMP → Fable2Native fidelity
