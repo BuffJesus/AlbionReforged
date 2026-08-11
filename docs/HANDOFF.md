@@ -1,6 +1,51 @@
 # Handoff — resume here
 
-## ▶▶ NEWEST (2026-08-09) — Fable2Native renders REAL LEVEL GEOMETRY ★ START HERE
+## ▶▶ CURRENT STATE (2026-08-11) — NATIVE LEVEL RENDER FEATURE-COMPLETE ON BOTH BACKENDS ★ START HERE
+**Merged to `main` (origin/main @ `ece53de`).** The `agent/native-first-level-render` branch (89 commits)
+is integrated; start the next session on a **new branch off `main`**. The cooked childhood level
+(`chapter2slums`) now renders the full world on **both D3D12 and Vulkan**, screenshot-verified:
+splat-composited terrain + per-material albedo & normal maps + depth occlusion + per-prop baked SH ambient
+(`.lmp`) + warm directional sun + RE'd blue theme sky + animated translucent water + 64 point lights.
+Every step is grounded in a `ghidra_out` spec (no guessing); the one deep RE win was recovering the exact
+per-prop SH ambient from the shipped Xenos shader (`ghidra_out/prop_ambient_shader_re.txt`).
+
+**Recook command of record (D3D12 + Vulkan share the cooked F2SCENE):** stage the level inputs, then
+```
+python Fable2Native/tools/cook_levels.py <chapter2slums.engine_level> --cook out.f2scene \
+  --f2tool Fable2AssetBrowser/source/build/f2tool.exe --tex-cook <f2native_cook_lh_tex.exe> \
+  --header-bnk <Globals/globals_model_headers.bnk> --body-bnk <chapter2slums_models.bnk> --types 2,21 \
+  --terrain-ghf <slums.ghf> --terrain-ehf <slums.ehf> --terrain-stride 2 \
+  --level-lmp <chapter2slums.lmp> \
+  --water-file <slums.water> --water-file <sea_vista.water> \
+  --lights --lightdump <lightdump.exe> --level-save <.save> --level-gdb <.gdb> --globals-gdb <Globals/globals.gdb> \
+  --textures-bnk <shared_6281.bnk> --textures-bnk <shared_2445.bnk> --textures-bnk <level textures.bnk> \
+  --textures-bnk <Globals/1024mip0_textures.bnk> --textures-bnk <Globals/globals_textures.bnk>
+```
+**Run:** `f2native_frontend.exe [--backend vulkan] --start-world --scene out.f2scene --game-dir <assets/game>`.
+Screenshot helpers (session scratchpad pattern): PrintWindow-capture the flip-model window; D3D12 default,
+Vulkan via `--backend vulkan`. ⚠ The baked terrain albedo is an UNCOMPRESSED RGBA8 DDS — needs a frontend
+built after 2026-08-10 (commit `cb32ab6`); a stale exe renders terrain WHITE.
+
+**Where things live (all extracted from the user's base game; nothing shipped):** `.engine_level`/`.gdb`/
+`.save`/`.lmp`/`.ghf`/level `textures.bnk`/`level.vfsconfig` + shared_6281/2445 in `data/levels.bnk`; the
+nested `chapter2slums_models.bnk` + heightfield `.ehf`/`.water` + `sea_vista.*` in `data/streaming.bnk`.
+New tools this line: `f2tool ehf` (EHF LOD/splat dump), `terrain_splat_bake` (offline splat compositor),
+`shader_bank_extract`, plus `terrain_bake` (embedded-albedo probe; dead end for slums) — all in
+`Fable2AssetBrowser` (untracked like npc_markerdump/lightdump/propdump; rebuild via cmake in the VS dev shell).
+
+**NEXT FRONTIER (grounded, needs fresh RE — nothing else is a quick incremental win):**
+1. **SPEC maps (t2)** — the cooker already emits `material=` (spec) tokens but no renderer samples t2. Needs
+   a small RE pass on the spec/gloss lighting model, then a t2 sampler + spec term in both world PS/frag.
+2. **Per-level day/night theme** — the sky/sun theme is currently the hardcoded chapter2slums midday keyframe.
+   Generalizing needs reversing the `.genv` container (level→theme-GUID TOD map) — a Ghidra-only gap
+   (`ghidra_out/env_theme_colors_re.txt` §4). Until then the midday bake is the spec-recommended default.
+3. Foliage LOD/wind; exact hero PlayerStart refinement; frontend fidelity drifts
+   (`frontend_visual_fidelity_re.txt` P3-5).
+
+Full detail: memory `fable2native-level-cook-renders` + [`docs/NATIVE_LEVEL_COOK_PLAN.md`](NATIVE_LEVEL_COOK_PLAN.md).
+Everything below is the chronological history that led here (kept for reference).
+
+## ▶▶ (history) 2026-08-09 — Fable2Native renders REAL LEVEL GEOMETRY
 **MILESTONE (screenshot-verified):** the cooked childhood level (`chapter2slums`) renders UPRIGHT
 buildings in the D3D12 World state. Full story + repro + next steps: memory
 `fable2native-level-cook-renders` + [`docs/NATIVE_LEVEL_COOK_PLAN.md`](NATIVE_LEVEL_COOK_PLAN.md).
