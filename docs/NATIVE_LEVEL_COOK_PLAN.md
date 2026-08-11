@@ -249,7 +249,20 @@ Verify: run on the extracted `chapter2slums.engine_level`, then World `--scene` 
   water + **vista** + hero + 20 NPCs + 64 lights + 515/516 textures. Renders: castle, bridge, dense
   town, lit terrain, sky, the vista plane bridging the near-corner void.
 
-**OPEN ITEM 1 — the castle-approach VOID is only partly filled (user-flagged "still a void between").**
+**◑ OPEN ITEM 1 — castle-approach VOID: RESOLVED as far as the shipped data grounds (2026-08-11).**
+INVESTIGATED the leads (data-driven): (b) only ONE vista tile exists (`sea_vista_id_6ce5fa48`, no others).
+(a) MEASURED water-body extents: `slums.water` = sea/canals at h=36.6 over X[0,122] Y[0,225] + two h=48.6
+ponds at X[243,259]; `sea_vista.water` = ONE body at the SAME sea level h=36.6 over X[0,66] Y[-128,2].
+**No shipped water/prop geometry covers the void proper (X[66,288] Y[-128,0]) — that region is
+backdrop/skybox, so a sea plane across it would be GUESSING the extent.** FIX (grounded, shipped data
+only): `--water-file` is now REPEATABLE; cooking `sea_vista.water` alongside `slums.water` adds the real
+seaward strip that partially bridges the near corner (screenshot-verified: translucent sea extends off the
+island's SW edge toward the castle). The remaining gap toward the castle (X~66-288) is the environment
+backdrop/skybox horizon, NOT missing cookable geometry. (c)/(d) moot — the vista/castle use identity
+placement and the numbers above are from the real cooked scene.
+Add `--water-file <sea_vista.water>` to the recook. Older analysis below (kept):
+
+**OPEN ITEM 1 (original measurements) — the castle-approach VOID is only partly filled.**
 MEASURED world bounds (render space, `native_full_vista.f2scene`):
   - terrain: X[0,288] Z[0,288]   (from `slums.ghf`; the main render `.ehf` has the SAME extent: origin
     (0,0), 577×577, tile 0.5 → X[0,288] Y[0,288] — so the .ehf does NOT extend past the .ghf)

@@ -1013,20 +1013,28 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
 
     # Water: append the level's water bodies as flat blue planes (Phase A — opaque water-colour
     # mesh; the animated bump/fresnel shader is a later phase). water_system_re.txt.
-    if water_file:
+    # Water bodies. Repeatable: the level heightfield's .water (town canals/sea) AND the
+    # vista .water (the seaward strip that partially bridges the castle-approach void). Both
+    # are real shipped bodies at sea level ~36.6; extending a sea plane beyond them would be
+    # guessing (the rest of the void is backdrop/skybox), so only shipped bodies are cooked.
+    water_files = ([water_file] if isinstance(water_file, (str, Path)) else list(water_file or []))
+    for wi, wf in enumerate(f for f in water_files if f):
         try:
-            wbuilt = _build_water(Path(water_file).read_bytes())
+            wbuilt = _build_water(Path(wf).read_bytes())
         except Exception as exc:  # noqa: BLE001
             wbuilt = None
             log(f"  water skip ({type(exc).__name__}: {exc})")
         if wbuilt:
             w_pos, w_nrm, w_uv, w_idx = wbuilt
             w_mat = len(materials)
+            wname = f"water{wi}"
+            # Material name MUST stay "water" — the renderer keys the animated translucent
+            # water shader off material.name == "water" (native_world_renderer.cpp).
             materials.append(("water", [], (0.14, 0.34, 0.52, 1.0)))
-            meshes.append(("water0", w_mat, w_pos, w_nrm, w_uv, w_idx))
-            instances.append(("water0", (0.0, 0.0, 0.0), 0.0, 1.0))
+            meshes.append((wname, w_mat, w_pos, w_nrm, w_uv, w_idx))
+            instances.append((wname, (0.0, 0.0, 0.0), 0.0, 1.0))
             n_inst += 1
-            log(f"water: {len(w_pos)//3} verts / {len(w_idx)//3} tris")
+            log(f"water{wi} ({Path(wf).name}): {len(w_pos)//3} verts / {len(w_idx)//3} tris")
 
     # Distant sea/coast backdrop (.ehf) — the flat plane that fills the seaward void
     # between the town heightfield and Fairfax castle (ghidra_out/ehf_vista_re.txt).
@@ -1424,8 +1432,9 @@ def main() -> int:
     ap.add_argument("--hero-body-bnk", type=Path, help="globals_models.bnk (hero polymsh bodies)")
     ap.add_argument("--hero-pos", type=float, nargs=3, metavar=("X", "Y", "Z"),
                     help="hero render-space position (default: building centroid)")
-    ap.add_argument("--water-file", type=Path,
-                    help="the level's extracted .water file -> flat water planes")
+    ap.add_argument("--water-file", type=Path, action="append", dest="water_file",
+                    help="an extracted .water file -> flat water planes (repeatable: the "
+                         "heightfield .water AND the vista sea .water)")
     ap.add_argument("--npcs", action="store_true",
                     help="populate the town with bind-pose villagers at creature-spawn markers")
     ap.add_argument("--npc-body-bnk", type=Path,
