@@ -1152,9 +1152,11 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
         if vbuilt:
             v_pos, v_nrm, v_uv, v_idx = vbuilt
             v_mat = len(materials)
-            # Sea blue-grey so the widened plane reads as the coastal sea under the castle and
-            # blends with the translucent water over it (rather than a neutral grey slab).
-            materials.append(("vista", [], (0.24, 0.33, 0.46, 1.0)))
+            # Render the widened seaward plane as ANIMATED WATER (material name "water" flags
+            # the water shader in both renderers), so the whole sea under the castle is ONE
+            # consistent moving water surface instead of a flat grey slab with a two-tone seam
+            # where the translucent .water planes ended. Colour ignored by the water PS.
+            materials.append(("water", [], (0.24, 0.33, 0.46, 1.0)))
             meshes.append(("vista0", v_mat, v_pos, v_nrm, v_uv, v_idx))
             instances.append(("vista0", (0.0, 0.0, 0.0), 0.0, 1.0))
             n_inst += 1
