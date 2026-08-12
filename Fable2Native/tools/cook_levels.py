@@ -1313,6 +1313,25 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                 return ("vista" in low or "farmountain" in low or "skydome" in low
                         or "backdrop" in low)
 
+            # Dedup coincident vista STORY-STATE variants: the Tattered Spire ships as three
+            # models (Started/HalfBuilt/FullyBuilt) at the IDENTICAL position — only the
+            # story-active layer renders in-game, but propdump reports all three (it doesn't read
+            # layer load-state), so drawing them all Z-fights as three overlaid meshes. Keep one
+            # per position, preferring the childhood-era HalfBuilt.
+            bd_by_pos = {}
+            for p in found:
+                if not _is_backdrop(p.get("model", "")):
+                    continue
+                gp = p.get("pos") or [0.0, 0.0, 0.0]
+                k = (round(gp[0], 1), round(gp[1], 1), round(gp[2], 1))
+                cur = bd_by_pos.get(k)
+                if cur is None or ("halfbuilt" in p["model"].lower()
+                                   and "halfbuilt" not in cur["model"].lower()):
+                    bd_by_pos[k] = p
+            _keep_bd = {id(p) for p in bd_by_pos.values()}
+            found = [p for p in found
+                     if not _is_backdrop(p.get("model", "")) or id(p) in _keep_bd]
+
             prop_mesh_names: dict[str, list] = {}   # model key -> [mesh_name per geom]
             n_prop_inst, n_prop_models, n_prop_skip, n_backdrop = 0, 0, 0, 0
             for p in found:
