@@ -1403,7 +1403,8 @@ private:
             // gets real occlusion (frontend states render depthless above).
             if (depth_target_) {
                 command_list_->OMSetRenderTargets(1, &target_rtv, FALSE, &dsv_handle_);
-                command_list_->ClearDepthStencilView(dsv_handle_, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0,
+                // Reversed-Z: clear to 0.0 (the far value); the world PSO tests GREATER_EQUAL.
+                command_list_->ClearDepthStencilView(dsv_handle_, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0,
                                                      0, nullptr);
             }
             // Procedural sky FIRST (fills every pixel behind the world; no depth test/write),

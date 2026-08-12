@@ -1140,7 +1140,7 @@ private:
         // clear value per attachment; the depth slot clears to 1.0 (far).
         const bool msaa_clear = msaa_samples_ > VK_SAMPLE_COUNT_1_BIT;
         VkClearValue depth_clear{};
-        depth_clear.depthStencil = {1.0f, 0};
+        depth_clear.depthStencil = {0.0f, 0};  // reversed-Z far value
         VkClearValue clears[3] = {clear, msaa_clear ? clear : depth_clear, depth_clear};
         VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         pass.renderPass = render_pass_;

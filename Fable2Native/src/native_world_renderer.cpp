@@ -655,7 +655,12 @@ float4 ps_water(PSInput input) : SV_TARGET {
     pipeline.BlendState = blend_description();
     pipeline.DepthStencilState.DepthEnable = TRUE;
     pipeline.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-    pipeline.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    // REVERSED-Z: near maps to 1, far to 0 (cleared to 0), so the huge near..far span of a
+    // town + horizon-vista scene keeps floating-point depth precision even under the free-fly
+    // camera's small near plane — kills the Z-fighting that showed as "light through seams" on
+    // terrain/castle when the camera rotated. Pairs with the reversed z-row in render() and the
+    // 0.0 depth clear in native_frontend_app.
+    pipeline.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
     pipeline.DepthStencilState.StencilEnable = FALSE;
     pipeline.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     if (FAILED(device->CreateGraphicsPipelineState(&pipeline, IID_PPV_ARGS(&pipeline_state_)))) {
@@ -758,11 +763,13 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     constants.view_projection[1][1] = camera_up[1] * y_scale;
     constants.view_projection[2][1] = camera_up[2] * y_scale;
     constants.view_projection[3][1] = -eye_dot_up * y_scale;
-    constants.view_projection[0][2] = forward[0] * far_plane / (far_plane - near_plane);
-    constants.view_projection[1][2] = forward[1] * far_plane / (far_plane - near_plane);
-    constants.view_projection[2][2] = forward[2] * far_plane / (far_plane - near_plane);
-    constants.view_projection[3][2] =
-        -(far_plane * (eye_dot_forward + near_plane)) / (far_plane - near_plane);
+    // Reversed-Z depth row: clip.z = near/(far-near) * (far - view_depth); with clip.w =
+    // view_depth this gives z_ndc = near→1, far→0 (see DepthFunc GREATER_EQUAL + 0.0 clear).
+    const float rz = near_plane / (far_plane - near_plane);
+    constants.view_projection[0][2] = -rz * forward[0];
+    constants.view_projection[1][2] = -rz * forward[1];
+    constants.view_projection[2][2] = -rz * forward[2];
+    constants.view_projection[3][2] = rz * (eye_dot_forward + far_plane);
     constants.view_projection[0][3] = forward[0];
     constants.view_projection[1][3] = forward[1];
     constants.view_projection[2][3] = forward[2];

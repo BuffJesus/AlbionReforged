@@ -732,7 +732,7 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     depth_stencil.depthTestEnable = VK_TRUE;
     depth_stencil.depthWriteEnable = VK_TRUE;
-    depth_stencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    depth_stencil.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;  // reversed-Z
     // Alpha blend so translucent water composites over the opaque world. Opaque fragments
     // output alpha=1 -> src*1 + dst*0 = src (a no-op), so only water actually blends.
     VkPipelineColorBlendAttachmentState blend_attachment{};
@@ -833,9 +833,12 @@ void NativeVulkanWorldRenderer::render(VkCommandBuffer command_buffer,
     std::array<float, 16> projection{};
     projection[0] = scale / aspect;
     projection[5] = scale;
-    projection[10] = far_plane / (near_plane - far_plane);
+    // REVERSED-Z (near->1, far->0; cleared to 0, tested GREATER_OR_EQUAL) — preserves depth
+    // precision across the town..horizon-vista span and kills the seam Z-fighting. Mirrors the
+    // D3D12 renderer.
+    projection[10] = near_plane / (far_plane - near_plane);
     projection[11] = -1.0f;
-    projection[14] = (near_plane * far_plane) / (near_plane - far_plane);
+    projection[14] = (near_plane * far_plane) / (far_plane - near_plane);
     Constants constants{multiply(projection, view)};
     constants.sun_direction = {sun_direction_[0], sun_direction_[1], sun_direction_[2], 0.0f};
     constants.sun_color = {sun_color_[0], sun_color_[1], sun_color_[2], 0.0f};
