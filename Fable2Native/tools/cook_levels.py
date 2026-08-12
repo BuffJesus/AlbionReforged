@@ -764,13 +764,20 @@ def read_lights(level_save: Path, level_gdb: Path, lightdump: Path,
     return lights
 
 
-def _build_ehf(ehf_bytes: bytes):
+def _build_ehf(ehf_bytes: bytes, fill_max_x: float = None):
     """Cook a flat sea/backdrop .ehf vista mesh (the distant coast that fills the void
     between the town heightfield and the castle). ghidra_out/ehf_vista_re.txt: the 63-byte
     BE header carries origin (f0/f1), grid dims (u0/u1) and tile (f2); the render surface is
     a flat plane whose height is the constant repeated across the body's 850A0 vertices.
     Returns (pos,nrm,uv,idx) in GAME space (X, Y, height) — the writer applies the {x,z,y}
-    swap. Flat-vista path only (the sea_vista is planar)."""
+    swap. Flat-vista path only (the sea_vista is planar).
+
+    `fill_max_x`: extend the flat plane's X out to this game-X (the town terrain's max X) so
+    the sea plane spans the WHOLE seaward band under the Fairfax castle (which sits at game
+    X~173, Y~-92, OUTSIDE the town .ghf), not just the sea_vista's own X[0,64] footprint.
+    The plane height is the authored sea level (~35.3), so the castle's cliff rises from it
+    exactly as in-game (below-sea cliff is meant to be submerged). castle-gap RE
+    (ghidra_out/ehf_vista_re.txt §5 + the castle-gap decomp)."""
     if len(ehf_bytes) < 0x3f or ehf_bytes[:23] != b"HeightFieldGraphicsFile":
         return None
     ox, oy = struct.unpack_from(">ff", ehf_bytes, 0x1b)
@@ -866,19 +873,24 @@ def _build_ehf(ehf_bytes: bytes):
     if coarse:
         return coarse
 
-    # FLAT-VISTA path (sea_vista): header grid at the constant plane height.
+    # FLAT-VISTA path (sea_vista): header grid at the constant plane height, optionally widened
+    # in X to span the full seaward band under the castle.
+    nx = u0
+    if fill_max_x is not None and fill_max_x > ox + (u0 - 1) * tile:
+        nx = int(round((fill_max_x - ox) / tile)) + 1
+        nx = max(u0, min(nx, 8192))
     pos, nrm, uv, idx = [], [], [], []
     for cy in range(u1):
-        for cx in range(u0):
+        for cx in range(nx):
             px, py = ox + cx * tile, oy + cy * tile
             pos.extend((px, py, height))
             nrm.extend((0.0, 0.0, 1.0))
             uv.extend((px * 0.02, py * 0.02))
     for j in range(u1 - 1):
-        for i in range(u0 - 1):
-            v00 = j * u0 + i
+        for i in range(nx - 1):
+            v00 = j * nx + i
             v10 = v00 + 1
-            v01 = (j + 1) * u0 + i
+            v01 = (j + 1) * nx + i
             v11 = v01 + 1
             idx.extend((v00, v01, v10, v10, v01, v11))
     return (pos, nrm, uv, idx) if idx else None
@@ -1129,15 +1141,20 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
     # Distant sea/coast backdrop (.ehf) — the flat plane that fills the seaward void
     # between the town heightfield and Fairfax castle (ghidra_out/ehf_vista_re.txt).
     if vista_ehf:
+        # Widen the flat sea plane out to the town terrain's max X so it spans the whole
+        # seaward band under the castle (not just the sea_vista's X[0,64]).
+        _vfill = (t_uv_world[0] + t_uv_world[2]) if (terrain_ghf and t_uv_world) else None
         try:
-            vbuilt = _build_ehf(Path(vista_ehf).read_bytes())
+            vbuilt = _build_ehf(Path(vista_ehf).read_bytes(), fill_max_x=_vfill)
         except Exception as exc:  # noqa: BLE001
             vbuilt = None
             log(f"  vista skip ({type(exc).__name__}: {exc})")
         if vbuilt:
             v_pos, v_nrm, v_uv, v_idx = vbuilt
             v_mat = len(materials)
-            materials.append(("vista", [], (0.28, 0.30, 0.30, 1.0)))
+            # Sea blue-grey so the widened plane reads as the coastal sea under the castle and
+            # blends with the translucent water over it (rather than a neutral grey slab).
+            materials.append(("vista", [], (0.24, 0.33, 0.46, 1.0)))
             meshes.append(("vista0", v_mat, v_pos, v_nrm, v_uv, v_idx))
             instances.append(("vista0", (0.0, 0.0, 0.0), 0.0, 1.0))
             n_inst += 1
