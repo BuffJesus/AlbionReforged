@@ -1,6 +1,51 @@
 # Handoff — resume here
 
-## ▶▶ CURRENT STATE (2026-08-11) — NATIVE LEVEL RENDER FEATURE-COMPLETE ON BOTH BACKENDS ★ START HERE
+## ▶▶ CURRENT STATE (2026-08-11 night) — LEVEL FIDELITY PASS; OPEN = castle↔terrain WATER JUNCTION ★ START HERE
+Branch **`agent/native-spec-maps-and-char`** (off `main` @ `ece53de`; ~13 commits, NOT yet merged). This session
+did a big "why does chapter2slums still look wrong" pass, diffing our native render against the **AssetBrowser oracle**
+(3 decomp subagents + direct data). Shipped, both backends, screenshot-verified:
+- **spec/gloss maps (t2)** Blinn-Phong; **free-fly camera** (WASD/QE/arrows, D3D12 World state);
+- **GDB props** — THE big miss: the recook never passed `--props`, so ~1073 GDB/save entities (the town's real density)
+  were uncooked → 88→**617 meshes / 6573 instances**. THE RECOOK MUST INCLUDE `--props --propdump propdump.exe`.
+- **the missing spire** = childhood Tattered Spire `TS_Vista_HalfBuilt_V1` (chapter2slums.save Layer_Spire_HalfBuilt @
+  game 591,-797), was dropped by cook_levels.py `_is_backdrop()`; now cooked near-unlit (bright vista probe), deduped to
+  one story-variant, + a new `focus <cx cy cz r>` scene directive frames the TOWN only (excludes backdrop) so the
+  ~1000wu spire doesn't blow up the auto-fit (both renderers honor `focus`).
+- **castle lit** (unprobed structures use the level-mean baked ambient); **reversed-Z** both backends (fixes "light
+  through seams when rotating" = depth Z-fight across town→horizon span); **terrain AO** baked into the splat
+  (terrain_splat_bake decodes the .ehf body atlas pf24, `ao*0.55+0.45`).
+
+**★ OPEN TASK (resume here) — the castle-approach SEA JUNCTION "feels off" (user, NOT tone/atmosphere/floating):**
+I widened the sea_vista plane under the castle (`--vista-ehf` + `_build_ehf` `fill_max_x`) and flagged it material
+"water" (commits c2a7d41, e1fd16c). This removed the two-TONE seam but the user's last words: **"you can still see
+OVERLAPPING water planes — what happened to creating the ACTUAL water from the game?"** → DIRECTIVE: stop kludging a
+widened rectangular plane; cook the game's **real** water. NEXT STEP (mid-investigation): parse what `slums.water` +
+`sea_vista.water` actually cover (`_build_water` @ cook_levels.py:571 reads per-patch cx,cz,ex,ez + mask — dump the
+world-bounds), see if they overlap each other + whether real water covers the castle approach at all; if not, the castle
+sits on land/cliff and the widened-plane approach should likely be REVERTED to real-water-only. Also still off: water too
+transparent at grazing (deep-water should be darker/opaque like the oracle) + terrain hard coast edge (.ghf ends flat at
+Y=0). Method: PIL-crop the junction of our render vs the AB oracle (ab_clean.png) and Read both. Full detail: memory
+`fable2native-level-cook-renders` ▶▶ RESUME HERE block.
+
+**Recook command of record (chapter2slums, staged inputs in scratchpad/lvl/):**
+```
+python Fable2Native/tools/cook_levels.py <chapter2slums.engine_level> --cook out.f2scene \
+  --f2tool f2tool.exe --tex-cook f2native_cook_lh_tex.exe \
+  --header-bnk Globals/globals_model_headers.bnk --body-bnk chapter2slums_models.bnk --types 2,21 \
+  --terrain-ghf slums.ghf --terrain-ehf slums.ehf --terrain-stride 2 --splat-bake terrain_splat_bake.exe \
+  --level-lmp chapter2slums.lmp --water-file slums.water --water-file sea_vista.water --vista-ehf sea_vista.ehf \
+  --props --propdump propdump.exe \
+  --lights --lightdump lightdump.exe --level-save chapter2slums.save --level-gdb chapter2slums.gdb --globals-gdb Globals/globals.gdb \
+  --textures-bnk shared_6281.bnk --textures-bnk shared_2445.bnk --textures-bnk level_textures.bnk \
+  --textures-bnk Globals/1024mip0_textures.bnk --textures-bnk Globals/globals_textures.bnk
+```
+**AssetBrowser oracle (parity):** `Fable_2_Asset_Browser.exe --autoroot=<...\assets\game\data> --autoload=chapter2slums
+--autoshot=<png> --autotime=12.0 --cleanshot --autowait=120 --autoexit` — `=`-form args REQUIRED; FOREGROUND the window
+(PowerShell SetForegroundWindow) or it hangs; `--cleanshot` = no UI. ⚠ terrain_splat_bake + the *dump tools live in the
+gitignored Fable2AssetBrowser/source/build — rebuild via vcvars64+ninja (bash `cmake --build` fails: d3d11.h not on
+INCLUDE). Everything below is the older feature-complete history.
+
+## ▶▶ (history) CURRENT STATE (2026-08-11) — NATIVE LEVEL RENDER FEATURE-COMPLETE ON BOTH BACKENDS
 **Merged to `main` (origin/main @ `ece53de`).** The `agent/native-first-level-render` branch (89 commits)
 is integrated; start the next session on a **new branch off `main`**. The cooked childhood level
 (`chapter2slums`) now renders the full world on **both D3D12 and Vulkan**, screenshot-verified:
