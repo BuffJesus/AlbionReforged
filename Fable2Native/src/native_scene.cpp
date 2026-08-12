@@ -173,6 +173,15 @@ bool load_native_scene(const std::filesystem::path& path,
                 !read_value(line, parsed.sky_color[3])) {
                 return fail(&error, "invalid sky at line " + std::to_string(line_number));
             }
+        } else if (opcode == "focus") {
+            // focus <cx> <cy> <cz> <radius> — camera-fit bounds over the town geometry only
+            // (excludes horizon backdrop props). The world renderers frame this instead of the
+            // full vertex AABB.
+            if (!read_vec3(line, parsed.focus_center) ||
+                !read_value(line, parsed.focus_radius)) {
+                return fail(&error, "invalid focus at line " + std::to_string(line_number));
+            }
+            parsed.has_focus = true;
         } else if (opcode == "light") {
             // light <px> <py> <pz> <r> <g> <b> <range> <intensity>
             // (render-space position, linear-ish colour 0..1, wu radius, brightness).

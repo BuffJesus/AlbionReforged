@@ -441,8 +441,13 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     sun_direction_ = normalise(scene.sun_direction);
     sun_color_ = scene.sun_color;
     // Bounds -> auto-frame the orbit camera (mirror native_world_renderer.cpp) so the whole
-    // town is in view instead of the old fixed radius-7 demo orbit.
-    {
+    // town is in view instead of the old fixed radius-7 demo orbit. A cooked `focus` (town
+    // bounds excluding horizon backdrop props) wins so the ~1000wu spire vista doesn't blow
+    // up the fit. Mirrors the D3D12 renderer.
+    if (scene.has_focus) {
+        scene_center_ = scene.focus_center;
+        scene_radius_ = std::max(scene.focus_radius, 1.0f);
+    } else {
         std::array<float, 3> lo{geometry.vertices[0].position};
         std::array<float, 3> hi = lo;
         for (const auto& v : geometry.vertices) {

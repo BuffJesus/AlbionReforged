@@ -1026,6 +1026,8 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
 
     # Second pass: one instance record per (instance x geom-mesh).
     instances, n_inst, n_blocks, n_probed, n_fallback = [], 0, 0, 0, 0
+    backdrop_mesh_names = set()  # mesh names of horizon vista props — kept, but excluded
+                                 # from the camera-fit bounds so they don't blow up the AABB
     for block in info["prop_blocks"]:
         if block["kind"] not in types or not block.get("model"):
             continue
@@ -1298,11 +1300,14 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                 model_geoms[key] = None
                 return None
 
-            # Distant-backdrop VISTA models (RS_/TS_Vista_*, FarMountains, skydome) are
-            # enormous scenery meant to sit at the horizon behind a special vista shader.
-            # As town props they render dark AND blow up the scene AABB (shrinking the
-            # town to a dot under the auto-fit camera), so skip them — they're backdrop,
-            # not the street density this pass adds.
+            # Distant-backdrop VISTA models (RS_/TS_Vista_*, FarMountains, skydome) are the
+            # horizon scenery — e.g. the childhood Tattered Spire `TS_Vista_HalfBuilt_V1`
+            # placed at game (591,-797) ~1000wu past the town (chapter2slums.save
+            # Layer_Spire_HalfBuilt). They ARE part of the level (the AssetBrowser draws them),
+            # so we now COOK them — but we tag their meshes so the auto-fit camera bounds
+            # (the `focus` directive below) EXCLUDE them; otherwise the ~1000wu spire blows up
+            # the scene AABB and shrinks the town to a dot. They still draw, sitting small on
+            # the horizon exactly as in-game.
             def _is_backdrop(mp: str) -> bool:
                 low = mp.lower()
                 return ("vista" in low or "farmountain" in low or "skydome" in low
@@ -1314,9 +1319,7 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                 model_path = p.get("model", "")
                 if not model_path:
                     continue
-                if _is_backdrop(model_path):
-                    n_backdrop += 1
-                    continue
+                is_bd = _is_backdrop(model_path)
                 key = _norm(model_path)
                 if key not in prop_mesh_names:
                     geoms = cook_prop_model(model_path)
@@ -1348,13 +1351,24 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                 gp = p.get("pos") or [0.0, 0.0, 0.0]
                 rx, ry, rz = gp[0], gp[2], gp[1]  # game (x,y,z) -> render (x,z,y)
                 yaw = float(p.get("yaw", 0.0))
+                # Horizon backdrop props (the Tattered Spire vista, FarMountains) are huge and,
+                # shaded like town props (no probe + grazing sun), read as a black mass. The game
+                # draws the vista layer nearly UNLIT. Emulate that with a bright, slightly sky-tinted
+                # ambient SH probe (DC only) so the backdrop reads as pale distant scenery — and
+                # tag its meshes out of the camera-fit bounds. No shader change needed (the probe
+                # path already replaces the hemisphere floor when probe.w>0.5).
+                bd_sh = None
+                if is_bd:
+                    backdrop_mesh_names.update(names)
+                    n_backdrop += 1
+                    bd_sh = (0.85, 0, 0, 0, 0.90, 0, 0, 0, 1.0, 0, 0, 0)  # DC sky-ish white
                 for name in names:
-                    instances.append((name, (rx, ry, rz), yaw, 1.0))
+                    instances.append((name, (rx, ry, rz), yaw, 1.0, bd_sh))
                 n_prop_inst += 1
                 n_inst += 1
             log(f"props: cooked {n_prop_models} distinct models -> {n_prop_inst} instances "
                 f"({n_prop_skip} models skipped: unsupported mesh/no body; "
-                f"{n_backdrop} backdrop-vista entities skipped)")
+                f"{n_backdrop} backdrop-vista entities kept but excluded from camera fit)")
         except Exception as exc:  # noqa: BLE001
             log(f"  props skip ({type(exc).__name__}: {exc})")
 
@@ -1418,6 +1432,33 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
         # (env_theme_colors_re.txt §0); the world PS tints the N.L term with it.
         out.write("sunlight 1.0 0.902 0.4353\n")
         out.write("sky 0.6549 0.8157 1.0 1\n")
+        # Camera-fit bounds (render space) over the TOWN geometry only — every instance except
+        # the horizon vista props (backdrop_mesh_names). Emitting an explicit `focus` frees the
+        # renderer's auto-orbit from having to fit the ~1000wu spire (which would shrink the town
+        # to a dot). World-baked meshes (terrain/water/vista, instanced at the origin) contribute
+        # their vertex extents (game verts -> render via the {x,z,y} swap); placed props
+        # contribute their instance position.
+        mesh_verts = {m[0]: m[2] for m in meshes}
+        flo = [float("inf")] * 3
+        fhi = [float("-inf")] * 3
+        for rec in instances:
+            iname, ipos = rec[0], rec[1]
+            if iname in backdrop_mesh_names:
+                continue
+            if ipos == (0.0, 0.0, 0.0) and iname in mesh_verts:
+                vp = mesh_verts[iname]
+                for vi in range(0, len(vp), 3):
+                    for a, val in enumerate((vp[vi], vp[vi + 2], vp[vi + 1])):  # {x,z,y} swap
+                        flo[a] = min(flo[a], val)
+                        fhi[a] = max(fhi[a], val)
+            else:
+                for a in range(3):
+                    flo[a] = min(flo[a], ipos[a])
+                    fhi[a] = max(fhi[a], ipos[a])
+        if all(math.isfinite(flo[a]) and math.isfinite(fhi[a]) for a in range(3)):
+            fc = [0.5 * (flo[a] + fhi[a]) for a in range(3)]
+            fr = max(0.5 * (fhi[a] - flo[a]) for a in range(3)) or 1.0
+            out.write(f"focus {fc[0]:.6g} {fc[1]:.6g} {fc[2]:.6g} {fr:.6g}\n")
         for name, opts, base in materials:
             # Repoint albedo at the cooked loose DDS (absolute path; the runtime loads it
             # directly). Drop albedo tokens that didn't cook so the material shows its flat

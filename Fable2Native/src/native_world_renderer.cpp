@@ -350,7 +350,12 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     }
     // Fit the camera to the baked world-space geometry (a cooked level spans hundreds
     // of units; the test pyramid spans a few) so render() frames whatever we loaded.
-    {
+    // A cooked `focus` (town bounds excluding horizon backdrop props) takes precedence so the
+    // ~1000wu Tattered Spire vista doesn't blow up the fit and shrink the town to a dot.
+    if (scene.has_focus) {
+        scene_center_ = scene.focus_center;
+        scene_radius_ = std::max(scene.focus_radius, 1.0f);
+    } else {
         std::array<float, 3> lo{geometry.vertices[0].position};
         std::array<float, 3> hi = lo;
         for (const auto& v : geometry.vertices) {
