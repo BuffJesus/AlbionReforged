@@ -1,6 +1,30 @@
 # Handoff — resume here
 
-## ▶▶▶ START HERE (2026-08-14 night) — CLOUDS + MOON + STARS DONE; ★ NEXT = SUN DISC / HDR TONEMAP
+## ▶▶▶ START HERE (2026-08-14 late night) — CLOUDS+MOON+STARS+WATER-NIGHT DONE; ★ NEXT = HDR TONEMAP
+Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `8b5ddc8`. Fixed the **water night-lighting** bug
+(the canal/sea rendered a bright day-blue even at night, next to the new moon+stars). The water reflection
+hardcoded the chapter2slums *daytime* sky gradient. Per the water RE (`water_system_re.txt` §5: the water
+reflects the SKY model along the perturbed normal), it now feeds the ACTUAL cooked theme sky endpoints
+(`sky_color` zenith + `sky_horizon`) into the water reflection on both backends, plus the SAME night fade the
+atmosphere sky pass applies (sun below horizon → `sky*0.22 + night tint`). Result: night water = dark moody navy
+that blends with the night scene; midday water = the hazy-autumn theme sky (coherent with the rendered sky
+above it). Base water colour (deep/surface) left unlit (faithful to retail program 57). Added
+`sky_zenith`/`sky_horizon` to the world camera cbuffer/UBO both backends (defaults = RE'd midday, so untheme d
+scenes unchanged). Verified D3D12 == Vulkan; tests pass.
+
+⚠ **SUN DISC/BEAMS/GLARE = SKIP for chapter2slums** — confirmed (probed all TODs 5/6/7/12/17/18/19 + midnight):
+this level authors NONE at any time (disc/sunbeams/glare params all None, texture GUIDs 0). The daytime sun is
+purely the atmosphere glow. Implementing sun billboards would be UNVERIFIABLE on our test level — needs a
+different level/theme that authors them. The cook resolver already reads element[6..15] if a future level needs it.
+
+**★ NEXT — RETAIL-FIDELITY REMAINING:** (1) **HDR TONEMAP/EXPOSURE** — retail HDR-tonemaps; we clamp (the AB town
+renders darker = its exposure). The one universally-visible DAYTIME gap. ⚠ Verify the claim first (does the AB/
+retail tonemap the WORLD, or is it just lit darker?) before implementing — a global post-process is easy to get
+wrong. The retail dome exposure = dome_misc.z=10 + Reinhard (already in the sky/billboard paths). (2) sunlight
+balance (`main_light*sun_intensity`). (3) sun disc/beams/glare only if a level that authors them is cooked.
+Full list = frontier §3(e).
+
+## ▶▶ (history) START HERE (2026-08-14 night) — CLOUDS + MOON + STARS DONE; WATER-NIGHT (now DONE, see above)
 Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `94a8f9b`. Added the **procedural night star
 field** on BOTH backends — a faithful port of the retail Xenos star ucode (`SkyDomeXex` kStars*Shader): 512
 additive point-sprite quads generated entirely from `SV_VertexID`/`gl_VertexIndex` (no VB/texture), each a
