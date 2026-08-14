@@ -11,6 +11,7 @@
 #include "f2/render/texture_registry.h"
 #include "f2/render/ui_draw_list.h"
 #include "f2/native_cloud_renderer.h"
+#include "f2/native_sky_billboard_renderer.h"
 #include "f2/native_world_renderer.h"
 
 
@@ -304,6 +305,11 @@ public:
         if (!cloud_renderer_.initialise(device_.Get(), queue_.Get(), cloud_error)) {
             OutputDebugStringA(
                 ("Fable2Native: cloud renderer disabled: " + cloud_error + "\n").c_str());
+        }
+        std::string billboard_error;
+        if (!billboard_renderer_.initialise(device_.Get(), queue_.Get(), billboard_error)) {
+            OutputDebugStringA(
+                ("Fable2Native: billboard renderer disabled: " + billboard_error + "\n").c_str());
         }
         std::string ui_renderer_error;
         if (!native_ui_renderer_.initialise(device_.Get(), 1, ui_renderer_error)) {
@@ -1513,6 +1519,13 @@ private:
                                        cam.forward, width_, height_, game_.elapsed_seconds);
                 command_list_->SetDescriptorHeaps(1, heaps);
             }
+            // Celestial billboards (night moon + glare) over the clouds, behind the world.
+            if (billboard_renderer_.ready() && game_.scene.has_moon) {
+                const auto cam =
+                    world_renderer_.compute_camera(width_, height_, game_.elapsed_seconds);
+                billboard_renderer_.render(command_list_.Get(), game_.scene, cam, width_, height_);
+                command_list_->SetDescriptorHeaps(1, heaps);
+            }
             world_renderer_.render(command_list_.Get(), game_.scene, width_, height_,
                                    game_.elapsed_seconds);
         }
@@ -1672,6 +1685,7 @@ private:
     f2::NativeWorldRenderer world_renderer_;
     f2::NativeSkyRenderer sky_renderer_;  // procedural atmosphere drawn behind the world
     f2::NativeCloudRenderer cloud_renderer_;  // scrolling cloud layers over the sky, behind world
+    f2::NativeSkyBillboardRenderer billboard_renderer_;  // night moon + glare over the clouds
     f2::NativeUiRenderer native_ui_renderer_;
     f2::render::TextureRegistry texture_registry_;  // maps ui slots -> stable TextureIds (neutral scene)
     std::optional<f2::FrontendSceneBuilder> scene_builder_;  // shared backend-neutral scene builder

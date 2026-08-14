@@ -444,6 +444,19 @@ int main() {
         cloud.ambient = 0.9f;
         cloud.normal_strength = 0.5f;
         written.clouds.push_back(cloud);
+        // Celestial moon billboard must round-trip too.
+        written.has_moon = true;
+        written.moon.texture = "sky/moonphases.dds";
+        written.moon.glare_texture = "sky/sunglare.dds";
+        written.moon.direction = {0.566f, 0.766f, -0.305f};
+        written.moon.intensity = 1.0f;
+        written.moon.size = 1.7f;
+        written.moon.transparency = 3.0f;
+        written.moon.glare_intensity = 50.0f;
+        written.moon.glare_size = 1.4f;
+        written.moon.exposure = 10.0f;
+        written.moon.phase = 4;
+        written.star_brightness = 1.0f;
 
         const auto scene_path = std::filesystem::temp_directory_path() / "f2native_scene_roundtrip.f2scene";
         std::string scene_error;
@@ -486,6 +499,14 @@ int main() {
         assert(approx(reloaded.clouds[0].ambient, 0.9f));
         assert(approx(reloaded.clouds[0].normal_strength, 0.5f));
         assert(approx(reloaded.cloud_alpha_ref, 0.019608f));
+        assert(reloaded.has_moon);
+        assert(reloaded.moon.texture == "sky/moonphases.dds");
+        assert(reloaded.moon.glare_texture == "sky/sunglare.dds");
+        assert(approx(reloaded.moon.direction[1], 0.766f));
+        assert(approx(reloaded.moon.intensity, 1.0f));
+        assert(approx(reloaded.moon.glare_intensity, 50.0f));
+        assert(reloaded.moon.phase == 4);
+        assert(approx(reloaded.star_brightness, 1.0f));
         std::filesystem::remove(scene_path);
     }
 

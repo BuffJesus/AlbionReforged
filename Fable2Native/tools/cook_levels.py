@@ -1293,10 +1293,59 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
     if n_clouds:
         log(f"genv theme: {n_clouds} cloud layer(s) resolved")
 
+    # Celestial billboards (SkyboxRenderer.cpp element pass): the moon (phase billboard) + moon
+    # glare + stars, read from the Sky record. Gated by moon_intensity/star_brightness so daytime
+    # themes (moon_intensity=0) emit nothing. The sun disc/beams/glare are read too but chapter2slums
+    # authors none; other levels/themes may. Field hashes from EnvironmentThemeParser.cpp @78-96.
+    kMoonInt, kMoonSize = 0x8DA685FD, 0x771E440D
+    kMoonGlareInt, kMoonGlareSize = 0x326BAB3E, 0x593E77C4
+    kMoonTransp, kStarBright = 0xAF2DDBD4, 0xE52870D8
+    kMoonAxisElev, kMoonAxisZoff, kMoonAxisXY = 0xF32010F6, 0x425F14D0, 0x695E86AB
+    kMoonTex, kMoonGlareTex = 0x20D88F43, 0xF2C7518C
+
+    def read_tex_ref(rec, fh):
+        r = find_field(rec, fh, 0xFF)
+        if not r:
+            return 0
+        raw = beU(gd, r[1])
+        return 0 if raw in (0, 0x811C9DC5) else raw
+
+    moon = None
+    _mi = read_float(sky_rec, kMoonInt)
+    moon_intensity = _mi if _mi is not None else 0.0
+    if moon_intensity and moon_intensity > 0.0:
+        m_elev = read_float(sky_rec, kMoonAxisElev)
+        m_elev = m_elev if m_elev is not None else 26.0
+        m_zoff = read_float(sky_rec, kMoonAxisZoff) or 0.0
+        m_xy = read_float(sky_rec, kMoonAxisXY) or 0.0
+        # moon direction (EvaluateFrame lines 831-855): same tod theta as the sun, moon axis.
+        me = _m.radians(m_elev); mphi = _m.radians(m_zoff + m_xy)
+        cos_t = _m.cos(theta); sin_t = _m.sin(theta)  # theta from the sun block above
+        m_gx = cos_t * _m.cos(me); m_up = cos_t * _m.sin(me)
+        cmp_, smp = _m.cos(mphi), _m.sin(mphi)
+        mtx = -(m_gx * cmp_ - sin_t * smp)
+        mty = -m_up
+        mtz = -(m_gx * smp + sin_t * cmp_)
+        mmag = _m.sqrt(mtx * mtx + mty * mty + mtz * mtz) or 1.0
+        moon = {
+            "dir": (mtx / mmag, mty / mmag, mtz / mmag),  # render-space toward the moon
+            "intensity": moon_intensity,
+            "size": (read_float(sky_rec, kMoonSize) if read_float(sky_rec, kMoonSize) is not None else 1.0),
+            "glare_intensity": read_float(sky_rec, kMoonGlareInt) or 0.0,
+            "glare_size": (read_float(sky_rec, kMoonGlareSize) if read_float(sky_rec, kMoonGlareSize) is not None else 1.0),
+            "transparency": read_float(sky_rec, kMoonTransp) or 0.0,
+            "moon_tex": read_tex_ref(sky_rec, kMoonTex),
+            "glare_tex": read_tex_ref(sky_rec, kMoonGlareTex),
+        }
+        log(f"genv theme: moon (intensity {moon_intensity:.2f}, size {moon['size']:.2f})")
+    _sb = read_float(sky_rec, kStarBright)
+    star_brightness = _sb if _sb is not None else 0.0
+
     log(f"genv theme: dominant zone {picked_zone[0]:#010x} ({picked_zone[1]} cells), "
         f"theme @tod={picked_zone[2]:.3f} sky=({sky[0]:.3f},{sky[1]:.3f},{sky[2]:.3f}) "
         f"sun_int={sun_int:.2f}")
-    return {"clouds": clouds, "sun_dir": sun_dir, "sunlight": sunlight, "sky": sky,
+    return {"clouds": clouds, "moon": moon, "star_brightness": star_brightness,
+            "sun_dir": sun_dir, "sunlight": sunlight, "sky": sky,
             "sky_colour": sky, "sun_intensity": sun_int,
             "sun_elev": elev, "main_light": main, "tod": want,
             "horizon": horizon, "sunset": sunset, "compl_bias": compl_bias,
@@ -1962,6 +2011,39 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                     f"alpha={g('transparency', 0.0):.2f}")
             if cl_emitted:
                 log(f"clouds: emitted {cl_emitted} layer(s)")
+            # Celestial moon billboard (SkyboxRenderer.cpp element pass). Emitted only when the theme
+            # authors a moon (moon_intensity>0 -> night); daytime themes emit nothing.
+            moon = env_theme.get("moon")
+            if moon and moon.get("moon_tex"):
+                mtok = _resolve_env_texture_hash(moon["moon_tex"], tex_sources)
+                gtok = _resolve_env_texture_hash(moon["glare_tex"], tex_sources) if moon.get("glare_tex") else None
+                mdds = ""
+                if mtok:
+                    mdds = _cook_textures([mtok], tex_sources, tex_cook, f2tool,
+                                          tex_out_dir or (out_scene.parent / (out_scene.stem + ".textures")),
+                                          tmp, texture_headers_bnks=texture_headers_bnks, log=log).get(mtok, "")
+                gdds = ""
+                if gtok:
+                    gdds = _cook_textures([gtok], tex_sources, tex_cook, f2tool,
+                                          tex_out_dir or (out_scene.parent / (out_scene.stem + ".textures")),
+                                          tmp, texture_headers_bnks=texture_headers_bnks, log=log).get(gtok, "")
+                if mdds:
+                    md = moon["dir"]
+                    # sky_moon <moon_dds> <glare_dds|-> <dir.xyz> <intensity> <size> <transparency>
+                    #   <glare_intensity> <glare_size> <exposure> <phase>. exposure = the retail
+                    #   dome HDR scale (dome_misc.z = 10). phase is runtime lunar state (not in the
+                    #   theme); bake a static full moon (cell 4 of the 8-phase strip) as the
+                    #   representative, most-visible night — same static-pick spirit as --tod.
+                    out.write("sky_moon {} {} {:.6g} {:.6g} {:.6g} {:.6g} {:.6g} {:.6g} {:.6g} "
+                              "{:.6g} {:.6g} {:d}\n".format(
+                                  mdds, gdds if gdds else "-", md[0], md[1], md[2],
+                                  moon["intensity"], moon["size"], moon["transparency"],
+                                  moon["glare_intensity"], moon["glare_size"], 10.0, 4))
+                    log(f"moon: emitted (dir {md[0]:.2f},{md[1]:.2f},{md[2]:.2f})")
+            # Star brightness carried for a future procedural star field (not yet rendered).
+            sb = env_theme.get("star_brightness") or 0.0
+            if sb > 0.0:
+                out.write(f"sky_stars {sb:.5g}\n")
         else:
             # Real chapter2slums midday theme (ghidra_out/env_theme_colors_re.txt, from
             # environmentthemes.gdb, BE bytes /255): sun = light DIRECTION = -sun_toward

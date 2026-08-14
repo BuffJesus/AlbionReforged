@@ -14,6 +14,7 @@
 #include "f2/native_vulkan_world_renderer.h"
 #include "f2/native_vulkan_sky_renderer.h"
 #include "f2/native_vulkan_cloud_renderer.h"
+#include "f2/native_vulkan_sky_billboard_renderer.h"
 #include "f2/render/ui_draw_list.h"
 
 #include <windows.h>
@@ -286,6 +287,14 @@ public:
                                         cloud_error)) {
             OutputDebugStringA(
                 ("Fable2Native: Vulkan cloud renderer disabled: " + cloud_error + "\n").c_str());
+        }
+        std::string billboard_error;
+        if (!billboard_renderer_.initialise(physical_device_, device_, command_pool_, queue_,
+                                            render_pass_, msaa_samples_, F2NATIVE_VULKAN_SHADER_DIR,
+                                            billboard_error)) {
+            OutputDebugStringA(
+                ("Fable2Native: Vulkan billboard renderer disabled: " + billboard_error + "\n")
+                    .c_str());
         }
 
         ShowWindow(window_, SW_SHOWDEFAULT);
@@ -1581,6 +1590,13 @@ private:
                                        game_.scene, vp, cam.position, cam.forward,
                                        game_.elapsed_seconds);
             }
+            // Celestial billboards (night moon + glare) over the clouds, behind the world.
+            if (billboard_renderer_.ready() && game_.scene.has_moon) {
+                const f2::SkyCamera cam = world_renderer_.compute_camera(
+                    extent_.width, extent_.height, game_.elapsed_seconds);
+                billboard_renderer_.render(command_buffers_[image_index], extent_.width,
+                                           extent_.height, game_.scene, cam);
+            }
             if (msaa_clear) {
                 world_renderer_.render_opaque(command_buffers_[image_index], extent_.width,
                                               extent_.height, game_.elapsed_seconds);
@@ -1684,6 +1700,7 @@ private:
         font_texture_.destroy();
         video_texture_.destroy();
         video_decoder_.close();
+        billboard_renderer_.destroy();
         cloud_renderer_.destroy();
         sky_renderer_.destroy();
         world_renderer_.destroy();
@@ -1761,6 +1778,7 @@ private:
     f2::NativeVulkanWorldRenderer world_renderer_;
     f2::NativeVulkanSkyRenderer sky_renderer_;
     f2::NativeVulkanCloudRenderer cloud_renderer_;
+    f2::NativeVulkanSkyBillboardRenderer billboard_renderer_;
     bool world_cam_initialised_ = false;
     std::array<float, 3> character_offset_{0.0f, 0.0f, 0.0f};
     float character_motion_phase_ = 0.0f;

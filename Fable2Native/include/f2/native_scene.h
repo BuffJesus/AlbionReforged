@@ -88,11 +88,33 @@ struct NativeCloudLayer {
     float normal_strength = 0.0f;  // authored; runtime -> ShaderNormalStrength -> layer_params.w
 };
 
+// Celestial moon billboard (theme Sky element pass; SkyboxRenderer.cpp draw_billboard). Present
+// only when the theme authors a moon (moon_intensity>0 → night). `texture` = the MoonPhases DDS
+// (an 8-phase horizontal strip), `glare_texture` = the moon-glare DDS (additive halo). `direction`
+// = render-space toward the moon; the billboard is a camera-facing quad drawn after the clouds and
+// behind the world. has_moon=false → no moon pass, so daytime scenes are unchanged.
+struct NativeMoon {
+    std::string texture;
+    std::string glare_texture;
+    std::array<float, 3> direction{0.0f, 1.0f, 0.0f};
+    float intensity = 0.0f;
+    float size = 1.0f;
+    float transparency = 0.0f;
+    float glare_intensity = 0.0f;
+    float glare_size = 1.0f;
+    float exposure = 10.0f;  // retail dome HDR scale (dome_misc.z); billboard colour is tonemapped
+    int phase = 0;           // 0..7 lunar-cycle phase = the horizontal cell of the 8-phase strip
+};
+
 struct NativeScene {
     std::vector<NativeMaterial> materials;
     std::vector<NativeMesh> meshes;
     std::vector<NativeInstance> instances;
     std::vector<NativeLight> lights;
+    // Celestial moon (theme Sky element pass). Present only at night.
+    bool has_moon = false;
+    NativeMoon moon;
+    float star_brightness = 0.0f;  // carried for a future procedural star field (not yet rendered)
     // Cloud layers (theme Clouds). Empty by default so scenes without a `cloud_layer` opcode
     // render exactly as before. cloud_global.x = global brightness, .z = alpha-test reference.
     std::vector<NativeCloudLayer> clouds;

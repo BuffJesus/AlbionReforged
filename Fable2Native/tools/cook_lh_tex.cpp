@@ -307,6 +307,27 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Header-backed pf39 (DXT5/BC3) bare payload: same shape as the pf40 BC5 case but a DXT5
+    // mip. globals sky textures (MoonPhases 1024x128, etc.) ship this way — a BE mip0-size prefix
+    // then an Xbox360-tiled DXT5 mip0. Untile + endian-swap and emit a DXT5 DDS (the runtime
+    // decodes DXT5); the LhTex path below would mis-read the raw payload as a definition header.
+    if (pf == 39 && arg_w > 0 && arg_h > 0 && bytes.size() >= 4) {
+        const std::size_t blocks_w = (static_cast<std::size_t>(arg_w) + 3u) / 4u;
+        const std::size_t blocks_h = (static_cast<std::size_t>(arg_h) + 3u) / 4u;
+        const std::size_t mip_size = blocks_w * blocks_h * 16u;
+        const auto declared = read_be32(bytes, 0);
+        if (declared == mip_size && bytes.size() >= 4u + mip_size) {
+            std::vector<std::uint8_t> linear;
+            untile_xbox360_bc(bytes.data() + 4, mip_size, linear, arg_w, arg_h, 16);
+            swap_bc_endian(linear);
+            if (!write_dds(output, static_cast<std::uint32_t>(arg_w),
+                           static_cast<std::uint32_t>(arg_h), linear, "DXT5"))
+                return fail("unable to write output: " + output);
+            printf("%dx%d (header PF39 DXT5) -> %s\n", arg_w, arg_h, output.c_str());
+            return 0;
+        }
+    }
+
     const auto comp = read_be32(bytes, 0);
     const auto data_off = read_be32(bytes, 4);
     const auto data_size = read_be32(bytes, 8);

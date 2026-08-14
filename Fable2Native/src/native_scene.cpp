@@ -279,6 +279,25 @@ bool load_native_scene(const std::filesystem::path& path,
                 return fail(&error, "invalid cloud_layer at line " + std::to_string(line_number));
             }
             parsed.clouds.push_back(std::move(layer));
+        } else if (opcode == "sky_moon") {
+            // sky_moon <moon_dds> <glare_dds|-> <dir.x> <dir.y> <dir.z> <intensity> <size>
+            //   <transparency> <glare_intensity> <glare_size> <exposure> <phase>
+            NativeMoon moon;
+            std::string glare;
+            if (!(line >> moon.texture) || !(line >> glare) ||
+                !read_vec3(line, moon.direction) || !read_value(line, moon.intensity) ||
+                !read_value(line, moon.size) || !read_value(line, moon.transparency) ||
+                !read_value(line, moon.glare_intensity) || !read_value(line, moon.glare_size) ||
+                !read_value(line, moon.exposure) || !read_value(line, moon.phase)) {
+                return fail(&error, "invalid sky_moon at line " + std::to_string(line_number));
+            }
+            if (glare != "-") moon.glare_texture = glare;
+            parsed.moon = std::move(moon);
+            parsed.has_moon = true;
+        } else if (opcode == "sky_stars") {
+            if (!read_value(line, parsed.star_brightness)) {
+                return fail(&error, "invalid sky_stars at line " + std::to_string(line_number));
+            }
         } else {
             return fail(&error, "unknown opcode '" + opcode + "' at line " +
                                   std::to_string(line_number));
@@ -361,6 +380,15 @@ bool save_native_scene(const std::filesystem::path& path,
                    << c.brightness << ' ' << c.ambient << ' ' << c.normal_strength << '\n';
         }
     }
+    if (scene.has_moon) {
+        const NativeMoon& m = scene.moon;
+        output << "sky_moon " << m.texture << ' '
+               << (m.glare_texture.empty() ? "-" : m.glare_texture) << ' ' << m.direction[0] << ' '
+               << m.direction[1] << ' ' << m.direction[2] << ' ' << m.intensity << ' ' << m.size
+               << ' ' << m.transparency << ' ' << m.glare_intensity << ' ' << m.glare_size << ' '
+               << m.exposure << ' ' << m.phase << '\n';
+    }
+    if (scene.star_brightness > 0.0f) output << "sky_stars " << scene.star_brightness << '\n';
     return static_cast<bool>(output);
 }
 
