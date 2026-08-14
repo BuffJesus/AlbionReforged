@@ -1,6 +1,37 @@
 # Handoff — resume here
 
-## ▶▶▶ START HERE (2026-08-13 night) — ATMOSPHERE DONE; ★ NEXT SESSION = CLOUD LAYERS
+## ▶▶▶ START HERE (2026-08-14) — CLOUD LAYERS DONE; ★ NEXT = CELESTIAL BILLBOARDS / HDR TONEMAP
+Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `91af4f2`. This session shipped the
+**scrolling cloud layers** (the biggest remaining sky-fidelity gap — the dark band across the top of the
+AB oracle), on BOTH D3D12 + Vulkan, screenshot-verified in parity and against the oracle. Port source =
+AssetBrowser `SkyboxRenderer.cpp` kCloud*Shader + `CloudRuntime` (`sky_system_re.txt` §Phase-2).
+- **Cook** (`cook_levels.py`): `resolve_genv_theme` reads the theme **Clouds** record (`0x7439046F`) → up to 4
+  **Layer** records (density GUID `0x13821B7F` + scroll/shape/lighting params); `cook_level` resolves the
+  density GUID → its `.tex` via the retail `EnvironmentTextureHash` FNV-1 (`_resolve_env_texture_hash`, over
+  the texture-bnk names — validated against the moon/disc/sunbeams textures that also resolve), cooks it to
+  DDS, and emits `cloud_globals` + one `cloud_layer` per layer. chapter2slums midday = **3 layers** (cloud_03
+  ×2 at h=500/250, cloud_02 at h=200; L4 has no density → skipped). Automatic whenever `--genv` is passed.
+- **Scene**: `NativeCloudLayer` + cloud globals in `NativeScene`; F2SCENE parse/save + round-trip unit test.
+- **Renderers**: `NativeCloudRenderer` (D3D12) + `NativeVulkanCloudRenderer` (+ `native_cloud.vert/.frag`),
+  self-contained (own PSO/pipeline, per-layer density texture, dynamic quad, alpha-blend/no-depth). Drawn
+  AFTER the sky, BEFORE the world, high→low; share the world renderer's exact VP via a new
+  `compute_view_projection` on both backends. Cloud quad = flat, centred at world origin, at Y=height, ±size.
+- **Verified**: `native_shots/`-style shots `clouds_{d3d12,vulkan}.png` show the dark cloud band == the AB
+  oracle's (`oracle_midday_sky.png`); `f2native_core_tests` pass (incl. the new cloud round-trip).
+- ⚠ Repro: my `scratchpad/make_cloud_scene.py` appends cloud opcodes to `out_genv.f2scene` → `out_clouds.f2scene`
+  for a fast render test WITHOUT a full recook; the canonical recook (below, with `--genv`) now emits clouds
+  inline (same code path, unit-tested). A full recook was NOT re-run this session (clouds validated via the
+  append scene + the isolated resolve/cook tests).
+
+**★ NEXT — RETAIL-FIDELITY REMAINING (frontier §3(e), pick the biggest visible gap):** (1) **CELESTIAL
+BILLBOARDS** — sun disc / sun beams / glare / moon (phase) / stars; the theme already resolves these texture
+GUIDs (disc/moon/moonglare/sunbeams/glare all resolve via `_resolve_env_texture_hash`), so this mirrors the
+cloud port: cook the billboard textures + element params (`SkyElementCB`), add a billboard sub-pass after the
+clouds (SkyboxRenderer.cpp `draw_billboard` @1558-1734 + `SkyXex::k*Distance/SizeScale`). (2) **HDR TONEMAP/
+EXPOSURE** — retail HDR-tonemaps; we clamp (the AB town renders darker = its exposure) — a post-process pass.
+(3) water night-lighting; (4) sunlight balance. Full list = frontier §3(e) below.
+
+## ▶▶ (history) START HERE (2026-08-13 night) — ATMOSPHERE DONE; CLOUD LAYERS (now DONE, see above)
 Branch **`agent/native-spec-maps-and-char`** (off `main` @ `ece53de`), **pushed → PR #3**. USER DIRECTIVE: *"match
 the retail game as closely as possible."* This session completed the whole per-level **atmosphere pipeline** (all
 theme-driven, both D3D12 + Vulkan, screenshot-verified in parity, backward-compatible/opt-in):
