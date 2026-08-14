@@ -30,6 +30,11 @@ struct Constants {
     float fog_color[4]{0.0f, 0.0f, 0.0f, 0.0f};        // rgb + w = max density (0 = off)
     float fog_range[4]{0.0f, 1.0f, 0.0f, 0.0f};        // x = start dist, y = end dist
     float viewport_size[4]{0.0f, 0.0f, 0.0f, 0.0f};    // xy = render width/height
+    // Theme sky endpoints (zenith + horizon), so the water reflection tracks the ACTUAL rendered
+    // sky per time-of-day (night = dark) instead of a hardcoded daytime gradient. Defaults = the
+    // RE'd chapter2slums midday values so scenes without a theme are unchanged.
+    float sky_zenith[4]{0.6549f, 0.8157f, 1.0f, 1.0f};
+    float sky_horizon[4]{0.222f, 0.5789f, 1.11f, 1.0f};
 };
 
 // b1 point-light cbuffer (level_lights_effects_re.txt §3.1). Mirrors the HLSL layout:
@@ -506,6 +511,8 @@ cbuffer Camera : register(b0) {
     float4 fog_color;   // rgb = fog colour, w = max density (0 = off)
     float4 fog_range;   // x = start dist, y = end dist
     float4 viewport_size;
+    float4 sky_zenith;   // theme sky gradient top (water reflection tracks the real sky)
+    float4 sky_horizon;  // theme sky gradient bottom
 };
 // Local point lights (level_lights_effects_re.txt §3.1): lamp posts, lanterns, braziers.
 cbuffer Lights : register(b1) {
@@ -640,8 +647,13 @@ float4 ps_water(PSInput input) : SV_TARGET {
     float sky_t = saturate(reflection_ray.y * 0.5 + 0.5);
     // The reflection stand-in follows the same resolved chapter2slums theme endpoints as the
     // native sky pass: complementary horizon → sky_colour zenith (env_theme_colors_re §0).
-    float3 sky = lerp(float3(0.222, 0.5789, 1.11),
-                      float3(0.6549, 0.8157, 1.0), sky_t);
+    // Reflect the ACTUAL theme sky (per time-of-day) so night water goes dark, matching the
+    // rendered sky gradient (horizon -> zenith) instead of a hardcoded daytime blue.
+    float3 sky = lerp(sky_horizon.rgb, sky_zenith.rgb, sky_t);
+    // Apply the SAME night fade the atmosphere sky pass applies, so the water reflects the real
+    // rendered night sky (sun_direction = light-travel dir; sun below horizon -> night).
+    float wnight = saturate((sun_direction.y + 0.05) / 0.45);
+    sky = lerp(sky, sky * 0.22 + float3(0.010, 0.018, 0.050), wnight);
     float fres_reflect = saturate(fres + reflection_bias);
     float distf = saturate(length(eye_time.xyz - wp) / 75.0);
     float refl_strength = saturate(water_params[7].y);
@@ -924,6 +936,10 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     constants.fog_color[3] = scene.fog_max;
     constants.fog_range[0] = scene.fog_start;
     constants.fog_range[1] = scene.fog_end;
+    for (int i = 0; i < 3; ++i) {
+        constants.sky_zenith[i] = scene.sky_color[i];
+        constants.sky_horizon[i] = scene.sky_horizon_color[i];
+    }
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     // The world render must set its OWN viewport/scissor — nothing else does before it,

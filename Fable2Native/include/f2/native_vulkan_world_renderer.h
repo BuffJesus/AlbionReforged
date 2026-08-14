@@ -100,6 +100,9 @@ private:
     float scene_fog_start_ = 0.0f;
     float scene_fog_end_ = 1.0f;
     float scene_fog_max_ = 0.0f;
+    // Theme sky endpoints -> the water reflection tracks the real rendered sky per time-of-day.
+    std::array<float, 4> scene_sky_zenith_{0.6549f, 0.8157f, 1.0f, 1.0f};
+    std::array<float, 3> scene_sky_horizon_{0.222f, 0.5789f, 1.11f};
     std::array<float, 3> scene_center_{0.0f, 0.0f, 0.0f};    // geometry bounds -> auto-frame camera
     float scene_radius_ = 1.0f;
     bool free_camera_ = false;

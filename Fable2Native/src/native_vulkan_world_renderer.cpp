@@ -26,6 +26,10 @@ struct Constants {
     std::array<float, 4> eye_time{0.0f, 0.0f, 0.0f, 0.0f};        // xyz = camera eye, w = seconds
     std::array<float, 4> fog_color{0.0f, 0.0f, 0.0f, 0.0f};       // rgb + w = max density (0 = off)
     std::array<float, 4> fog_range{0.0f, 1.0f, 0.0f, 0.0f};       // x = start dist, y = end dist
+    // Theme sky endpoints so the water reflection tracks the actual rendered sky per time-of-day
+    // (night = dark) instead of a hardcoded daytime gradient. Mirrors the D3D12 layout.
+    std::array<float, 4> sky_zenith{0.6549f, 0.8157f, 1.0f, 1.0f};
+    std::array<float, 4> sky_horizon{0.222f, 0.5789f, 1.11f, 1.0f};
 };
 
 // b1-equivalent point-light UBO (level_lights_effects_re.txt §3.1); mirrors the D3D12 layout.
@@ -455,6 +459,8 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     scene_fog_start_ = scene.fog_start;
     scene_fog_end_ = scene.fog_end;
     scene_fog_max_ = scene.fog_max;
+    scene_sky_zenith_ = scene.sky_color;
+    scene_sky_horizon_ = scene.sky_horizon_color;
     // Bounds -> auto-frame the orbit camera (mirror native_world_renderer.cpp) so the whole
     // town is in view instead of the old fixed radius-7 demo orbit. A cooked `focus` (town
     // bounds excluding horizon backdrop props) wins so the ~1000wu spire vista doesn't blow
@@ -995,6 +1001,9 @@ void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
     constants.fog_color = {scene_fog_color_[0], scene_fog_color_[1], scene_fog_color_[2],
                            scene_fog_max_};
     constants.fog_range = {scene_fog_start_, scene_fog_end_, 0.0f, 0.0f};
+    constants.sky_zenith = {scene_sky_zenith_[0], scene_sky_zenith_[1], scene_sky_zenith_[2], 1.0f};
+    constants.sky_horizon = {scene_sky_horizon_[0], scene_sky_horizon_[1], scene_sky_horizon_[2],
+                             1.0f};
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width),

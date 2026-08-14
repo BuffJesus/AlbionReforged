@@ -13,6 +13,8 @@ layout(set = 0, binding = 0) uniform Camera {
     vec4 eye_time;   // xyz = camera eye (world), w = elapsed seconds
     vec4 fog_color;  // rgb = fog colour, w = max density (0 = off)
     vec4 fog_range;  // x = start dist, y = end dist
+    vec4 sky_zenith;   // theme sky gradient top (water reflection tracks the real sky)
+    vec4 sky_horizon;  // theme sky gradient bottom
 } camera;
 layout(set = 0, binding = 1) uniform sampler2D albedo;
 layout(set = 0, binding = 2) uniform sampler2D normalTex;
@@ -67,9 +69,13 @@ vec4 water() {
     vec3 reflection_ray = reflect(-V, N);
     reflection_ray.y = abs(reflection_ray.y);
     float sky_t = clamp(reflection_ray.y * 0.5 + 0.5, 0.0, 1.0);
-    // Same resolved chapter2slums theme endpoints as the native sky pass
-    // (env_theme_colors_re §0): complementary horizon -> sky_colour zenith.
-    vec3 sky = mix(vec3(0.222, 0.5789, 1.11), vec3(0.6549, 0.8157, 1.0), sky_t);
+    // Reflect the ACTUAL theme sky (per time-of-day) so night water goes dark, matching the
+    // rendered sky gradient (horizon -> zenith) instead of a hardcoded daytime blue.
+    vec3 sky = mix(camera.sky_horizon.rgb, camera.sky_zenith.rgb, sky_t);
+    // Apply the SAME night fade the atmosphere sky pass applies, so the water reflects the real
+    // rendered night sky (camera.sun_direction = light-travel dir; sun below horizon -> night).
+    float wnight = clamp((camera.sun_direction.y + 0.05) / 0.45, 0.0, 1.0);
+    sky = mix(sky, sky * 0.22 + vec3(0.010, 0.018, 0.050), wnight);
     float refl_strength = clamp(water_params.params[7].y, 0.0, 1.0);
     float refl = refl_strength * mix(fres_reflect, 1.0, distf);
     vec3 col = watercol * (1.0 - refl_strength) + sky * refl;
