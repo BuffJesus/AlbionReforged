@@ -1,5 +1,45 @@
 # Handoff — resume here
 
+## ▶▶▶ START HERE (2026-08-13 night) — ATMOSPHERE DONE; ★ NEXT SESSION = CLOUD LAYERS
+Branch **`agent/native-spec-maps-and-char`** (off `main` @ `ece53de`), **pushed → PR #3**. USER DIRECTIVE: *"match
+the retail game as closely as possible."* This session completed the whole per-level **atmosphere pipeline** (all
+theme-driven, both D3D12 + Vulkan, screenshot-verified in parity, backward-compatible/opt-in):
+`.genv` theme resolver → `sun`/`sunlight`/`sky` → `sky_horizon` → `sky_sunset` → `sky_bias` → distance `fog` →
+**analytic single-scattering atmosphere sky** (`sky_atmos`, ported from the retail-reference AssetBrowser
+`SkyboxRenderer.cpp` PS; replaced the flat gradient). Commits `4d22d3e`→`8c236d8`. World-gaps question was
+investigated and CLOSED: **the gaps are BY-DESIGN backdrop void** (bounded [0,288]² slab + castle/sea are backdrop);
+do NOT fabricate terrain (see the WORLD-GAPS VERDICT block in frontier §3 below). Added AssetBrowser headless camera
+control (`--autoyaw/--autodist/--autoheight`) for oracle A/B; the AssetBrowser is the retail-fidelity oracle.
+
+**★ NEXT TASK — CLOUD LAYERS (queued, not started; user going to bed 2026-08-13).** Retail draws up to 4 scrolling
+cloud layers (the dark band across the top of the AB oracle) — the most visible remaining sky-fidelity gap. This is
+BIGGER than the atmosphere port: it needs cloud GEOMETRY (flat layer quads at cloud heights) + a cloud DENSITY TEXTURE
+cook + a new cloud pass, on both backends. Concrete plan (mirror the `sky_atmos` port pattern + add geometry/texture):
+1. **Resolve** (cook_levels.py `resolve_genv_theme`): read the theme `Clouds` sub-record (hash `0x7439046F`) → up to 4
+   `Layer` records (`0x6A570941..44`; `finaliseCloudTheme` counts non-empty). Each layer has a **density-map texture
+   hash** (`kHashDensityMap 0x13821B7F` → cook to DDS via the existing `_cook_textures` path) + per-layer params
+   (height, scroll speed, tint, density/alpha) + global cloud brightness/alpha-ref. Field hashes + reader:
+   `EnvironmentThemeParser.cpp` `applyCloudThemeRecord` @1381 + the per-layer reader ~1300-1360 + `kHash*` @39-44.
+2. **Cook**: emit each layer as F2SCENE (e.g. `cloud_layer <density_dds> <height> <scrollU> <scrollV> <tintRGB>
+   <density> ...`) + a global `cloud_globals`. Cook the density DDS alongside the other textures.
+3. **Render** (both backends, new cloud sub-pass drawn AFTER the sky atmosphere, alpha-blended, BEHIND world; distant):
+   draw a flat quad per layer at its cloud height; PS = `SkyboxRenderer.cpp:287-358` (sample `cloud_density.a`,
+   distance-fade beyond 1000u, gradient-normal lighting from 4 neighbour taps, `alpha = density*layer.x*fade`,
+   alpha-test discard). CloudCB (b5) fields: view_projection, viewer_pos/dir, light_pos/colour,
+   `layer_params{x=alpha mult, y=ambient, z=colour mult, w=normal-up}`, `uv_scale_offset` (= cloud_motion × elapsed
+   time, the scroll), `cloud_globals{x=brightness, z=alpha ref}`. The SkyCB cloud fields are `SkyboxRenderer.cpp`
+   105-121 (`cloud_layer/shape/motion/light[4]`, `cloud_global`, `cloud_density_flags`); the per-frame blend is
+   `SkyboxRenderer.cpp:653-660`. Reference: `sky_system_re.txt` §Phase-2.
+4. **Verify** vs the AB oracle at a matched angle (`scratchpad/ab_shot.ps1 -Yaw/-Dist/-Height`), both backends.
+RETAIL-FIDELITY REMAINING AFTER CLOUDS: celestial billboards (sun disc/moon/stars, need textures); HDR tonemap/exposure
+(AB town renders darker = its exposure); water night-lighting (water stays bright at night). Full list in frontier §3(e).
+
+**Repro helpers (this session, in scratchpad/):** `recook_genv.sh` (full recook WITH `--genv` → out_genv.f2scene, now
+emits all sky opcodes incl. `sky_atmos`/`fog`); `shot_world.ps1 -Backend d3d12|vulkan -Scene <f2scene> -Tag <t>`
+(launch+PrintWindow both backends); `make_tod.py <hours> <tag>` (patch a TOD variant scene — carries all opcodes);
+`ab_shot.ps1 -Tag <t> -Yaw -Dist -Height -Pitch -Time` (AssetBrowser oracle capture with the new camera control).
+Shots in `native_shots/` (gitignored): `world_atmos_{midday,night}_{d3d12,vulkan}.png`, `oracle_*.png`.
+
 ## ▶▶ CURRENT STATE (2026-08-11 night) — LEVEL FIDELITY PASS; OPEN = castle↔terrain WATER JUNCTION ★ START HERE
 Branch **`agent/native-spec-maps-and-char`** (off `main` @ `ece53de`; ~13 commits, NOT yet merged). This session
 did a big "why does chapter2slums still look wrong" pass, diffing our native render against the **AssetBrowser oracle**
@@ -97,6 +137,7 @@ python Fable2Native/tools/cook_levels.py <chapter2slums.engine_level> --cook out
   --header-bnk Globals/globals_model_headers.bnk --body-bnk chapter2slums_models.bnk --types 2,21 \
   --terrain-ghf slums.ghf --terrain-ehf slums.ehf --terrain-stride 2 --splat-bake terrain_splat_bake.exe \
   --level-lmp chapter2slums.lmp --water-file slums.water --water-file sea_vista.water \
+  --genv slums.genv --env-gdb Globals/../environmentthemes/environmentthemes.gdb --tod 12 \
   --props --propdump propdump.exe \
   --lights --lightdump lightdump.exe --level-save chapter2slums.save --level-gdb chapter2slums.gdb --globals-gdb Globals/globals.gdb \
   --textures-bnk shared_6281.bnk --textures-bnk shared_2445.bnk --textures-bnk level_textures.bnk \
