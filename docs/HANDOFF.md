@@ -1,6 +1,25 @@
 # Handoff — resume here
 
-## ▶▶▶ START HERE (2026-08-14 late) — CLOUDS + NIGHT MOON DONE; ★ NEXT = STARS / SUN DISC / HDR TONEMAP
+## ▶▶▶ START HERE (2026-08-14 night) — CLOUDS + MOON + STARS DONE; ★ NEXT = SUN DISC / HDR TONEMAP
+Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `94a8f9b`. Added the **procedural night star
+field** on BOTH backends — a faithful port of the retail Xenos star ucode (`SkyDomeXex` kStars*Shader): 512
+additive point-sprite quads generated entirely from `SV_VertexID`/`gl_VertexIndex` (no VB/texture), each a
+hashed hemisphere direction with a time-scaled twinkle, projected through the shared SkyCamera. Gated by the
+already-cooked `sky_stars` (star_brightness>0 → night); drawn last of the sky passes (retail order), behind the
+world. Exactness note: the retail shader projects in engine space (x,z,y); the math is byte-identical and the
+direction's always-positive up-component (r2.z) is remapped to render-space Y — algebraically the same
+projection. Point size = retail kStarPointSize (1.5)/viewport. `NativeSkyStarsRenderer` (D3D12) +
+`NativeVulkanSkyStarsRenderer` (+ `native_stars.vert/.frag`), self-contained. Verified: scattered twinkling
+stars across the upper night sky, D3D12 == Vulkan (`native_shots`-style `night_stars_{d3d12,vulkan}`); tests pass.
+
+**★ NEXT — RETAIL-FIDELITY REMAINING:** (1) **SUN DISC/BEAMS/GLARE** — for levels/themes that author them
+(chapter2slums authors none at any time; the cook resolver already reads the element params/textures — just not
+emitted). Same billboard pattern as the moon (add sun-element opcodes + draw them in the billboard pass; the
+disc/sunbeams/glare are element[6..15], gated by sky_params.x). (2) **HDR TONEMAP/EXPOSURE** — retail
+HDR-tonemaps; we clamp (the AB town renders darker = its exposure) — a post-process pass, the one universally-
+visible DAYTIME gap. (3) water night-lighting; (4) sunlight balance. Full list = frontier §3(e).
+
+## ▶▶ (history) START HERE (2026-08-14 late) — CLOUDS + NIGHT MOON DONE; STARS (now DONE, see above)
 Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `960152b`. Continuing the sky-fidelity work,
 this session added **celestial moon + glare billboards** (night) on BOTH backends, after the cloud layers.
 - **Data finding (grounded):** at MIDDAY chapter2slums authors NO celestial billboards (moon_intensity=0,
