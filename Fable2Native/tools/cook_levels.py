@@ -915,6 +915,260 @@ def _build_ehf(ehf_bytes: bytes):
     return (pos, nrm, uv, idx) if idx else None
 
 
+def resolve_genv_theme(genv_path: Path, env_gdb_path: Path,
+                       tod_hours: float = 12.0, log=print):
+    """Failure-safe wrapper: any parse error -> None (falls back to hardcoded theme)."""
+    try:
+        return _resolve_genv_theme_impl(genv_path, env_gdb_path, tod_hours, log)
+    except Exception as e:  # corrupt/truncated .genv or .gdb must never crash the cook
+        log(f"genv theme: parse failed ({type(e).__name__}: {e}); using hardcoded theme")
+        return None
+
+
+def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
+                             tod_hours: float, log):
+    """Resolve a level's representative environment theme from its per-cell .genv grid.
+
+    .genv STRUCTURE (byte-verified against slums.genv, and independently re-derived):
+    a 0x20 header + a dim x dim (dim @0x14/0x18 = 72) grid of BE-u32 cells (row
+    stride @0x0C/0x10 = dim*4 = 0x120, cell world-scale float @0x1C = 4.0), where
+    0xFFFFFFFF = no zone and every other value is an environmentthemes.gdb record
+    GUID = a per-region EnvironmentThemeDaySet. Each DaySet holds per-hour entry
+    records {TimeOfDay(hours 0..24), Theme ref}; the theme's Sky/Lighting sub-records
+    (via 64-deep Parent inheritance) carry the colours. This CORRECTS the stale
+    env_theme_colors_re.txt §4 note that called these values "coincidental floats".
+
+    The colour/inheritance reads faithfully mirror the shipped Fable2AssetBrowser
+    EnvironmentThemeParser (findField Parent walk, normalizeTimeOfDay hours->0..1,
+    readColour sub-record-OR-flat, clamp01(v/255)*Factor).
+
+    HEURISTIC (cook-only, NOT engine parity): the retail engine does NOT sample
+    .genv per-cell — it blends one level-wide DaySet by the game clock. For a
+    STATIC bake we pick the DOMINANT (largest) zone's DaySet as the play-area's
+    representative theme (verified: the town's 457-cell zone; PlayerStart-cell
+    sampling would land in an undefined cell / the black backdrop zone here, so it
+    is deliberately NOT used). Then select its nearest-to-`tod_hours` theme and
+    return the values cook_level emits as sun/sunlight/sky.
+
+    Returns a dict (sun_dir, sunlight, sky, plus raw params) or None on failure.
+    """
+    import struct as _st, math as _m
+    try:
+        gv = genv_path.read_bytes()
+        gd = env_gdb_path.read_bytes()
+    except OSError as e:
+        log(f"genv theme: cannot read inputs ({e}); using hardcoded theme")
+        return None
+    beU = lambda b, o: _st.unpack_from(">I", b, o)[0]
+    beF = lambda b, o: _st.unpack_from(">f", b, o)[0]
+
+    # --- .genv grid: dominant zone GUID by cell count -------------------------
+    stride = beU(gv, 0x0C); dim = beU(gv, 0x14)
+    if dim <= 0 or dim > 4096 or stride != dim * 4 or 0x20 + dim * stride > len(gv):
+        log(f"genv theme: unexpected .genv header (dim={dim} stride={stride}); skipping")
+        return None
+    from collections import Counter
+    cells = Counter()
+    for r in range(dim):
+        row = 0x20 + r * stride
+        for c in range(dim):
+            v = beU(gv, row + c * 4)
+            if v != 0xFFFFFFFF:
+                cells[v] += 1
+    if not cells:
+        log("genv theme: no zones in .genv; skipping")
+        return None
+
+    # --- environmentthemes.gdb reader (§1 recipe, big-endian) -----------------
+    if gd[0:4] != b"GDB\x00":
+        log("genv theme: env gdb bad magic; skipping"); return None
+    count = beU(gd, 0x04); size_a = beU(gd, 0x08); size_b = beU(gd, 0x0C)
+    schema_base = 0x18 + size_a; hash_base = schema_base + size_b
+    keys = [beU(gd, hash_base + i * 4) for i in range(count)]
+    rec_off = []; cur = 0x18
+    for _ in range(count):
+        rec_off.append(cur); so = schema_base + beU(gd, cur); fc = beU(gd, so) >> 8
+        if fc > 256:
+            fc = (gd[so] | (gd[so + 1] << 8)) + gd[so + 2]
+        cur += 4 + fc * 4
+
+    def lookup(g):
+        lo, hi = 0, count - 1
+        while lo <= hi:
+            m = (lo + hi) // 2
+            if keys[m] == g: return m
+            if keys[m] < g: lo = m + 1
+            else: hi = m - 1
+        return -1
+
+    def fields(rec):
+        so = schema_base + beU(gd, rec); fc = beU(gd, so) >> 8
+        if fc > 256:
+            fc = (gd[so] | (gd[so + 1] << 8)) + gd[so + 2]
+        H = [beU(gd, so + 4 + i * 4) for i in range(fc)]
+        D = [beU(gd, so + 4 + fc * 4 + i * 4) for i in range(fc)]
+        return H, D
+
+    kParent = 0x5F6317D5
+
+    def find_local(rec, fh, etype):
+        H, D = fields(rec)
+        for i, h in enumerate(H):
+            if h == fh:
+                t = D[i] >> 24
+                if etype == 0xFF or t == etype:
+                    return (t, rec + 4 + i * 4)
+        return None
+
+    def find_field(rec, fh, etype=0xFF):
+        cur = rec; seen = set()
+        for _ in range(64):
+            if cur in seen: return None
+            seen.add(cur)
+            r = find_local(cur, fh, etype)
+            if r: return r
+            p = find_local(cur, kParent, 6)  # oracle: Parent is strictly type-6
+            if not p: return None
+            praw = beU(gd, p[1])
+            if praw == 0: return None
+            pi = lookup(praw)
+            if pi < 0: return None
+            cur = rec_off[pi]
+        return None
+
+    def to_record(res):
+        t, vo = res; raw = beU(gd, vo)
+        if raw == 0 or t not in (4, 6, 7): return None
+        i = lookup(raw); return rec_off[i] if i >= 0 else None
+
+    def resolve_ref(rec, fh):
+        r = find_field(rec, fh, 0xFF); return to_record(r) if r else None
+
+    def read_float(rec, fh):
+        r = find_field(rec, fh, 3)
+        if not r: return None
+        v = beF(gd, r[1])
+        return v if _m.isfinite(v) else None  # oracle readFloat rejects non-finite
+
+    def clamp01(x): return 0.0 if x < 0 else 1.0 if x > 1 else x
+
+    kRed, kGreen, kBlue, kFactor = 0x3A232172, 0x608C9792, 0xB1911CC9, 0xBF21DA70
+
+    def read_colour(rec, rh, gh, bh):
+        r = read_float(rec, rh); g = read_float(rec, gh); b = read_float(rec, bh)
+        if None in (r, g, b): return None
+        return [clamp01(r / 255.0), clamp01(g / 255.0), clamp01(b / 255.0)]
+
+    def read_colour_subrec(rec, fh):
+        c = resolve_ref(rec, fh)
+        if c is None: return None
+        o = read_colour(c, kRed, kGreen, kBlue)
+        if o is None: return None
+        f = read_float(c, kFactor)
+        if f and f > 0: o = [x * f for x in o]
+        return o
+
+    def read_flat(rec, rh, gh, bh, fh):
+        o = read_colour(rec, rh, gh, bh)
+        if o is None: return None
+        f = read_float(rec, fh) if fh else None
+        if f and f > 0: o = [x * f for x in o]
+        return o
+
+    kSky, kLighting, kMain = 0x2420BFA4, 0x0B152C5D, 0x40A12D92
+    kSkyColour = 0xD78A6E40
+    SR, SG, SB, SF = 0x86B2D6AD, 0x0E4C7541, 0xFDCC27B4, 0x1273DB31
+    MR, MG, MB, MF = 0x9F76036F, 0xE3D88F9B, 0x3E7D387A, 0xE67DD6DB
+    kSunInt, kElev, kZoff, kXY = 0xC868C0DC, 0x2682515B, 0x2EF474B9, 0x2E4D729C
+    kTOD, kTheme = 0x9723C2C9, 0xB57E3290
+
+    def norm_tod(t):
+        if not _m.isfinite(t): return 0.5
+        if 1.0 < t <= 24.0: t *= 1.0 / 24.0
+        t -= _m.floor(t)
+        return t + 1.0 if t < 0 else t
+
+    def select_theme(dayset_rec, want):
+        """selectThemeFromDaySet: nearest normalized TimeOfDay to `want` (0..1)."""
+        best = None; best_d = 1e9
+        H, D = fields(dayset_rec)
+        for i, h in enumerate(H):
+            if (D[i] >> 24) not in (4, 6, 7) or h == kParent: continue
+            entry = to_record((D[i] >> 24, dayset_rec + 4 + i * 4))
+            if entry is None: continue
+            theme = resolve_ref(entry, kTheme)
+            if theme is None: continue
+            rt = read_float(entry, kTOD)
+            t = norm_tod(rt) if rt is not None else 0.5
+            d = abs(t - want)
+            if d < best_d: best_d, best = d, (theme, t)
+        return best
+
+    # helper: resolve a theme's SkyColour (sub-record OR flat, per the oracle)
+    def theme_sky(theme):
+        sr = resolve_ref(theme, kSky) or theme
+        return read_colour_subrec(sr, kSkyColour) or read_flat(sr, SR, SG, SB, SF)
+
+    # Dominant zone -> dayset -> nearest-TOD theme. Skip zones whose selected theme
+    # is degenerate (all-zero/black sky = interior/backdrop, e.g. slums zone B): the
+    # dominant-by-count proxy is only safe if we reject the degenerate backdrop zones,
+    # otherwise a level with a large black zone would bake a black sky.
+    want = norm_tod(float(tod_hours))
+    best_theme = None; picked_zone = None; fallback = None
+    for zone_guid, n in cells.most_common():
+        zi = lookup(zone_guid)
+        if zi < 0: continue
+        sel = select_theme(rec_off[zi], want)
+        if sel is None: continue
+        sky = theme_sky(sel[0])
+        if fallback is None and sky is not None:
+            fallback = (sel[0], (zone_guid, n, sel[1]))  # first resolvable, even if black
+        if sky is not None and max(sky) > 1e-4:  # a real (non-black) daytime theme
+            best_theme, picked_zone = sel[0], (zone_guid, n, sel[1])
+            break
+    if best_theme is None and fallback is not None:
+        best_theme, picked_zone = fallback  # only degenerate zones exist; use one
+    if best_theme is None:
+        log("genv theme: no resolvable dayset in any zone; skipping")
+        return None
+
+    sky_rec = resolve_ref(best_theme, kSky) or best_theme
+    sky = read_colour_subrec(sky_rec, kSkyColour) or read_flat(sky_rec, SR, SG, SB, SF)
+    if sky is None:
+        log("genv theme: theme has no SkyColour; skipping"); return None
+    # explicit None checks: a legitimately-stored 0.0 must not be clobbered by `or`
+    _si = read_float(sky_rec, kSunInt); sun_int = _si if _si is not None else 1.0
+    elev = read_float(sky_rec, kElev) or 0.0
+    zoff = read_float(sky_rec, kZoff) or 0.0
+    xy = read_float(sky_rec, kXY) or 0.0
+    lighting = resolve_ref(best_theme, kLighting)
+    main = None
+    if lighting is not None:
+        main = read_colour_subrec(lighting, kMain) or read_flat(lighting, MR, MG, MB, MF)
+    if main is None:
+        main = [1.0, 0.902, 0.4353]  # theme-neutral warm fallback
+
+    # sun_axis -> Y-up sun_toward (sky_system_re.txt §3), tod=want, time_factor=1.0
+    theta = (want - 0.5) * 2.0 * _m.pi
+    er = _m.radians(elev); phi = _m.radians(xy + zoff)
+    gx = _m.cos(theta) * _m.cos(er); up = _m.cos(theta) * _m.sin(er); gz = _m.sin(theta)
+    tx = gx * _m.cos(phi) - gz * _m.sin(phi)
+    ty = up
+    tz = gx * _m.sin(phi) + gz * _m.cos(phi)
+    mag = _m.sqrt(tx * tx + ty * ty + tz * tz) or 1.0
+    sun_toward = (tx / mag, ty / mag, tz / mag)
+    sun_dir = (-sun_toward[0], -sun_toward[1], -sun_toward[2])  # light dir = FROM sun
+    # sunlight the world PS multiplies into N.L: main_light_colour * sun_intensity
+    sunlight = [c * sun_int for c in main]
+
+    log(f"genv theme: dominant zone {picked_zone[0]:#010x} ({picked_zone[1]} cells), "
+        f"theme @tod={picked_zone[2]:.3f} sky=({sky[0]:.3f},{sky[1]:.3f},{sky[2]:.3f}) "
+        f"sun_int={sun_int:.2f}")
+    return {"sun_dir": sun_dir, "sunlight": sunlight, "sky": sky,
+            "sky_colour": sky, "sun_intensity": sun_int,
+            "sun_elev": elev, "main_light": main, "tod": want}
+
+
 def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
                out_scene: Path, types=(2, 21), max_per_block=None, log=print,
                textures_bnks=None, texture_headers_bnks=None, tex_cook: Path = None,
@@ -931,7 +1185,8 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                lights: bool = False, lightdump: Path = None,
                globals_gdb: Path = None, light_limit: int = None,
                props: bool = False, propdump: Path = None,
-               prop_limit: int = None, vista_ehf: Path = None) -> dict:
+               prop_limit: int = None, vista_ehf: Path = None,
+               env_theme: dict = None) -> dict:
     """Stage 2: glue every prop model (header++body) and merge instances into one F2SCENE.
 
     Data-driven from ghidra_out/model_glue_lmp_format.txt (the RE'd glue) — no guessing.
@@ -1482,14 +1737,26 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
         out.write(f"# Cooked from {engine_level.name} (v{info['version']}) — "
                   f"{len(meshes)} meshes / {n_inst} instances / {n_blocks} blocks\n")
         out.write("F2SCENE 1\n")
-        # Real chapter2slums midday theme (ghidra_out/env_theme_colors_re.txt, from
-        # environmentthemes.gdb, BE bytes /255): sun = light DIRECTION = -sun_toward
-        # (sun_toward Y-up = 0.9135,0.4067,0.0048); sky zenith blue (167,208,255).
-        out.write("sun -0.9135 -0.4067 -0.0048\n")
-        # Warm directional sun colour = theme main_light_colour raw (255,230,111)/255
-        # (env_theme_colors_re.txt §0); the world PS tints the N.L term with it.
-        out.write("sunlight 1.0 0.902 0.4353\n")
-        out.write("sky 0.6549 0.8157 1.0 1\n")
+        if env_theme is not None:
+            # Per-level theme resolved from the level's .genv -> environmentthemes.gdb
+            # (resolve_genv_theme; closes the .genv gap in env_theme_colors_re.txt §4).
+            # sun = light DIRECTION (-sun_toward, Y-up); sunlight = main_light*sun_intensity
+            # (the world PS multiplies it into N.L); sky = the theme's SkyColour.
+            sd = env_theme["sun_dir"]; sl = env_theme["sunlight"]; sk = env_theme["sky"]
+            out.write(f"# env theme from .genv (tod={env_theme['tod']:.3f}, "
+                      f"sun_intensity={env_theme['sun_intensity']:.3f})\n")
+            out.write(f"sun {sd[0]:.5g} {sd[1]:.5g} {sd[2]:.5g}\n")
+            out.write(f"sunlight {sl[0]:.5g} {sl[1]:.5g} {sl[2]:.5g}\n")
+            out.write(f"sky {sk[0]:.5g} {sk[1]:.5g} {sk[2]:.5g} 1\n")
+        else:
+            # Real chapter2slums midday theme (ghidra_out/env_theme_colors_re.txt, from
+            # environmentthemes.gdb, BE bytes /255): sun = light DIRECTION = -sun_toward
+            # (sun_toward Y-up = 0.9135,0.4067,0.0048); sky zenith blue (167,208,255).
+            out.write("sun -0.9135 -0.4067 -0.0048\n")
+            # Warm directional sun colour = theme main_light_colour raw (255,230,111)/255
+            # (env_theme_colors_re.txt §0); the world PS tints the N.L term with it.
+            out.write("sunlight 1.0 0.902 0.4353\n")
+            out.write("sky 0.6549 0.8157 1.0 1\n")
         if hero_start is not None:
             out.write(f"hero_start {hero_start[0]:.6g} {hero_start[1]:.6g} "
                       f"{hero_start[2]:.6g} {hero_start[3]:.6g}\n")
@@ -1676,6 +1943,15 @@ def main() -> int:
                     help="the level's extracted sea/backdrop .ehf -> emit a distant vista mesh")
     ap.add_argument("--prop-limit", type=int,
                     help="cap the number of DISTINCT prop models cooked (first-pass; e.g. 40)")
+    ap.add_argument("--genv", type=Path,
+                    help="the level's extracted .genv (per-cell env-theme grid) -> resolve the "
+                         "real per-level sky/sun theme instead of the hardcoded slums midday")
+    ap.add_argument("--env-gdb", type=Path,
+                    default=Path(__file__).resolve().parents[2] / "Fable2Recomp" / "assets" / "game"
+                    / "data" / "environmentthemes" / "environmentthemes.gdb",
+                    help="environmentthemes.gdb (the shared theme palette; needed with --genv)")
+    ap.add_argument("--tod", type=float, default=12.0,
+                    help="time-of-day in hours (0..24) for theme selection (default 12 = midday)")
     args = ap.parse_args()
 
     data = args.engine_level.read_bytes()
@@ -1705,6 +1981,11 @@ def main() -> int:
             ap.error("--cook requires --header-bnk and --body-bnk")
         types = tuple(int(t) for t in args.types.split(","))
         tex_cook = args.tex_cook if (args.tex_cook and args.tex_cook.is_file()) else None
+        env_theme = None
+        if args.genv:
+            if not (args.env_gdb and args.env_gdb.is_file()):
+                ap.error("--genv requires --env-gdb pointing at environmentthemes.gdb")
+            env_theme = resolve_genv_theme(args.genv, args.env_gdb, tod_hours=args.tod)
         cook_level(args.engine_level, args.header_bnk, args.body_bnk, args.f2tool,
                    args.cook, types=types, max_per_block=args.max_per_block,
                    textures_bnks=args.textures_bnk, texture_headers_bnks=args.texture_headers_bnk,
@@ -1727,7 +2008,8 @@ def main() -> int:
                    globals_gdb=args.globals_gdb, light_limit=args.light_limit,
                    props=args.props,
                    propdump=args.propdump if (args.propdump and args.propdump.is_file()) else None,
-                   prop_limit=args.prop_limit, vista_ehf=args.vista_ehf)
+                   prop_limit=args.prop_limit, vista_ehf=args.vista_ehf,
+                   env_theme=env_theme)
     return 0
 
 

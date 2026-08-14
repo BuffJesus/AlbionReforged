@@ -160,9 +160,20 @@ New tools this line: `f2tool ehf` (EHF LOD/splat dump), `terrain_splat_bake` (of
    pose ~2-4h; basic walk-with-input ~3-4d; retail-parity locomotion ~2wk. Cheapest first win = a FREE CAMERA
    (NativeCamera struct exists in native_game.h; just needs input wiring in native_frontend_app handle_input) —
    no physics/anim needed, and it lets you fly the level + actually see the new spec highlights.
-3. **Per-level day/night theme** — the sky/sun theme is currently the hardcoded chapter2slums midday keyframe.
-   Generalizing needs reversing the `.genv` container (level→theme-GUID TOD map) — a Ghidra-only gap
-   (`ghidra_out/env_theme_colors_re.txt` §4). Until then the midday bake is the spec-recommended default.
+3. ~~**Per-level day/night theme**~~ ✅ `.genv` CONTAINER SOLVED 2026-08-13 (branch `agent/native-spec-maps-and-char`).
+   The `.genv` is a 72×72 per-cell BE-u32 grid (header: stride 0x120 @0x0C/0x10, dim 72 @0x14/0x18, cell-scale
+   4.0f @0x1C; 0xFFFFFFFF = no zone); each cell = an `environmentthemes.gdb` EnvironmentThemeDaySet GUID (the old
+   "coincidental floats" §4 note was WRONG — corrected in-file). DaySet → per-hour {TimeOfDay(hours), Theme} entries
+   → theme Sky/Lighting (64-deep Parent walk). `cook_levels.py resolve_genv_theme` + `--genv/--env-gdb/--tod` emit
+   the resolved per-level sun/sunlight/sky (opt-in; default cook unchanged). Town midday = theme 0x72d66d23, sky
+   (0.765,0.765,0.467) — the real hazy autumn-slums look, NOT the hardcoded blue. Verified: 2 blind re-derivations
+   + AssetBrowser-oracle parity + code review (3 bugs fixed: failure-safety wrap, isfinite guard, sun_int-0 clobber).
+   ⚠ NOT engine parity: retail blends ONE level-wide DaySet (LevelData→EnvironmentThemeGlobal→DaySet) by the game
+   clock; whether the engine spatially indexes .genv is still a Ghidra gap. NEXT sub-items to actually SHIP this in
+   the render: (a) recook chapter2slums with `--genv slums.genv` and screenshot-verify the hazy sky on both backends
+   (the sunlight = main_light×sun_intensity may need a visual balance pass vs the current bright default); (b) a
+   Phase-1 sky GRADIENT (the runtime only clears to a flat `sky` today — emit sky_top/bottom/sunset once native_scene
+   gains the opcodes, per env_theme_colors_re.txt §5).
 3. Foliage LOD/wind; exact hero PlayerStart refinement; frontend fidelity drifts
    (`frontend_visual_fidelity_re.txt` P3-5).
 
