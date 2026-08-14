@@ -170,10 +170,13 @@ New tools this line: `f2tool ehf` (EHF LOD/splat dump), `terrain_splat_bake` (of
    + AssetBrowser-oracle parity + code review (3 bugs fixed: failure-safety wrap, isfinite guard, sun_int-0 clobber).
    ⚠ NOT engine parity: retail blends ONE level-wide DaySet (LevelData→EnvironmentThemeGlobal→DaySet) by the game
    clock; whether the engine spatially indexes .genv is still a Ghidra gap. NEXT sub-items to actually SHIP this in
-   the render: (a) recook chapter2slums with `--genv slums.genv` and screenshot-verify the hazy sky on both backends
-   (the sunlight = main_light×sun_intensity may need a visual balance pass vs the current bright default); (b) a
-   Phase-1 sky GRADIENT (the runtime only clears to a flat `sky` today — emit sky_top/bottom/sunset once native_scene
-   gains the opcodes, per env_theme_colors_re.txt §5).
+   the render: (a) ✅ DONE — recooked chapter2slums with `--genv` and screenshot-verified the hazy midday + moonlit
+   `--tod 0` night on BOTH backends in parity (`native_shots/world_genv2_*`); (b) ✅ sky-gradient HORIZON now
+   data-driven — new opt-in `sky_horizon` opcode carries the resolved theme complementary (Reinhard-mapped at cook
+   time), fed into both sky renderers' gradient bottom; default = old hardcoded value so old scenes are byte-identical
+   (commit `89a7b96`; two-agent review confirmed backward-compat + parity). REMAINING: a `sky_sunset`/bias opcode for
+   a sun-halo term (sunset+compl_bias are already resolved+returned, just not emitted); optional distance FOG on world
+   geom (env_theme_colors_re.txt §6); and a visual balance pass on `sunlight = main_light×sun_intensity`.
 3. Foliage LOD/wind; exact hero PlayerStart refinement; frontend fidelity drifts
    (`frontend_visual_fidelity_re.txt` P3-5).
 
