@@ -174,9 +174,14 @@ New tools this line: `f2tool ehf` (EHF LOD/splat dump), `terrain_splat_bake` (of
    `--tod 0` night on BOTH backends in parity (`native_shots/world_genv2_*`); (b) ✅ sky-gradient HORIZON now
    data-driven — new opt-in `sky_horizon` opcode carries the resolved theme complementary (Reinhard-mapped at cook
    time), fed into both sky renderers' gradient bottom; default = old hardcoded value so old scenes are byte-identical
-   (commit `89a7b96`; two-agent review confirmed backward-compat + parity). REMAINING: a `sky_sunset`/bias opcode for
-   a sun-halo term (sunset+compl_bias are already resolved+returned, just not emitted); optional distance FOG on world
-   geom (env_theme_colors_re.txt §6); and a visual balance pass on `sunlight = main_light×sun_intensity`.
+   (commit `89a7b96`; two-agent review confirmed backward-compat + parity).
+   (c) ✅ `sky_sunset` opcode DONE (commit `bcce87e`) — dawn/dusk Mie-forward-lobe sun-halo (AssetBrowser
+   SkyboxRenderer.cpp:170-174) on BOTH backends, gated to a low sun + strength flag (no midday regression). Needed
+   plumbing the view ray + sun dir into the Vulkan sky pass: the Vulkan world renderer now has compute_camera()
+   mirroring D3D12; SkyCamera moved to backend-neutral sky_camera.h. Verified: red-test warms the same sun-facing side
+   on D3D12 == Vulkan (no mirror); real muted slums sunset = subtle warm shift at `--tod 6` dawn.
+   REMAINING: a gradient-BIAS opcode (compl_bias resolved+returned, unemitted); optional distance FOG on world geom
+   (env_theme_colors_re.txt §6); a visual balance pass on `sunlight = main_light*sun_intensity`.
 3. Foliage LOD/wind; exact hero PlayerStart refinement; frontend fidelity drifts
    (`frontend_visual_fidelity_re.txt` P3-5).
 
