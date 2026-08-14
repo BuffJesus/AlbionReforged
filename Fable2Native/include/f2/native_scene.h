@@ -77,6 +77,11 @@ struct NativeScene {
     // tints the N.L sun term with it. env_theme_colors_re.txt: chapter2slums = (1.0,0.902,0.435).
     std::array<float, 3> sun_color{1.0f, 1.0f, 1.0f};
     std::array<float, 4> sky_color{0.35f, 0.48f, 0.68f, 1.0f};
+    // Sky-gradient horizon (bottom) tint = theme complementary_colour, display-mapped at
+    // cook time. Default = the RE'd chapter2slums hardcoded horizon so scenes without a
+    // `sky_horizon` opcode render exactly as before. Fed to the sky pass as the v=0 end of
+    // the gradient lerp on both backends. See cook_levels.py `sky_horizon` emit.
+    std::array<float, 3> sky_horizon_color{0.222f, 0.5789f, 1.11f};
     // Optional camera-fit override (render space) cooked over the town geometry only, so
     // horizon backdrop props (the Tattered Spire vista at ~1000wu) don't blow up the auto-fit.
     // When has_focus, the world renderers frame focus_center/focus_radius instead of the full

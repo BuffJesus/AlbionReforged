@@ -578,7 +578,12 @@ void NativeSkyRenderer::render(ID3D12GraphicsCommandList* command_list,
     c.camera_up[3] = camera.tan_half_fov_y;
     for (int i = 0; i < 3; ++i) {
         c.sky_colour[i] = scene.sky_color[i];
-        c.complementary_colour[i] = state.lut_colour_b[i];
+        // Gradient horizon = the scene's (theme) horizon tint; defaults to the RE'd
+        // hardcoded value so scenes without a `sky_horizon` opcode are unchanged. NOTE:
+        // the opt-in Phase-1 atmosphere PS (FABLE2NATIVE_SKY_ATMOSPHERE=1) also reads this
+        // field for its below-horizon haze; its prebuilt LUT still uses the hardcoded
+        // ThemeInputs value, so a cooked horizon only fully reaches the default gradient path.
+        c.complementary_colour[i] = scene.sky_horizon_color[i];
     }
     std::memcpy(mapped_constants_, &c, sizeof(c));
 

@@ -219,9 +219,12 @@ void NativeVulkanSkyRenderer::render(VkCommandBuffer command_buffer, std::uint32
     constants.sky_color[1] = scene.sky_color[1];
     constants.sky_color[2] = scene.sky_color[2];
     constants.sky_color[3] = 1.0f;
-    constants.horizon_color[0] = 0.222f;
-    constants.horizon_color[1] = 0.5789f;
-    constants.horizon_color[2] = 1.11f;
+    // Horizon = the scene's (theme) horizon tint; defaults to the RE'd hardcoded value
+    // (native_scene.h) so scenes without a `sky_horizon` opcode render exactly as before.
+    // Kept identical to the D3D12 sky path for backend parity.
+    constants.horizon_color[0] = scene.sky_horizon_color[0];
+    constants.horizon_color[1] = scene.sky_horizon_color[1];
+    constants.horizon_color[2] = scene.sky_horizon_color[2];
     constants.horizon_color[3] = 1.0f;
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
     VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width),

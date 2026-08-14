@@ -1081,6 +1081,11 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
     MR, MG, MB, MF = 0x9F76036F, 0xE3D88F9B, 0x3E7D387A, 0xE67DD6DB
     kSunInt, kElev, kZoff, kXY = 0xC868C0DC, 0x2682515B, 0x2EF474B9, 0x2E4D729C
     kTOD, kTheme = 0x9723C2C9, 0xB57E3290
+    # complementary (horizon) + sunset colours: sub-record OR flat fields
+    kCompl, kComplBias = 0x5CBE1462, 0x2DA0C989
+    CR, CG, CB, CF = 0x507FFA3F, 0xDA12836B, 0x0593BF6A, 0xD433126B
+    kSunset = 0x897262B7
+    UR, UG, UB, UF = 0x896E8E84, 0x8FC37AA4, 0xCFED8B8F, 0xB2447252
 
     def norm_tod(t):
         if not _m.isfinite(t): return 0.5
@@ -1148,6 +1153,15 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
     if main is None:
         main = [1.0, 0.902, 0.4353]  # theme-neutral warm fallback
 
+    # horizon (complementary) + sunset tints — raw HDR (Factor can push >1); the emit
+    # step display-maps them. horizon = the gradient's bottom; sunset = warm sun-halo.
+    horizon = read_colour_subrec(sky_rec, kCompl) or read_flat(sky_rec, CR, CG, CB, CF)
+    # sunset + compl_bias are resolved and returned but not yet emitted — staged for a
+    # future `sky_sunset` / bias opcode (a sun-halo term on the gradient). Only `horizon`
+    # is consumed today (the sky_horizon opcode).
+    sunset = read_colour_subrec(sky_rec, kSunset) or read_flat(sky_rec, UR, UG, UB, UF)
+    compl_bias = read_float(sky_rec, kComplBias)
+
     # sun_axis -> Y-up sun_toward (sky_system_re.txt §3), tod=want, time_factor=1.0
     theta = (want - 0.5) * 2.0 * _m.pi
     er = _m.radians(elev); phi = _m.radians(xy + zoff)
@@ -1166,7 +1180,8 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
         f"sun_int={sun_int:.2f}")
     return {"sun_dir": sun_dir, "sunlight": sunlight, "sky": sky,
             "sky_colour": sky, "sun_intensity": sun_int,
-            "sun_elev": elev, "main_light": main, "tod": want}
+            "sun_elev": elev, "main_light": main, "tod": want,
+            "horizon": horizon, "sunset": sunset, "compl_bias": compl_bias}
 
 
 def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
@@ -1748,6 +1763,15 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             out.write(f"sun {sd[0]:.5g} {sd[1]:.5g} {sd[2]:.5g}\n")
             out.write(f"sunlight {sl[0]:.5g} {sl[1]:.5g} {sl[2]:.5g}\n")
             out.write(f"sky {sk[0]:.5g} {sk[1]:.5g} {sk[2]:.5g} 1\n")
+            # horizon (complementary) tint for the sky gradient's bottom. The theme
+            # value is raw HDR (Factor can push >1); the runtime gradient PS clamps at
+            # output with no tonemap, so display-map here with per-channel Reinhard
+            # (retail dome uses Reinhard; SkyDomeXex.cpp:557) to avoid a blown-white
+            # horizon. Absent -> renderer keeps its hardcoded blue fallback.
+            hz = env_theme.get("horizon")
+            if hz is not None:
+                hz = [c / (1.0 + c) for c in hz]
+                out.write(f"sky_horizon {hz[0]:.5g} {hz[1]:.5g} {hz[2]:.5g}\n")
         else:
             # Real chapter2slums midday theme (ghidra_out/env_theme_colors_re.txt, from
             # environmentthemes.gdb, BE bytes /255): sun = light DIRECTION = -sun_toward
