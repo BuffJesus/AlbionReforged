@@ -12,6 +12,7 @@
 #include "f2/native_vulkan_ui_renderer.h"
 #include "f2/native_vulkan_video_texture.h"
 #include "f2/native_vulkan_world_renderer.h"
+#include "f2/native_vulkan_sky_renderer.h"
 #include "f2/render/ui_draw_list.h"
 
 #include <windows.h>
@@ -25,6 +26,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -260,12 +262,20 @@ public:
         std::string renderer_error;
         if (!world_renderer_.initialise(physical_device_, device_, command_pool_, queue_,
                                         render_pass_, surface_format_.format, msaa_samples_,
+                                        depth_resolve_view_,
                                         source_ ? source_->data_root : std::filesystem::path{},
                                         F2NATIVE_VULKAN_SHADER_DIR, game_.scene,
                                         renderer_error)) {
             MessageBoxA(window_, renderer_error.c_str(), "Fable II Native - Vulkan renderer failed",
                         MB_OK | MB_ICONERROR);
             return false;
+        }
+        std::string sky_error;
+        if (!sky_renderer_.initialise(physical_device_, device_, render_pass_,
+                                      surface_format_.format, msaa_samples_,
+                                      F2NATIVE_VULKAN_SHADER_DIR, sky_error)) {
+            MessageBoxA(window_, sky_error.c_str(), "Fable II Native - Vulkan sky failed",
+                        MB_OK | MB_ICONWARNING);
         }
 
         ShowWindow(window_, SW_SHOWDEFAULT);
@@ -291,6 +301,8 @@ public:
             update_video();
             input_.poll();
             handle_input();
+            update_free_camera(delta);
+            update_character_controller(delta);
             apply_resolution_setting();
             audio_.tick();
             audio_.set_volumes(game_.frontend.sounds_volume(), game_.frontend.music_volume(),
@@ -394,14 +406,31 @@ private:
         queue_info.queueFamilyIndex = queue_family_;
         queue_info.queueCount = 1;
         queue_info.pQueuePriorities = &priority;
-        const char* device_extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+        const bool has_render_pass2 = device_extension_available(
+            VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+        const bool has_depth_resolve = device_extension_available(
+            VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
+        depth_resolve_supported_ = has_render_pass2 && has_depth_resolve &&
+                                   supports_max_depth_resolve();
+        std::vector<const char*> device_extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+        if (has_render_pass2) device_extensions.push_back(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+        if (has_depth_resolve) device_extensions.push_back(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
         VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
         device_info.queueCreateInfoCount = 1;
         device_info.pQueueCreateInfos = &queue_info;
-        device_info.enabledExtensionCount = 1;
-        device_info.ppEnabledExtensionNames = device_extensions;
+        device_info.enabledExtensionCount = static_cast<std::uint32_t>(device_extensions.size());
+        device_info.ppEnabledExtensionNames = device_extensions.data();
         result = vkCreateDevice(physical_device_, &device_info, nullptr, &device_);
         if (result != VK_SUCCESS) return fail("Vulkan device creation failed: ", result);
+        if (has_render_pass2) {
+            create_render_pass2_ = reinterpret_cast<PFN_vkCreateRenderPass2>(
+                vkGetDeviceProcAddr(device_, "vkCreateRenderPass2KHR"));
+            if (!create_render_pass2_) {
+                create_render_pass2_ = reinterpret_cast<PFN_vkCreateRenderPass2>(
+                    vkGetDeviceProcAddr(device_, "vkCreateRenderPass2"));
+            }
+        }
+        if (!create_render_pass2_) depth_resolve_supported_ = false;
         vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
         msaa_samples_ = choose_sample_count(game_.frontend.anti_aliasing_index());  // AA option
 
@@ -412,6 +441,11 @@ private:
             return false;
         }
         if (!create_swapchain() || !create_render_pass() || !create_framebuffers()) return false;
+
+        const char* resolve_status = depth_resolve_view_ ?
+            "Fable II Native - Vulkan [MSAA depth resolve]" :
+            "Fable II Native - Vulkan [depth resolve fallback]";
+        SetWindowTextA(window_, resolve_status);
 
         VkCommandBufferAllocateInfo command_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         command_info.commandPool = command_pool_;
@@ -456,6 +490,28 @@ private:
             }
         }
         return false;
+    }
+
+    bool device_extension_available(const char* requested) const {
+        std::uint32_t count = 0;
+        if (vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &count, nullptr) !=
+            VK_SUCCESS) return false;
+        std::vector<VkExtensionProperties> extensions(count);
+        if (vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &count,
+                                                 extensions.data()) != VK_SUCCESS) return false;
+        for (const auto& extension : extensions) {
+            if (std::strcmp(extension.extensionName, requested) == 0) return true;
+        }
+        return false;
+    }
+
+    bool supports_max_depth_resolve() const {
+        VkPhysicalDeviceDepthStencilResolveProperties resolve{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES};
+        VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        properties.pNext = &resolve;
+        vkGetPhysicalDeviceProperties2(physical_device_, &properties);
+        return (resolve.supportedDepthResolveModes & VK_RESOLVE_MODE_MAX_BIT) != 0;
     }
 
     bool create_swapchain() {
@@ -516,21 +572,142 @@ private:
         return true;
     }
 
+    bool create_render_pass2() {
+        if (!create_render_pass2_) return false;
+        // Attachment 0 = multisample color, 1 = presentable color resolve, 2 = multisample
+        // reversed-Z depth, 3 = single-sample MAX depth resolve exposed to the water shader.
+        VkAttachmentDescription2 attachments[4]{};
+        for (auto& attachment : attachments) attachment.sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2;
+        attachments[0].format = surface_format_.format;
+        attachments[0].samples = msaa_samples_;
+        attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachments[1].format = surface_format_.format;
+        attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+        attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[1].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        attachments[2].format = kDepthFormat;
+        attachments[2].samples = msaa_samples_;
+        attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachments[2].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[2].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        attachments[3].format = kDepthFormat;
+        attachments[3].samples = VK_SAMPLE_COUNT_1_BIT;
+        attachments[3].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[3].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachments[3].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[3].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[3].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[3].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkAttachmentReference2 color{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2};
+        color.attachment = 0;
+        color.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        VkAttachmentReference2 resolve{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2};
+        resolve.attachment = 1;
+        resolve.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        VkAttachmentReference2 depth{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2};
+        depth.attachment = 2;
+        depth.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        VkAttachmentReference2 depth_read{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2};
+        depth_read.attachment = 2;
+        depth_read.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        VkAttachmentReference2 depth_resolve{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2};
+        depth_resolve.attachment = 3;
+        depth_resolve.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        VkAttachmentReference2 depth_resolve_read{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2};
+        depth_resolve_read.attachment = 3;
+        depth_resolve_read.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkSubpassDescriptionDepthStencilResolve depth_resolve_info{
+            VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE};
+        depth_resolve_info.depthResolveMode = VK_RESOLVE_MODE_MAX_BIT;
+        depth_resolve_info.stencilResolveMode = VK_RESOLVE_MODE_NONE;
+        depth_resolve_info.pDepthStencilResolveAttachment = &depth_resolve;
+        VkSubpassDescription2 subpasses[2]{};
+        subpasses[0].sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2;
+        subpasses[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpasses[0].colorAttachmentCount = 1;
+        subpasses[0].pColorAttachments = &color;
+        subpasses[0].pDepthStencilAttachment = &depth;
+        subpasses[0].pNext = &depth_resolve_info;
+        subpasses[1].sType = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2;
+        subpasses[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpasses[1].inputAttachmentCount = 1;
+        subpasses[1].pInputAttachments = &depth_resolve_read;
+        subpasses[1].colorAttachmentCount = 1;
+        subpasses[1].pColorAttachments = &color;
+        subpasses[1].pResolveAttachments = &resolve;
+        subpasses[1].pDepthStencilAttachment = &depth_read;
+
+        VkSubpassDependency2 dependencies[2]{};
+        dependencies[0].sType = VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2;
+        dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[0].dstSubpass = 0;
+        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        dependencies[1].sType = VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2;
+        dependencies[1].srcSubpass = 0;
+        dependencies[1].dstSubpass = 1;
+        dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        dependencies[1].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        dependencies[1].dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT |
+                                         VK_ACCESS_SHADER_READ_BIT |
+                                         VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+
+        VkRenderPassCreateInfo2 info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2};
+        info.attachmentCount = 4;
+        info.pAttachments = attachments;
+        info.subpassCount = 2;
+        info.pSubpasses = subpasses;
+        info.dependencyCount = 2;
+        info.pDependencies = dependencies;
+        if (create_render_pass2_(device_, &info, nullptr, &render_pass_) != VK_SUCCESS) return false;
+        render_pass2_active_ = true;
+        return true;
+    }
+
     bool create_render_pass() {
         const bool msaa = msaa_samples_ > VK_SAMPLE_COUNT_1_BIT;
-        // attachment 0 = color (multisampled under MSAA; else the presentable swapchain image).
-        // attachment 1 (MSAA only) = the resolve target = the presentable swapchain image.
-        // depth attachment is LAST (index 1 no-MSAA / 2 under MSAA).
+        if (msaa && depth_resolve_supported_) {
+            if (create_render_pass2()) return true;
+            depth_resolve_supported_ = false;
+        }
+        render_pass2_active_ = false;
+        // MSAA uses two subpasses: subpass 0 fills the multisample color/depth attachments,
+        // then subpass 1 draws water and resolves color into the presentable image. Keeping the
+        // resolve at the end of the water subpass is the prerequisite for a later depth resolve
+        // attachment without exposing an unresolved depth image to a shader.
+        // Single-sample frames retain the compact one-subpass layout.
         const std::uint32_t depth_index = msaa ? 2u : 1u;
         VkAttachmentDescription attachments[3]{};
         attachments[0].format = surface_format_.format;
         attachments[0].samples = msaa ? msaa_samples_ : VK_SAMPLE_COUNT_1_BIT;
         attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachments[0].storeOp =
-            msaa ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
+        attachments[0].storeOp = msaa ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                      : VK_ATTACHMENT_STORE_OP_STORE;
         attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        attachments[0].finalLayout =
-            msaa ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        attachments[0].finalLayout = msaa ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                                          : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         if (msaa) {
             attachments[1].format = surface_format_.format;
             attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
@@ -555,7 +732,6 @@ private:
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpass.colorAttachmentCount = 1;
         subpass.pColorAttachments = &color_ref;
-        if (msaa) subpass.pResolveAttachments = &resolve_ref;
         subpass.pDepthStencilAttachment = &depth_ref;
         VkSubpassDependency dependency{};
         dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -566,13 +742,45 @@ private:
                                   VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        VkSubpassDescription subpasses[2]{};
+        std::array<VkSubpassDependency, 2> dependencies{};
+        std::uint32_t subpass_count = 1;
+        std::uint32_t dependency_count = 1;
+        if (!msaa) {
+            subpass.pResolveAttachments = nullptr;
+            subpasses[0] = subpass;
+            dependencies[0] = dependency;
+        } else {
+            // Opaque pass has no resolve attachment. Water is rendered in subpass 1 and owns the
+            // color resolve, so the multisample color buffer remains available to blend against.
+            VkAttachmentReference water_depth_ref{depth_index,
+                                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+            subpasses[0] = subpass;
+            subpasses[1] = subpass;
+            subpasses[1].pResolveAttachments = &resolve_ref;
+            subpasses[1].pDepthStencilAttachment = &water_depth_ref;
+            dependencies[0] = dependency;
+            dependencies[1].srcSubpass = 0;
+            dependencies[1].dstSubpass = 1;
+            dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+            dependencies[1].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+            dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            dependencies[1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+            subpass_count = 2;
+            dependency_count = 2;
+        }
         VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
         info.attachmentCount = msaa ? 3u : 2u;
         info.pAttachments = attachments;
-        info.subpassCount = 1;
-        info.pSubpasses = &subpass;
-        info.dependencyCount = 1;
-        info.pDependencies = &dependency;
+        info.subpassCount = subpass_count;
+        info.pSubpasses = subpasses;
+        info.dependencyCount = dependency_count;
+        info.pDependencies = dependencies.data();
         return vkCreateRenderPass(device_, &info, nullptr, &render_pass_) == VK_SUCCESS;
     }
 
@@ -710,6 +918,7 @@ private:
     }
 
     void destroy_depth_image() {
+        destroy_depth_resolve_image();
         if (depth_view_) vkDestroyImageView(device_, depth_view_, nullptr);
         if (depth_image_) vkDestroyImage(device_, depth_image_, nullptr);
         if (depth_memory_) vkFreeMemory(device_, depth_memory_, nullptr);
@@ -718,20 +927,101 @@ private:
         depth_memory_ = VK_NULL_HANDLE;
     }
 
+    void destroy_depth_resolve_image() {
+        if (depth_resolve_view_) vkDestroyImageView(device_, depth_resolve_view_, nullptr);
+        if (depth_resolve_image_) vkDestroyImage(device_, depth_resolve_image_, nullptr);
+        if (depth_resolve_memory_) vkFreeMemory(device_, depth_resolve_memory_, nullptr);
+        depth_resolve_view_ = VK_NULL_HANDLE;
+        depth_resolve_image_ = VK_NULL_HANDLE;
+        depth_resolve_memory_ = VK_NULL_HANDLE;
+    }
+
+    bool create_depth_resolve_image() {
+        if (!depth_resolve_supported_ || msaa_samples_ <= VK_SAMPLE_COUNT_1_BIT) return true;
+        VkImageCreateInfo image_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        image_info.imageType = VK_IMAGE_TYPE_2D;
+        image_info.format = kDepthFormat;
+        image_info.extent = {extent_.width, extent_.height, 1};
+        image_info.mipLevels = 1;
+        image_info.arrayLayers = 1;
+        image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        image_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                           VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+        image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateImage(device_, &image_info, nullptr, &depth_resolve_image_) != VK_SUCCESS) {
+            depth_resolve_supported_ = false;
+            return true;
+        }
+        VkMemoryRequirements requirements{};
+        vkGetImageMemoryRequirements(device_, depth_resolve_image_, &requirements);
+        VkPhysicalDeviceMemoryProperties memory_properties{};
+        vkGetPhysicalDeviceMemoryProperties(physical_device_, &memory_properties);
+        std::uint32_t memory_type = 0;
+        bool found = false;
+        for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
+            if ((requirements.memoryTypeBits & (1u << i)) &&
+                (memory_properties.memoryTypes[i].propertyFlags &
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+                memory_type = i;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            destroy_depth_resolve_image();
+            depth_resolve_supported_ = false;
+            return true;
+        }
+        VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocation.allocationSize = requirements.size;
+        allocation.memoryTypeIndex = memory_type;
+        if (vkAllocateMemory(device_, &allocation, nullptr, &depth_resolve_memory_) != VK_SUCCESS ||
+            vkBindImageMemory(device_, depth_resolve_image_, depth_resolve_memory_, 0) != VK_SUCCESS) {
+            destroy_depth_resolve_image();
+            depth_resolve_supported_ = false;
+            return true;
+        }
+        VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        view_info.image = depth_resolve_image_;
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = kDepthFormat;
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(device_, &view_info, nullptr, &depth_resolve_view_) != VK_SUCCESS) {
+            destroy_depth_resolve_image();
+            depth_resolve_supported_ = false;
+            return true;
+        }
+        return true;
+    }
+
     bool create_framebuffers() {
         const bool msaa = msaa_samples_ > VK_SAMPLE_COUNT_1_BIT;
-        if (!create_msaa_image() || !create_depth_image()) return false;
+        if (!create_msaa_image() || !create_depth_image() || !create_depth_resolve_image()) return false;
+        if (render_pass2_active_ && !depth_resolve_view_) {
+            // The resolve image is optional. If allocation failed after render-pass2 creation,
+            // rebuild the legacy two-subpass pass so the remaining attachments still match.
+            vkDestroyRenderPass(device_, render_pass_, nullptr);
+            render_pass_ = VK_NULL_HANDLE;
+            render_pass2_active_ = false;
+            depth_resolve_supported_ = false;
+            if (!create_render_pass()) return false;
+        }
         framebuffers_.resize(swapchain_views_.size());
         for (std::size_t index = 0; index < swapchain_views_.size(); ++index) {
-            // Order must match the render pass: [0]=color, [1]=(resolve|depth), [2]=depth.
-            const VkImageView attachments[3] = {
+            // Order must match the render pass: [0]=color, [1]=color resolve, [2]=MSAA depth,
+            // [3]=single-sample depth resolve when the optional render-pass2 path is active.
+            const VkImageView attachments[4] = {
                 msaa ? msaa_view_ : swapchain_views_[index],   // [0] color
                 msaa ? swapchain_views_[index] : depth_view_,  // [1] resolve (MSAA) or depth
                 depth_view_,                                   // [2] depth (MSAA only)
+                depth_resolve_view_,                            // [3] resolved depth (optional)
             };
             VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             info.renderPass = render_pass_;
-            info.attachmentCount = msaa ? 3u : 2u;
+            info.attachmentCount = depth_resolve_view_ ? 4u : (msaa ? 3u : 2u);
             info.pAttachments = attachments;
             info.width = extent_.width;
             info.height = extent_.height;
@@ -870,6 +1160,113 @@ private:
             play_sound(f2::NativeFrontendSound::Back);
         }
         if (input_.pressed(Action::Skip)) game_.frontend.dispatch(f2::FrontendAction::Skip);
+    }
+
+    // Keep Vulkan's inspection camera identical to the D3D12 frontend: WASD moves on the view
+    // plane, Q/E move vertically, arrows look, and Shift boosts. This is deliberately independent
+    // of menu bindings so it remains useful while inspecting cooked geometry in World state.
+    void update_free_camera(double delta) {
+        if (game_.frontend.state() != f2::FrontendState::World) {
+            world_cam_initialised_ = false;
+            world_renderer_.clear_free_camera();
+            return;
+        }
+        auto center = world_renderer_.scene_center();
+        float radius = world_renderer_.scene_radius();
+        const bool hero_view = game_.scene.has_hero_start;
+        if (hero_view) {
+            center = game_.scene.hero_start;
+            center[1] += 0.8f;
+            radius = 8.0f;
+        }
+        if (!world_cam_initialised_) {
+            game_.camera.yaw = 0.6f;
+            game_.camera.pitch = -0.32f;
+            const float cp = std::cos(game_.camera.pitch);
+            const std::array<float, 3> fwd{cp * std::sin(game_.camera.yaw),
+                                           std::sin(game_.camera.pitch),
+                                           cp * std::cos(game_.camera.yaw)};
+            const float dist = hero_view ? 8.0f : radius * 2.4f;
+            game_.camera.position = {center[0] - fwd[0] * dist,
+                                     center[1] - fwd[1] * dist,
+                                     center[2] - fwd[2] * dist};
+            world_cam_initialised_ = true;
+        }
+        const bool focused = GetForegroundWindow() == window_;
+        const auto down = [&](int vk) {
+            return focused && (GetAsyncKeyState(vk) & 0x8000) != 0;
+        };
+        const float dt = static_cast<float>(delta);
+        const float look = 1.6f * dt;
+        if (down(VK_LEFT)) game_.camera.yaw -= look;
+        if (down(VK_RIGHT)) game_.camera.yaw += look;
+        if (down(VK_UP)) game_.camera.pitch += look;
+        if (down(VK_DOWN)) game_.camera.pitch -= look;
+        game_.camera.pitch = std::clamp(game_.camera.pitch, -1.55f, 1.55f);
+        const float cp = std::cos(game_.camera.pitch);
+        const std::array<float, 3> fwd{cp * std::sin(game_.camera.yaw),
+                                       std::sin(game_.camera.pitch),
+                                       cp * std::cos(game_.camera.yaw)};
+        const std::array<float, 3> world_up{0.0f, 1.0f, 0.0f};
+        std::array<float, 3> right{fwd[1] * world_up[2] - fwd[2] * world_up[1],
+                                   fwd[2] * world_up[0] - fwd[0] * world_up[2],
+                                   fwd[0] * world_up[1] - fwd[1] * world_up[0]};
+        const float right_length = std::sqrt(right[0] * right[0] + right[1] * right[1] +
+                                             right[2] * right[2]);
+        if (right_length > 1e-4f) {
+            for (auto& component : right) component /= right_length;
+        }
+        const float boost = down(VK_SHIFT) ? 4.0f : 1.0f;
+        const float speed = std::max(radius * 0.35f, 2.0f) * boost * dt;
+        auto& position = game_.camera.position;
+        const auto move = [&](const std::array<float, 3>& direction, float amount) {
+            for (std::size_t index = 0; index < 3; ++index) position[index] += direction[index] * amount;
+        };
+        if (down('W')) move(fwd, speed);
+        if (down('S')) move(fwd, -speed);
+        if (down('D')) move(right, speed);
+        if (down('A')) move(right, -speed);
+        if (down('E')) move(world_up, speed);
+        if (down('Q')) move(world_up, -speed);
+        world_renderer_.set_free_camera(position, game_.camera.yaw, game_.camera.pitch);
+    }
+
+    // Match the D3D12 inspection control: IJKL moves hero draw ranges, U/O adjusts height,
+    // and Shift boosts. The static world buffers remain untouched.
+    void update_character_controller(double delta) {
+        if (game_.frontend.state() != f2::FrontendState::World || !scene_has_hero()) {
+            character_offset_ = {0.0f, 0.0f, 0.0f};
+            character_motion_phase_ = 0.0f;
+            character_motion_strength_ = 0.0f;
+            world_renderer_.set_character_offset(character_offset_);
+            world_renderer_.set_character_motion(character_motion_phase_, character_motion_strength_);
+            return;
+        }
+        const bool focused = GetForegroundWindow() == window_;
+        const auto down = [&](int vk) {
+            return focused && (GetAsyncKeyState(vk) & 0x8000) != 0;
+        };
+        if (down('F') && game_.scene.has_hero_start) world_cam_initialised_ = false;
+        const float speed = (down(VK_SHIFT) ? 16.0f : 4.0f) * static_cast<float>(delta);
+        if (down('R')) character_offset_ = {0.0f, 0.0f, 0.0f};
+        const bool moving = down('I') || down('K') || down('J') || down('L') || down('U') || down('O');
+        if (moving) character_motion_phase_ += static_cast<float>(delta) * (down(VK_SHIFT) ? 10.0f : 6.0f);
+        character_motion_strength_ = moving ? 1.0f : 0.0f;
+        if (down('I')) character_offset_[2] += speed;
+        if (down('K')) character_offset_[2] -= speed;
+        if (down('L')) character_offset_[0] += speed;
+        if (down('J')) character_offset_[0] -= speed;
+        if (down('U')) character_offset_[1] += speed;
+        if (down('O')) character_offset_[1] -= speed;
+        world_renderer_.set_character_offset(character_offset_);
+        world_renderer_.set_character_motion(character_motion_phase_, character_motion_strength_);
+    }
+
+    bool scene_has_hero() const {
+        for (const auto& mesh : game_.scene.meshes) {
+            if (mesh.name.rfind("hero", 0) == 0) return true;
+        }
+        return false;
     }
 
     // Apply the Options "Resolution" setting by resizing the window; the WM_SIZE handler flags a
@@ -1103,6 +1500,13 @@ private:
         }
     }
 
+    void build_world_overlay(f2::render::UiDrawList& scene) {
+        if (!scene_builder_) return;
+        scene_builder_->build_world_overlay(scene, static_cast<float>(extent_.width),
+                                            static_cast<float>(extent_.height), scene_has_hero(),
+                                            character_offset_, character_motion_strength_ > 0.5f);
+    }
+
     void draw() {
         if (game_.frontend.state() == f2::FrontendState::IntroVideo ||
             game_.frontend.state() == f2::FrontendState::AttractVideo) ensure_video_texture();
@@ -1110,6 +1514,7 @@ private:
             game_.frontend.state() == f2::FrontendState::MainMenu ||
             game_.frontend.state() == f2::FrontendState::ChooseCard ||
             game_.frontend.state() == f2::FrontendState::Options) ensure_ui_textures();
+        else if (game_.frontend.state() == f2::FrontendState::World) ensure_font_texture();
         update_ambient_detail_frame();
         if (framebuffer_resized_) recreate_swapchain();
         vkWaitForFences(device_, 1, &in_flight_[current_frame_], VK_TRUE, UINT64_MAX);
@@ -1150,8 +1555,40 @@ private:
         pass.pClearValues = clears;
         vkCmdBeginRenderPass(command_buffers_[image_index], &pass, VK_SUBPASS_CONTENTS_INLINE);
         if (game_.frontend.state() == f2::FrontendState::World) {
-            world_renderer_.render(command_buffers_[image_index], extent_.width, extent_.height,
-                                   game_.elapsed_seconds);
+            if (sky_renderer_.ready()) {
+                sky_renderer_.render(command_buffers_[image_index], extent_.width, extent_.height,
+                                     game_.scene);
+            }
+            if (msaa_clear) {
+                world_renderer_.render_opaque(command_buffers_[image_index], extent_.width,
+                                              extent_.height, game_.elapsed_seconds);
+                f2::render::UiDrawList overlay;
+                build_world_overlay(overlay);
+                if (!overlay.empty()) {
+                    native_ui_renderer_.render(
+                        command_buffers_[image_index], current_frame_, extent_.width, extent_.height,
+                        overlay.quads(), [this](f2::render::TextureId primary,
+                                                f2::render::TextureId detail) {
+                            return descriptor_set_for(primary, detail);
+                        });
+                }
+                vkCmdNextSubpass(command_buffers_[image_index], VK_SUBPASS_CONTENTS_INLINE);
+                world_renderer_.render_water(command_buffers_[image_index], extent_.width,
+                                             extent_.height, game_.elapsed_seconds);
+            } else {
+                world_renderer_.render(command_buffers_[image_index], extent_.width,
+                                       extent_.height, game_.elapsed_seconds);
+                f2::render::UiDrawList overlay;
+                build_world_overlay(overlay);
+                if (!overlay.empty()) {
+                    native_ui_renderer_.render(
+                        command_buffers_[image_index], current_frame_, extent_.width, extent_.height,
+                        overlay.quads(), [this](f2::render::TextureId primary,
+                                                f2::render::TextureId detail) {
+                            return descriptor_set_for(primary, detail);
+                        });
+                }
+            }
         } else {
             f2::render::UiDrawList scene;
             build_scene(scene);
@@ -1161,6 +1598,11 @@ private:
                     scene.quads(), [this](f2::render::TextureId primary, f2::render::TextureId detail) {
                         return descriptor_set_for(primary, detail);
                     });
+            }
+            // MSAA resolves color only from subpass 1. Frontend UI has no water draw, but still
+            // advances through the resolve subpass so its multisample output reaches the swapchain.
+            if (msaa_clear) {
+                vkCmdNextSubpass(command_buffers_[image_index], VK_SUBPASS_CONTENTS_INLINE);
             }
         }
         vkCmdEndRenderPass(command_buffers_[image_index]);
@@ -1220,6 +1662,7 @@ private:
         font_texture_.destroy();
         video_texture_.destroy();
         video_decoder_.close();
+        sky_renderer_.destroy();
         world_renderer_.destroy();
         destroy_msaa_image();
         destroy_depth_image();
@@ -1260,6 +1703,12 @@ private:
     VkImage depth_image_ = VK_NULL_HANDLE;
     VkDeviceMemory depth_memory_ = VK_NULL_HANDLE;
     VkImageView depth_view_ = VK_NULL_HANDLE;
+    VkImage depth_resolve_image_ = VK_NULL_HANDLE;
+    VkDeviceMemory depth_resolve_memory_ = VK_NULL_HANDLE;
+    VkImageView depth_resolve_view_ = VK_NULL_HANDLE;
+    bool depth_resolve_supported_ = false;
+    bool render_pass2_active_ = false;
+    PFN_vkCreateRenderPass2 create_render_pass2_ = nullptr;
     bool framebuffer_resized_ = false;
     bool com_initialized_ = false;
     bool video_runtime_started_ = false;
@@ -1287,6 +1736,11 @@ private:
     double video_next_frame_time_ = 0.0;
     std::string video_error_;
     f2::NativeVulkanWorldRenderer world_renderer_;
+    f2::NativeVulkanSkyRenderer sky_renderer_;
+    bool world_cam_initialised_ = false;
+    std::array<float, 3> character_offset_{0.0f, 0.0f, 0.0f};
+    float character_motion_phase_ = 0.0f;
+    float character_motion_strength_ = 0.0f;
     f2::NativeGame game_;
     f2::NativeInputRouter input_;
     VkInstance instance_ = VK_NULL_HANDLE;

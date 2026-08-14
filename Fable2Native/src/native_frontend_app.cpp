@@ -289,6 +289,8 @@ public:
                         MB_OK | MB_ICONERROR);
             return false;
         }
+        world_renderer_.set_scene_depth_copy(depth_target_.Get(), depth_copy_.Get(),
+                                             depth_gpu_handle_);
         // Procedural sky pass (self-contained: own root sig/PSO/LUT/descriptor heap). A
         // failure here is non-fatal — the World branch falls back to the flat sky_color clear.
         std::string sky_error;
@@ -327,6 +329,7 @@ public:
             input_.poll();
             handle_input();
             update_free_camera(delta);
+            update_character_controller(delta);
             apply_resolution_setting();
             apply_aa_setting();
             audio_.tick();
@@ -463,7 +466,7 @@ private:
         dsv_handle_ = dsv_heap_->GetCPUDescriptorHandleForHeapStart();
         D3D12_DESCRIPTOR_HEAP_DESC srv_desc{};
         srv_desc.NumDescriptors =
-            f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 2;
+            f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 3;
         srv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         srv_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device_->CreateDescriptorHeap(&srv_desc, IID_PPV_ARGS(&descriptor_heap_)))) return false;
@@ -471,6 +474,7 @@ private:
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         video_descriptor_index_ = f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount;
         font_descriptor_index_ = video_descriptor_index_ + 1;
+        depth_descriptor_index_ = font_descriptor_index_ + 1;
 
         rtv_stride_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         auto handle = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
@@ -509,6 +513,8 @@ private:
         }
         create_msaa_target();  // match the MSAA target to the new size
         create_depth_target();  // match the depth buffer to the new size
+        world_renderer_.set_scene_depth_copy(depth_target_.Get(), depth_copy_.Get(),
+                                             depth_gpu_handle_);
     }
 
     // Real backend owner for the Options "Resolution" setting: when the user changes it, resize the
@@ -562,6 +568,7 @@ private:
     // world renderer real occlusion (without it the level draws as a flat merged silhouette).
     void create_depth_target() {
         depth_target_.Reset();
+        depth_copy_.Reset();
         if (!device_ || width_ == 0 || height_ == 0) return;
         D3D12_RESOURCE_DESC description{};
         description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -569,14 +576,16 @@ private:
         description.Height = height_;
         description.DepthOrArraySize = 1;
         description.MipLevels = 1;
-        description.Format = kDepthFormat;
+        // Typeless storage permits both the D32 DSV and an R32_FLOAT copy/SRV view.
+        description.Format = DXGI_FORMAT_R32_TYPELESS;
         description.SampleDesc.Count = 1;
         description.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_CLEAR_VALUE clear{};
         clear.Format = kDepthFormat;
-        clear.DepthStencil.Depth = 1.0f;
+        // Reversed-Z world depth clears to the far value 0.0 (matching the per-frame clear).
+        clear.DepthStencil.Depth = 0.0f;
         if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &description,
                                                     D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear,
                                                     IID_PPV_ARGS(&depth_target_)))) {
@@ -587,6 +596,28 @@ private:
         view.Format = kDepthFormat;
         view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
         device_->CreateDepthStencilView(depth_target_.Get(), &view, dsv_handle_);
+
+        D3D12_RESOURCE_DESC copy_description = description;
+        copy_description.Flags = D3D12_RESOURCE_FLAG_NONE;
+        D3D12_HEAP_PROPERTIES copy_heap{};
+        copy_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        if (FAILED(device_->CreateCommittedResource(
+                &copy_heap, D3D12_HEAP_FLAG_NONE, &copy_description,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
+                IID_PPV_ARGS(&depth_copy_)))) {
+            depth_target_.Reset();
+            return;
+        }
+        D3D12_SHADER_RESOURCE_VIEW_DESC depth_srv{};
+        depth_srv.Format = DXGI_FORMAT_R32_FLOAT;
+        depth_srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        depth_srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        depth_srv.Texture2D.MipLevels = 1;
+        auto depth_cpu = descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
+        depth_cpu.ptr += static_cast<std::size_t>(depth_descriptor_index_) * descriptor_stride_;
+        device_->CreateShaderResourceView(depth_copy_.Get(), &depth_srv, depth_cpu);
+        depth_gpu_handle_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
+        depth_gpu_handle_.ptr += static_cast<std::size_t>(depth_descriptor_index_) * descriptor_stride_;
     }
 
     // (Re)create the multisampled resolve target at the current size + sample count. Released at 1x.
@@ -1294,8 +1325,14 @@ private:
             world_renderer_.clear_free_camera();
             return;
         }
-        const auto center = world_renderer_.scene_center();
-        const float radius = world_renderer_.scene_radius();
+        auto center = world_renderer_.scene_center();
+        float radius = world_renderer_.scene_radius();
+        const bool hero_view = game_.scene.has_hero_start;
+        if (hero_view) {
+            center = game_.scene.hero_start;
+            center[1] += 0.8f;
+            radius = 8.0f;
+        }
         if (!world_cam_initialised_) {
             // Match the auto-orbit's default 3/4 framing so the first view is familiar, then hand
             // control to the keys.
@@ -1304,7 +1341,7 @@ private:
             const float cp = std::cos(game_.camera.pitch);
             const std::array<float, 3> fwd{cp * std::sin(game_.camera.yaw), std::sin(game_.camera.pitch),
                                            cp * std::cos(game_.camera.yaw)};
-            const float dist = radius * 2.4f;
+            const float dist = hero_view ? 8.0f : radius * 2.4f;
             game_.camera.position = {center[0] - fwd[0] * dist, center[1] - fwd[1] * dist,
                                      center[2] - fwd[2] * dist};
             world_cam_initialised_ = true;
@@ -1343,6 +1380,44 @@ private:
         world_renderer_.set_free_camera(p, game_.camera.yaw, game_.camera.pitch);
     }
 
+    // Lightweight hero locomotion for cooked scenes: IJKL moves the hero draw ranges without
+    // rebuilding the static world buffers. It is intentionally separate from WASD free flight.
+    void update_character_controller(double delta) {
+        if (game_.frontend.state() != f2::FrontendState::World || !scene_has_hero()) {
+            character_offset_ = {0.0f, 0.0f, 0.0f};
+            character_motion_phase_ = 0.0f;
+            character_motion_strength_ = 0.0f;
+            world_renderer_.set_character_offset(character_offset_);
+            world_renderer_.set_character_motion(character_motion_phase_, character_motion_strength_);
+            return;
+        }
+        const bool focused = GetForegroundWindow() == window_;
+        const auto down = [&](int vk) {
+            return focused && (GetAsyncKeyState(vk) & 0x8000) != 0;
+        };
+        if (down('F') && game_.scene.has_hero_start) world_cam_initialised_ = false;
+        const float speed = (down(VK_SHIFT) ? 16.0f : 4.0f) * static_cast<float>(delta);
+        if (down('R')) character_offset_ = {0.0f, 0.0f, 0.0f};
+        const bool moving = down('I') || down('K') || down('J') || down('L') || down('U') || down('O');
+        if (moving) character_motion_phase_ += static_cast<float>(delta) * (down(VK_SHIFT) ? 10.0f : 6.0f);
+        character_motion_strength_ = moving ? 1.0f : 0.0f;
+        if (down('I')) character_offset_[2] += speed;
+        if (down('K')) character_offset_[2] -= speed;
+        if (down('L')) character_offset_[0] += speed;
+        if (down('J')) character_offset_[0] -= speed;
+        if (down('U')) character_offset_[1] += speed;
+        if (down('O')) character_offset_[1] -= speed;
+        world_renderer_.set_character_offset(character_offset_);
+        world_renderer_.set_character_motion(character_motion_phase_, character_motion_strength_);
+    }
+
+    bool scene_has_hero() const {
+        for (const auto& mesh : game_.scene.meshes) {
+            if (mesh.name.rfind("hero", 0) == 0) return true;
+        }
+        return false;
+    }
+
     void draw() {
         if ((game_.frontend.state() == f2::FrontendState::IntroVideo ||
              game_.frontend.state() == f2::FrontendState::AttractVideo) &&
@@ -1354,6 +1429,8 @@ private:
             game_.frontend.state() == f2::FrontendState::ChooseCard ||
             game_.frontend.state() == f2::FrontendState::Options) {
             ensure_ui_textures();
+        } else if (game_.frontend.state() == f2::FrontendState::World) {
+            ensure_font_texture();
         }
         const auto state = game_.frontend.state();
         const UINT frame_index = swap_chain_->GetCurrentBackBufferIndex();
@@ -1430,6 +1507,16 @@ private:
             render_native_video(command_list_.Get());
         } else if (state == f2::FrontendState::Loading) {
             render_native_loading(command_list_.Get());
+        }
+        if (state == f2::FrontendState::World && native_ui_renderer_.ready()) {
+            f2::render::UiDrawList scene;
+            scene_builder().build_world_overlay(scene, static_cast<float>(width_),
+                                                static_cast<float>(height_), scene_has_hero(),
+                                                character_offset_, character_motion_strength_ > 0.5f);
+            native_ui_renderer_.render(command_list_.Get(), width_, height_, scene.quads(),
+                                       [this](f2::render::TextureId id) {
+                                           return resolve_ui_texture(id);
+                                       });
         }
         // Optional on-screen FPS counter (Video options toggle). Drawn over the frontend UI states,
         // where the font atlas is guaranteed uploaded.
@@ -1514,14 +1601,19 @@ private:
     UINT height_ = 720;
     double current_fps_ = 0.0;  // smoothed FPS for the optional on-screen counter
     bool world_cam_initialised_ = false;  // free-fly camera lazily framed on first World frame
+    std::array<float, 3> character_offset_{0.0f, 0.0f, 0.0f};
+    float character_motion_phase_ = 0.0f;
+    float character_motion_strength_ = 0.0f;
     int last_resolution_index_ = -1;  // tracks the applied Options "Resolution" value
     int last_aa_index_ = -1;  // tracks the applied Options "Anti-Aliasing" value
     UINT msaa_samples_ = 1;  // current MSAA sample count (1 = off)
     ComPtr<ID3D12Resource> msaa_target_;  // multisampled color target resolved into the back buffer
     D3D12_CPU_DESCRIPTOR_HANDLE msaa_rtv_{};
     ComPtr<ID3D12Resource> depth_target_;  // D32 depth buffer for the World state (occlusion)
+    ComPtr<ID3D12Resource> depth_copy_;    // shader-readable copy for water shoreline depth
     ComPtr<ID3D12DescriptorHeap> dsv_heap_;
     D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle_{};
+    D3D12_GPU_DESCRIPTOR_HANDLE depth_gpu_handle_{};
     UINT rtv_stride_ = 0;
     UINT descriptor_stride_ = 0;
     UINT video_descriptor_index_ = 0;
@@ -1539,6 +1631,7 @@ private:
     f2::NativeFont native_font_;
     UiGpuTexture font_texture_;
     UINT font_descriptor_index_ = 0;
+    UINT depth_descriptor_index_ = 0;
     f2::NativeFrontendAudio audio_;
     std::filesystem::path active_video_path_;
     f2::NativeVideoDecoder video_decoder_;

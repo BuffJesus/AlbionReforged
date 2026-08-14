@@ -27,6 +27,7 @@ struct Constants {
     float sun_direction[4]{0.0f, -1.0f, 0.0f, 0.0f};  // xyz = normalised light dir (world), w unused
     float eye_time[4]{0.0f, 0.0f, 0.0f, 0.0f};         // xyz = camera eye (world), w = elapsed seconds
     float sun_color[4]{1.0f, 1.0f, 1.0f, 0.0f};        // rgb = directional sun colour (theme)
+    float viewport_size[4]{0.0f, 0.0f, 0.0f, 0.0f};    // xy = render width/height
 };
 
 // b1 point-light cbuffer (level_lights_effects_re.txt §3.1). Mirrors the HLSL layout:
@@ -39,6 +40,12 @@ struct Lights {
     float color_intensity[64][4]{};
 };
 
+// b2 water material cbuffer. Ten float4s carry WaterFile::params[37], followed by the
+// WaterTheme opacity in params[9].y. Each material gets a 256-byte-aligned slice.
+struct WaterConstants {
+    float params[10][4]{};
+};
+
 struct Geometry {
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
@@ -47,6 +54,7 @@ struct Geometry {
         std::uint32_t index_count = 0;
         std::uint32_t material_index = 0;
         bool is_water = false;
+        bool is_character = false;
     };
     std::vector<DrawRange> draw_ranges;
 };
@@ -174,10 +182,11 @@ Geometry make_geometry(const NativeScene& scene) {
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
         const bool is_water = mesh.material < scene.materials.size() &&
                               scene.materials[mesh.material].name == "water";
+        const bool is_character = mesh.name.rfind("hero", 0) == 0;
         geometry.draw_ranges.push_back({first_index,
                                         static_cast<std::uint32_t>(mesh.indices.size()),
-                                        std::min(mesh.material, NativeWorldRenderer::kMaxMaterialTextures / 2 - 1),
-                                        is_water});
+                                        std::min(mesh.material, NativeWorldRenderer::kMaxMaterialTextures / 3 - 1),
+                                        is_water, is_character});
     }
 
     if (!geometry.vertices.empty()) return geometry;
@@ -463,29 +472,64 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     }
     light_address_ = light_buffer_->GetGPUVirtualAddress();
 
+    const std::size_t water_stride = 256;
+    const std::size_t water_size = std::max<std::size_t>(water_stride, material_count * water_stride);
+    std::vector<std::uint8_t> water_data(water_size, 0);
+    for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
+        WaterConstants constants{};
+        if (material_index < scene.materials.size()) {
+            const auto& material = scene.materials[material_index];
+            for (std::size_t i = 0; i < material.water_params.size(); ++i)
+                constants.params[i / 4][i % 4] = material.water_params[i];
+            constants.params[9][1] = material.water_opacity;
+        }
+        std::memcpy(water_data.data() + material_index * water_stride, &constants,
+                    sizeof(constants));
+    }
+    if (!create_upload_buffer(device, water_data.data(), water_data.size(), water_buffer_, error)) {
+        return false;
+    }
+    water_address_ = water_buffer_->GetGPUVirtualAddress();
+
     Microsoft::WRL::ComPtr<ID3DBlob> vertex_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> pixel_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> water_pixel_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> shader_errors;
     constexpr char shader_source[] = R"(
-cbuffer Camera : register(b0) { row_major float4x4 view_projection; float4 sun_direction; float4 eye_time; float4 sun_color; };
+cbuffer Camera : register(b0) {
+    row_major float4x4 view_projection;
+    float4 sun_direction;
+    float4 eye_time;
+    float4 sun_color;
+    float4 viewport_size;
+};
 // Local point lights (level_lights_effects_re.txt §3.1): lamp posts, lanterns, braziers.
 cbuffer Lights : register(b1) {
     uint light_count; float3 _light_pad;
     float4 light_pos_range[64];        // xyz = render-space pos, w = range (wu)
     float4 light_color_intensity[64];  // rgb = colour (0..1), w = intensity
 };
+cbuffer Water : register(b2) { float4 water_params[10]; };
+cbuffer DrawFlags : register(b3) {
+    uint is_character;
+    float3 character_offset;
+    float4 character_motion;
+};
 Texture2D albedo : register(t0);
 Texture2D normalTex : register(t1);
 Texture2D specTex : register(t2);
+Texture2D<float> scene_depth : register(t3);
 SamplerState albedo_sampler : register(s0);
 struct VSInput { float3 position : POSITION; float3 normal : NORMAL; float4 color : COLOR0; float2 uv : TEXCOORD0; float4 probe : COLOR1; };
 struct PSInput { float4 position : SV_POSITION; float3 normal : NORMAL; float3 world_pos : TEXCOORD1; float4 color : COLOR0; float2 uv : TEXCOORD0; float4 probe : COLOR1; };
 PSInput vs_main(VSInput input) {
     PSInput output;
-    output.position = mul(float4(input.position, 1.0), view_projection);
+    float3 motion = float3(0.0, sin(character_motion.x) * 0.045 * character_motion.y, 0.0);
+    float3 world_position = input.position +
+                            (is_character != 0 ? character_offset + motion : 0.0);
+    output.position = mul(float4(world_position, 1.0), view_projection);
     output.normal = input.normal;
-    output.world_pos = input.position;
+    output.world_pos = world_position;
     output.color = input.color;
     output.uv = input.uv;
     output.probe = input.probe;
@@ -550,29 +594,70 @@ float4 ps_main(PSInput input) : SV_TARGET {
     float3 color = lit;
     return float4(color, base.a);
 }
-// Animated translucent WATER (water_system_re.txt §5, retail params): a procedural dual-scrolled
-// ripple normal (no bump texture needed), fresnel deep↔surface colour, sky reflection, sun glitter.
+// Animated translucent WATER (water_system_re.txt §5): authored dual-scrolled bump normal,
+// Fresnel deep↔surface colour, sky reflection, and sun glitter. All level-specific values arrive
+// through WaterConstants (b2), never as chapter2slums shader literals.
 float4 ps_water(PSInput input) : SV_TARGET {
     float3 wp = input.world_pos;
     float t = eye_time.w;
     float2 p = wp.xz;
-    float2 uv0 = p * 0.188 + float2(0.052, 0.011) * t;   // NM_SCALE0 / NM_SPEED0 * time
-    float2 uv1 = p * 0.220 + float2(-0.019, 0.019) * t;  // NM_SCALE1 / NM_SPEED1
-    float2 n0 = float2(sin(uv0.x * 6.2831853), sin(uv0.y * 6.2831853));
-    float2 n1 = float2(sin(uv1.x * 6.2831853 + 1.7), sin(uv1.y * 6.2831853 + 1.7));
-    float2 nxy = (n0 + n1) * 0.12;                       // NORMAL_SCALE-ish ripple slope
+    float fresnel_bias = water_params[0].x;
+    float reflection_bias = water_params[0].y;
+    float2 uv0 = p * float2(water_params[1].z, water_params[1].w) +
+                 float2(water_params[0].z, water_params[0].w) * t;
+    float2 uv1 = p * float2(water_params[2].x, water_params[2].y) +
+                 float2(water_params[1].x, water_params[1].y) * t;
+    float2 n0 = normalTex.Sample(albedo_sampler, uv0).xy * 2.0 - 1.0;
+    float2 n1 = normalTex.Sample(albedo_sampler, uv1).xy * 2.0 - 1.0;
+    float2 nxy = (n0 + n1) * 0.35;                        // damped authored ripple slope
+    // Retail's reflection stand-in uses m_ReflectionScale (params[25]) as a scalar for
+    // both components; params[26] is retained for the dropped screen-space refraction tile.
     float3 N = normalize(float3(nxy.x, 1.0, nxy.y));
     float3 V = normalize(eye_time.xyz - wp);
-    float fres = 0.20 + 0.80 * pow(1.0 - saturate(dot(V, N)), 5.0);  // FRESNEL_BIAS 0.20
-    float3 DEEP = float3(0.370, 0.470, 0.750);           // c127
-    float3 SURFACE = float3(0.000, 0.1275, 0.1913);      // c126
+    // Retail's Fresnel normal is intentionally almost horizontal; its authored NORMAL_SCALE is
+    // WaterFile::params[24], not the upward reflection normal.
+    // Keep reflection and glitter on a broad upward normal; the high-frequency normal map
+    // produces white noise when applied directly to this term.
+    float3 Nf = normalize(float3(nxy.x, 1.0, nxy.y));
+    float fres = fresnel_bias +
+                 (1.0 - fresnel_bias) * pow(1.0 - saturate(dot(V, Nf)), 5.0);
+    float3 SURFACE = float3(water_params[4].z, water_params[4].w, water_params[5].x);
+    float3 DEEP = water_params[5].yzw;
     float3 watercol = lerp(DEEP, SURFACE, fres);
-    float3 sky = float3(0.6549, 0.8157, 1.0);            // zenith blue (env theme) as reflection
-    float3 col = lerp(watercol, sky, 0.75 * fres);       // REFLECTION_STRENGTH 0.75
-    float3 L = -normalize(sun_direction.xyz);            // toward the sun
-    float glit = pow(saturate(dot(V, reflect(-L, N))), 128.0) * 5.0;  // GLITTER_POWER 128 / STRENGTH 5
-    col += glit;
-    return float4(col, saturate(0.72 + 0.22 * fres));    // translucent, more opaque at grazing
+    float3 reflection_ray = reflect(-V, N);
+    reflection_ray.y = abs(reflection_ray.y);
+    float sky_t = saturate(reflection_ray.y * 0.5 + 0.5);
+    // The reflection stand-in follows the same resolved chapter2slums theme endpoints as the
+    // native sky pass: complementary horizon → sky_colour zenith (env_theme_colors_re §0).
+    float3 sky = lerp(float3(0.222, 0.5789, 1.11),
+                      float3(0.6549, 0.8157, 1.0), sky_t);
+    float fres_reflect = saturate(fres + reflection_bias);
+    float distf = saturate(length(eye_time.xyz - wp) / 75.0);
+    float refl_strength = saturate(water_params[7].y);
+    float refl = refl_strength * lerp(fres_reflect, 1.0, distf);
+    float3 col = watercol * (1.0 - refl_strength) + sky * refl;
+    float3 L = normalize(sun_direction.xyz);             // authored light-travel direction
+    float3 Ng = Nf;
+    float glit = pow(saturate(dot(V, reflect(L, Ng))), water_params[9].x) *
+                 water_params[8].w;
+    // Keep the authored glitter power, but attenuate its brightness for the native HDR-less
+    // target; the retail compositor applies an exposure stage that is not present here.
+    col += glit * sun_color.rgb * 0.25;
+    // The authored PF40 normal map supplies the water ripple detail and glitter response.
+    // Retail emits the refraction coefficient as alpha; with ONE/SRC_ALPHA blending the
+    // framebuffer behind the surface supplies the scene/refraction term. The actual retail
+    // scene-depth edge factor is unavailable until the depth copy is exposed to this pass.
+    float refr_k = (1.0 - distf) * refl_strength * (1.0 - fres_reflect);
+    // Reversed-Z depth delta: a flat water surface has a larger depth value than the
+    // terrain beneath it. Near the authored shoreline the values converge, so soften the
+    // refraction alpha instead of leaving a hard polygon edge. The copied depth texture
+    // contains 0 for the sky/far clear, which intentionally leaves open water fully visible.
+    float2 screen_uv = saturate(input.position.xy / viewport_size.xy);
+    float scene_z = scene_depth.SampleLevel(albedo_sampler, screen_uv, 0);
+    float water_z = input.position.z;
+    float shoreline = lerp(0.05, 1.0, saturate((water_z - scene_z) * 256.0));
+    refr_k *= shoreline;
+    return float4(col, saturate(refr_k));
 }
 )";
     const auto compile = [&](const char* entry, const char* target,
@@ -587,7 +672,7 @@ float4 ps_water(PSInput input) : SV_TARGET {
         return false;
     }
 
-    D3D12_ROOT_PARAMETER root_parameters[3]{};
+    D3D12_ROOT_PARAMETER root_parameters[6]{};
     root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     root_parameters[0].Descriptor.ShaderRegister = 0;
     root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // PS reads sun_direction too
@@ -604,6 +689,21 @@ float4 ps_water(PSInput input) : SV_TARGET {
     root_parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     root_parameters[2].Descriptor.ShaderRegister = 1;
     root_parameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    root_parameters[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    root_parameters[3].Descriptor.ShaderRegister = 2;
+    root_parameters[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_DESCRIPTOR_RANGE depth_range{};
+    depth_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    depth_range.NumDescriptors = 1;
+    depth_range.BaseShaderRegister = 3;
+    root_parameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    root_parameters[4].DescriptorTable.NumDescriptorRanges = 1;
+    root_parameters[4].DescriptorTable.pDescriptorRanges = &depth_range;
+    root_parameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    root_parameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    root_parameters[5].Constants.ShaderRegister = 3;
+    root_parameters[5].Constants.Num32BitValues = 8;
+    root_parameters[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     D3D12_STATIC_SAMPLER_DESC sampler{};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -613,7 +713,7 @@ float4 ps_water(PSInput input) : SV_TARGET {
     sampler.ShaderRegister = 0;
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_ROOT_SIGNATURE_DESC root_description{};
-    root_description.NumParameters = 3;
+    root_description.NumParameters = 6;
     root_description.pParameters = root_parameters;
     root_description.NumStaticSamplers = 1;
     root_description.pStaticSamplers = &sampler;
@@ -668,14 +768,14 @@ float4 ps_water(PSInput input) : SV_TARGET {
         return false;
     }
 
-    // Water pipeline: same VS/layout, the animated water PS, alpha blend (SRC_ALPHA/INV_SRC_ALPHA),
+    // Water pipeline: same VS/layout, the animated water PS, retail ONE/SRC_ALPHA color blend,
     // depth-test on but depth-WRITE off (translucent surface over the terrain).
     D3D12_GRAPHICS_PIPELINE_STATE_DESC water = pipeline;
     water.PS = {water_pixel_shader->GetBufferPointer(), water_pixel_shader->GetBufferSize()};
     auto& wt = water.BlendState.RenderTarget[0];
     wt.BlendEnable = TRUE;
-    wt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
-    wt.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    wt.SrcBlend = D3D12_BLEND_ONE;
+    wt.DestBlend = D3D12_BLEND_SRC_ALPHA;
     wt.BlendOp = D3D12_BLEND_OP_ADD;
     wt.SrcBlendAlpha = D3D12_BLEND_ONE;
     wt.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
@@ -783,6 +883,8 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     constants.sun_color[1] = scene.sun_color[1];
     constants.sun_color[2] = scene.sun_color[2];
     constants.sun_color[3] = 0.0f;
+    constants.viewport_size[0] = static_cast<float>(width);
+    constants.viewport_size[1] = static_cast<float>(height);
     constants.eye_time[0] = eye[0];
     constants.eye_time[1] = eye[1];
     constants.eye_time[2] = eye[2];
@@ -801,6 +903,10 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     command_list->SetGraphicsRootConstantBufferView(0, constant_address_);
     command_list->SetGraphicsRootDescriptorTable(1, texture_gpu_handle_);
     command_list->SetGraphicsRootConstantBufferView(2, light_address_);  // b1 point lights
+    const bool depth_copy_ready = scene_depth_source_ && scene_depth_copy_;
+    if (depth_copy_ready) {
+        command_list->SetGraphicsRootDescriptorTable(4, scene_depth_gpu_handle_);
+    }
     command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     command_list->IASetVertexBuffers(0, 1, &vertex_view_);
     command_list->IASetIndexBuffer(&index_view_);
@@ -814,11 +920,44 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
             texture_handle.ptr += static_cast<std::size_t>(range.material_index) * 3 *
                                  texture_descriptor_stride_;
             command_list->SetGraphicsRootDescriptorTable(1, texture_handle);
+            command_list->SetGraphicsRootConstantBufferView(
+                3, water_address_ + static_cast<D3D12_GPU_VIRTUAL_ADDRESS>(range.material_index) * 256);
+            struct DrawConstants {
+                std::uint32_t is_character;
+                float character_offset[3];
+                float character_motion[4];
+            } draw_constants{range.is_character ? 1u : 0u,
+                             {character_offset_[0], character_offset_[1], character_offset_[2]},
+                             {character_motion_phase_, character_motion_strength_, 0.0f, 0.0f}};
+            command_list->SetGraphicsRoot32BitConstants(5, 8, &draw_constants, 0);
             command_list->DrawIndexedInstanced(range.index_count, 1, range.first_index, 0, 0);
         }
     };
     draw_pass(false, pipeline_state_.Get());
-    draw_pass(true, water_pipeline_.Get());
+    if (depth_copy_ready) {
+        D3D12_RESOURCE_BARRIER barriers[2]{};
+        barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[0].Transition.pResource = scene_depth_source_;
+        barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[1].Transition.pResource = scene_depth_copy_;
+        barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        command_list->ResourceBarrier(2, barriers);
+        command_list->CopyResource(scene_depth_copy_, scene_depth_source_);
+        barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        command_list->ResourceBarrier(2, barriers);
+    }
+    // The water shader samples the copied depth unconditionally. If depth resources could not
+    // be created (for example during a transient device/resize failure), keep the opaque scene
+    // valid and avoid issuing a draw with an unbound t3 descriptor.
+    if (depth_copy_ready) draw_pass(true, water_pipeline_.Get());
 }
 
 }  // namespace f2

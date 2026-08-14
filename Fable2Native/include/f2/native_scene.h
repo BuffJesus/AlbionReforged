@@ -20,6 +20,20 @@ struct NativeMaterial {
     std::string albedo;
     std::string normal;
     std::string material;
+    // Authored WaterFile::params[37] (water_system_re.txt), retained per material instead of
+    // baking chapter2slums values into either backend shader. water_opacity is the resolved
+    // WaterTheme value, separate because it is not part of the .water body parameter array;
+    // retail program 57 carries it in its water constant block but does not consume it directly.
+    bool has_water_params = false;
+    // Retail defaults keep older F2SCENE packages (which predate water_params=) valid. An
+    // authored .water body overwrites this array during cooking/loading.
+    std::array<float, 37> water_params{
+        0.20f, 0.0f, 0.052f, 0.011f, -0.019f, 0.019f, 0.188f, 0.188f,
+        0.220f, 0.220f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.1275f, 0.1913f, 0.370f, 0.470f, 0.750f, 0.05f, 2.0f,
+        2.0f, 2.0f, 2.0f, 0.75f, 0.10f, 0.15f, 0.10f, 2.0f, 0.30f,
+        5.0f, 128.0f};
+    float water_opacity = 0.42f;
 };
 
 struct NativeMesh {
@@ -70,6 +84,11 @@ struct NativeScene {
     bool has_focus = false;
     std::array<float, 3> focus_center{0.0f, 0.0f, 0.0f};
     float focus_radius = 1.0f;
+    // Optional render-space PlayerStart for hero inspection scenes. This is separate from `focus`
+    // because a town-wide camera fit and a close hero inspection view serve different purposes.
+    bool has_hero_start = false;
+    std::array<float, 3> hero_start{0.0f, 0.0f, 0.0f};
+    float hero_yaw = 0.0f;
 
     bool validate(std::string* error = nullptr) const;
 };

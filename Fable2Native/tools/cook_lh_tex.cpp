@@ -283,6 +283,30 @@ int main(int argc, char** argv) {
     in.seekg(0);
     in.read(reinterpret_cast<char*>(bytes.data()), size);
 
+    // Header-backed globals_texture entries can be exported as a bare mip payload rather
+    // than the 48-byte LhTex definition. PF40 headers describe a 256x256 (or similarly
+    // sized) Xbox BC5 mip whose body starts with a BE byte-count prefix. The AssetBrowser
+    // TexParser consumes this form from globals_texture_headers.bnk; accept it here when
+    // the caller supplies the header's PF/width/height metadata.
+    if (pf == 40 && arg_w > 0 && arg_h > 0 && bytes.size() >= 4) {
+        const std::size_t blocks_w = (static_cast<std::size_t>(arg_w) + 3u) / 4u;
+        const std::size_t blocks_h = (static_cast<std::size_t>(arg_h) + 3u) / 4u;
+        const std::size_t mip_size = blocks_w * blocks_h * 16u;
+        const auto declared = read_be32(bytes, 0);
+        if (declared == mip_size && bytes.size() >= 4u + mip_size) {
+            std::vector<std::uint8_t> linear;
+            untile_xbox360_bc(bytes.data() + 4, mip_size, linear, arg_w, arg_h, 16);
+            swap_bc_endian(linear);  // BC5 uses the same 16-bit word order as BC1/BC3 here.
+            std::vector<std::uint8_t> rgba;
+            blit_bc5_to_rgba(linear.data(), arg_w, arg_h, rgba);
+            if (!write_dds_rgba8(output, static_cast<std::uint32_t>(arg_w),
+                                 static_cast<std::uint32_t>(arg_h), rgba))
+                return fail("unable to write output: " + output);
+            printf("%dx%d (header PF40 BC5) -> %s\n", arg_w, arg_h, output.c_str());
+            return 0;
+        }
+    }
+
     const auto comp = read_be32(bytes, 0);
     const auto data_off = read_be32(bytes, 4);
     const auto data_size = read_be32(bytes, 8);

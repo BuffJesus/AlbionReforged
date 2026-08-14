@@ -434,7 +434,7 @@ void FrontendSceneBuilder::build_choose_card(f2::render::UiDrawList& scene, floa
 }
 
 void FrontendSceneBuilder::build_fps_overlay(f2::render::UiDrawList& scene, float width, float height,
-                                             double fps) const {
+                                              double fps) const {
     (void)height;
     const float unit = width / 1280.0f;
     char buffer[32];
@@ -444,6 +444,21 @@ void FrontendSceneBuilder::build_fps_overlay(f2::render::UiDrawList& scene, floa
     const float y = 8.0f * unit;
     emit_text(scene, buffer, x + 1.0f * unit, y + 1.0f * unit, size, rgba(0, 0, 0, 190));
     emit_text(scene, buffer, x, y, size, rgba(80, 255, 80, 255));
+}
+
+void FrontendSceneBuilder::build_world_overlay(f2::render::UiDrawList& scene, float width,
+                                               float height, bool has_hero,
+                                               const std::array<float, 3>& hero_offset,
+                                               bool moving) const {
+    (void)height;
+    if (!has_hero) return;
+    const float unit = width / 1280.0f;
+    char offset[96];
+    std::snprintf(offset, sizeof(offset), "Hero offset  X %.1f  Y %.1f  Z %.1f  %s",
+                  hero_offset[0], hero_offset[1], hero_offset[2], moving ? "WALK" : "IDLE");
+    const char* controls = "IJKL move   U/O height   Shift boost   R reset   F reframe";
+    emit_text(scene, controls, 14.0f * unit, 12.0f * unit, 18.0f * unit, rgba(235, 240, 255, 230));
+    emit_text(scene, offset, 14.0f * unit, 34.0f * unit, 16.0f * unit, rgba(235, 240, 255, 210));
 }
 
 void FrontendSceneBuilder::build_options_chrome(f2::render::UiDrawList& scene, float width,

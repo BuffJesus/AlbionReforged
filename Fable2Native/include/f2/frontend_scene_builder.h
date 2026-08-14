@@ -7,6 +7,7 @@
 #include "f2/render/ui_draw_list.h"
 
 #include <cstdint>
+#include <array>
 #include <functional>
 #include <string_view>
 #include <vector>
@@ -43,6 +44,9 @@ public:
     void build_choose_card(f2::render::UiDrawList& scene, float width, float height) const;
     // On-screen FPS counter overlay (top-right), drawn by both backends when the Video option is on.
     void build_fps_overlay(f2::render::UiDrawList& scene, float width, float height, double fps) const;
+    // Hero inspection overlay shared by D3D12 and Vulkan world views.
+    void build_world_overlay(f2::render::UiDrawList& scene, float width, float height, bool has_hero,
+                             const std::array<float, 3>& hero_offset, bool moving) const;
     // Main menu + (when state==Options) the options chrome/page, and the ChooseCard modal veil+cards.
     void build_main_menu(f2::render::UiDrawList& scene, float width, float height,
                          const NativeGame& game, bool using_controller_prompts);

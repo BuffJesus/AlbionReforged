@@ -36,6 +36,15 @@ public:
                 std::uint32_t height,
                 double elapsed_seconds);
 
+    // The frontend supplies a shader-readable copy of the World depth buffer. It is copied
+    // after opaque geometry and sampled by the water pass for the shoreline edge factor.
+    void set_scene_depth_copy(ID3D12Resource* source, ID3D12Resource* copy,
+                              D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle) {
+        scene_depth_source_ = source;
+        scene_depth_copy_ = copy;
+        scene_depth_gpu_handle_ = gpu_handle;
+    }
+
     // The orbit camera render() flies each frame, exposed so a companion pass (the sky)
     // can build rays from the EXACT same basis. Uses the same fit-to-scene framing.
     SkyCamera compute_camera(std::uint32_t width, std::uint32_t height,
@@ -51,6 +60,13 @@ public:
         free_pitch_ = pitch;
     }
     void clear_free_camera() noexcept { free_camera_ = false; }
+    void set_character_offset(const std::array<float, 3>& offset) noexcept {
+        character_offset_ = offset;
+    }
+    void set_character_motion(float phase, float strength) noexcept {
+        character_motion_phase_ = phase;
+        character_motion_strength_ = strength;
+    }
     [[nodiscard]] const std::array<float, 3>& scene_center() const noexcept { return scene_center_; }
     [[nodiscard]] float scene_radius() const noexcept { return scene_radius_; }
 
@@ -62,7 +78,12 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> index_buffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> constant_buffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> light_buffer_;  // b1 point-light array
+    Microsoft::WRL::ComPtr<ID3D12Resource> water_buffer_;  // b2 authored WaterFile params
     D3D12_GPU_VIRTUAL_ADDRESS light_address_ = 0;
+    D3D12_GPU_VIRTUAL_ADDRESS water_address_ = 0;
+    ID3D12Resource* scene_depth_source_ = nullptr;
+    ID3D12Resource* scene_depth_copy_ = nullptr;
+    D3D12_GPU_DESCRIPTOR_HANDLE scene_depth_gpu_handle_{};
     Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_state_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> water_pipeline_;  // translucent animated water
@@ -80,11 +101,15 @@ private:
     std::array<float, 3> free_eye_{0.0f, 0.0f, 0.0f};
     float free_yaw_ = 0.0f;
     float free_pitch_ = 0.0f;
+    std::array<float, 3> character_offset_{0.0f, 0.0f, 0.0f};
+    float character_motion_phase_ = 0.0f;
+    float character_motion_strength_ = 0.0f;
     struct DrawRange {
         std::uint32_t first_index = 0;
         std::uint32_t index_count = 0;
         std::uint32_t material_index = 0;
         bool is_water = false;  // drawn in the translucent water pass with the water shader
+        bool is_character = false;
     };
     std::vector<DrawRange> draw_ranges_;
     void* mapped_constants_ = nullptr;

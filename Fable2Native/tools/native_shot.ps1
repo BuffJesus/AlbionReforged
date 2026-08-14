@@ -2,7 +2,8 @@
 param(
     [string]$Mode = "--skip-intro --start-menu",
     [string]$Tag  = "baseline",
-    [int]$WaitSeconds = 8
+    [int]$WaitSeconds = 8,
+    [int]$WindowWaitSeconds = 30
 )
 $ErrorActionPreference = 'Continue'
 $root   = "D:\Documents\Fable2RE"
@@ -32,7 +33,12 @@ $proc = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
 if (-not $proc) { Write-Host "process exited early"; return }
 $h = $proc.MainWindowHandle
 $tries = 0
-while ($h -eq 0 -and $tries -lt 10) { Start-Sleep -Seconds 1; $proc.Refresh(); $h = $proc.MainWindowHandle; $tries++ }
+while ($h -eq 0 -and $tries -lt $WindowWaitSeconds) {
+    Start-Sleep -Seconds 1
+    $proc.Refresh()
+    $h = $proc.MainWindowHandle
+    $tries++
+}
 if ($h -eq 0) { Write-Host "no window handle"; Stop-Process -Id $p.Id -Force; return }
 
 $r = New-Object Cap+R

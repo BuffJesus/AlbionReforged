@@ -22,6 +22,20 @@ bool read_vec3(std::istringstream& line, std::array<float, 3>& value) {
            read_value(line, value[2]);
 }
 
+template <std::size_t N>
+bool read_csv_floats(const std::string& text, std::array<float, N>& values) {
+    std::istringstream input(text);
+    std::string token;
+    for (std::size_t i = 0; i < N; ++i) {
+        if (!std::getline(input, token, ',')) return false;
+        std::istringstream number(token);
+        if (!(number >> values[i])) return false;
+        number >> std::ws;
+        if (!number.eof()) return false;
+    }
+    return !std::getline(input, token, ',');
+}
+
 }  // namespace
 
 bool NativeScene::validate(std::string* error) const {
@@ -98,6 +112,19 @@ bool load_native_scene(const std::filesystem::path& path,
                 if (key == "albedo") material.albedo = value;
                 else if (key == "normal") material.normal = value;
                 else if (key == "material") material.material = value;
+                else if (key == "water_params") {
+                    if (!read_csv_floats(value, material.water_params)) {
+                        return fail(&error, "invalid water_params at line " +
+                                             std::to_string(line_number));
+                    }
+                    material.has_water_params = true;
+                } else if (key == "water_opacity") {
+                    std::istringstream number(value);
+                    if (!(number >> material.water_opacity)) {
+                        return fail(&error, "invalid water_opacity at line " +
+                                             std::to_string(line_number));
+                    }
+                }
                 else return fail(&error, "unknown material option '" + key + "' at line " +
                                  std::to_string(line_number));
             }
@@ -182,6 +209,12 @@ bool load_native_scene(const std::filesystem::path& path,
                 return fail(&error, "invalid focus at line " + std::to_string(line_number));
             }
             parsed.has_focus = true;
+        } else if (opcode == "hero_start") {
+            // hero_start <px> <py> <pz> <yaw> — render-space PlayerStart for inspection framing.
+            if (!read_vec3(line, parsed.hero_start) || !read_value(line, parsed.hero_yaw)) {
+                return fail(&error, "invalid hero_start at line " + std::to_string(line_number));
+            }
+            parsed.has_hero_start = true;
         } else if (opcode == "light") {
             // light <px> <py> <pz> <r> <g> <b> <range> <intensity>
             // (render-space position, linear-ish colour 0..1, wu radius, brightness).
@@ -216,6 +249,10 @@ bool save_native_scene(const std::filesystem::path& path,
            << scene.sun_color[2] << '\n';
     output << "sky " << scene.sky_color[0] << ' ' << scene.sky_color[1] << ' ' << scene.sky_color[2]
            << ' ' << scene.sky_color[3] << '\n';
+    if (scene.has_hero_start) {
+        output << "hero_start " << scene.hero_start[0] << ' ' << scene.hero_start[1] << ' '
+               << scene.hero_start[2] << ' ' << scene.hero_yaw << '\n';
+    }
     for (const NativeMaterial& material : scene.materials) {
         output << "material " << material.name << ' ' << material.base_color[0] << ' '
                << material.base_color[1] << ' ' << material.base_color[2] << ' '
@@ -223,6 +260,14 @@ bool save_native_scene(const std::filesystem::path& path,
         if (!material.albedo.empty()) output << " albedo=" << material.albedo;
         if (!material.normal.empty()) output << " normal=" << material.normal;
         if (!material.material.empty()) output << " material=" << material.material;
+        if (material.has_water_params) {
+            output << " water_params=";
+            for (std::size_t i = 0; i < material.water_params.size(); ++i) {
+                if (i) output << ',';
+                output << material.water_params[i];
+            }
+            output << " water_opacity=" << material.water_opacity;
+        }
         output << '\n';
     }
     for (const NativeMesh& mesh : scene.meshes) {

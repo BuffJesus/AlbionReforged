@@ -3,6 +3,7 @@
 #include "f2/native_frontend_config.h"
 #include "f2/native_game.h"
 #include "f2/native_install.h"
+#include "f2/native_scene.h"
 #include "f2/native_texture.h"
 #include "f2/native_ui.h"
 #include "f2/render/null_render_backend.h"
@@ -379,14 +380,43 @@ int main() {
     }
 
     {
+        // Legacy F2SCENE water materials omit water_params=. They must still use the retail
+        // defaults instead of uploading an all-zero constant block to either backend.
+        const auto legacy_path = std::filesystem::temp_directory_path() /
+                                 "f2native_legacy_water.f2scene";
+        {
+            std::ofstream output(legacy_path);
+            output << "F2SCENE 1\n"
+                   << "material water 0.14 0.34 0.52 1\n";
+        }
+        f2::NativeScene legacy;
+        std::string legacy_error;
+        assert(f2::load_native_scene(legacy_path, legacy, legacy_error));
+        assert(legacy.materials.size() == 1);
+        assert(!legacy.materials[0].has_water_params);
+        assert(std::abs(legacy.materials[0].water_params[0] - 0.20f) < 1e-5f);
+        assert(std::abs(legacy.materials[0].water_params[6] - 0.188f) < 1e-5f);
+        assert(std::abs(legacy.materials[0].water_params[29] - 0.75f) < 1e-5f);
+        assert(std::abs(legacy.materials[0].water_params[36] - 128.0f) < 1e-5f);
+        std::filesystem::remove(legacy_path);
+    }
+
+    {
         // F2SCENE writer round-trip: the level cooker's output stage must reload identically.
         f2::NativeScene written;
         written.sun_direction = {0.1f, -0.9f, 0.4f};
         written.sky_color = {0.2f, 0.3f, 0.4f, 1.0f};
+        written.has_hero_start = true;
+        written.hero_start = {12.5f, 1.25f, -8.25f};
+        written.hero_yaw = -0.75f;
         f2::NativeMaterial mat;
         mat.name = "wall_stone";
         mat.base_color = {0.8f, 0.7f, 0.6f, 1.0f};
         mat.albedo = "worlds/albion/bwsslums/wall.dds";
+        mat.has_water_params = true;
+        for (std::size_t i = 0; i < mat.water_params.size(); ++i)
+            mat.water_params[i] = static_cast<float>(i) * 0.125f - 1.0f;
+        mat.water_opacity = 0.42f;
         written.materials.push_back(mat);
         f2::NativeMesh mesh;
         mesh.name = "house_01";
@@ -406,6 +436,16 @@ int main() {
         assert(reloaded.materials.size() == 1);
         assert(reloaded.materials[0].name == "wall_stone");
         assert(reloaded.materials[0].albedo == "worlds/albion/bwsslums/wall.dds");
+        assert(reloaded.materials[0].has_water_params);
+        assert(reloaded.has_hero_start);
+        assert(std::abs(reloaded.hero_start[0] - 12.5f) < 1e-5f);
+        assert(std::abs(reloaded.hero_start[1] - 1.25f) < 1e-5f);
+        assert(std::abs(reloaded.hero_start[2] + 8.25f) < 1e-5f);
+        assert(std::abs(reloaded.hero_yaw + 0.75f) < 1e-5f);
+        for (std::size_t i = 0; i < reloaded.materials[0].water_params.size(); ++i)
+            assert(approx(reloaded.materials[0].water_params[i],
+                          static_cast<float>(i) * 0.125f - 1.0f));
+        assert(approx(reloaded.materials[0].water_opacity, 0.42f));
         assert(reloaded.meshes.size() == 1);
         assert(reloaded.meshes[0].name == "house_01");
         assert(reloaded.meshes[0].vertices.size() == 3);

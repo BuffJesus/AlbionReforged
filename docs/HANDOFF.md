@@ -4,6 +4,15 @@
 Branch **`agent/native-spec-maps-and-char`** (off `main` @ `ece53de`; ~13 commits, NOT yet merged). This session
 did a big "why does chapter2slums still look wrong" pass, diffing our native render against the **AssetBrowser oracle**
 (3 decomp subagents + direct data). Shipped, both backends, screenshot-verified:
+- **hero inspection controller** — `--hero` cooker output now renders the child hero meshes on both
+  D3D12 and Vulkan; `IJKL` moves hero ranges, `U/O` adjusts height, and `Shift` boosts. The offset is
+  backend-neutral and applied in the vertex path without rebuilding static world buffers. This is a
+  first character milestone: the cooker supplies an idle pose, while runtime animation, collision,
+  and a third-person camera remain future work. The F2SCENE now carries `hero_start`; hero scenes
+  auto-frame PlayerStart and display the shared live offset/control overlay on both backends. `R`
+  resets the offset and `F` reframes the inspection camera. The latest milestone adds a small
+  hero-only locomotion bob driven by held movement input, with `IDLE`/`WALK` state in the overlay;
+  the mesh remains the cooker-baked idle pose until skeletal runtime animation is implemented;
 - **spec/gloss maps (t2)** Blinn-Phong; **free-fly camera** (WASD/QE/arrows, D3D12 World state);
 - **GDB props** — THE big miss: the recook never passed `--props`, so ~1073 GDB/save entities (the town's real density)
   were uncooked → 88→**617 meshes / 6573 instances**. THE RECOOK MUST INCLUDE `--props --propdump propdump.exe`.
@@ -14,18 +23,72 @@ did a big "why does chapter2slums still look wrong" pass, diffing our native ren
 - **castle lit** (unprobed structures use the level-mean baked ambient); **reversed-Z** both backends (fixes "light
   through seams when rotating" = depth Z-fight across town→horizon span); **terrain AO** baked into the splat
   (terrain_splat_bake decodes the .ehf body atlas pf24, `ao*0.55+0.45`).
+- **water normal map** — the real `.water` material path is now carried into F2SCENE; the PF40
+  `waternormalmap01.tex` header-backed global texture cooks as 256×256 BC5 and is sampled by both water shaders.
 
-**★ OPEN TASK (resume here) — the castle-approach SEA JUNCTION "feels off" (user, NOT tone/atmosphere/floating):**
-I widened the sea_vista plane under the castle (`--vista-ehf` + `_build_ehf` `fill_max_x`) and flagged it material
-"water" (commits c2a7d41, e1fd16c). This removed the two-TONE seam but the user's last words: **"you can still see
-OVERLAPPING water planes — what happened to creating the ACTUAL water from the game?"** → DIRECTIVE: stop kludging a
-widened rectangular plane; cook the game's **real** water. NEXT STEP (mid-investigation): parse what `slums.water` +
-`sea_vista.water` actually cover (`_build_water` @ cook_levels.py:571 reads per-patch cx,cz,ex,ez + mask — dump the
-world-bounds), see if they overlap each other + whether real water covers the castle approach at all; if not, the castle
-sits on land/cliff and the widened-plane approach should likely be REVERTED to real-water-only. Also still off: water too
-transparent at grazing (deep-water should be darker/opaque like the oracle) + terrain hard coast edge (.ghf ends flat at
-Y=0). Method: PIL-crop the junction of our render vs the AB oracle (ab_clean.png) and Read both. Full detail: memory
-`fable2native-level-cook-renders` ▶▶ RESUME HERE block.
+**✓ OPEN TASK RESOLVED (2026-08-12) — castle-approach SEA JUNCTION:**
+The extracted water files were parsed directly. `slums.water` contains the town/canal bodies and ponds; the real
+`sea_vista.water` is one body at height 36.613 covering game X[0,66], Y[-128,2]. The castle-side remainder is
+backdrop/skybox geometry, not a missing shipped water body. The widened `sea_vista.ehf` plane was an invented
+extension and sat at height 35.304 beneath the real water, causing the overlapping-plane artifact. The cooker now
+keeps vista geometry at its authored footprint/material and never widens or relabels it as water. A verified
+real-water-only recook (`scratchpad/lvl/out_realwater.f2scene`) renders the authored sea strip with no duplicate
+surface. The subsequent water-material pass now emits one F2SCENE material per authored body, carries all 37
+big-endian `.water` params plus the resolved chapter2slums WaterTheme opacity, and binds them per material in both
+D3D12 and Vulkan. The native pixel paths now also match the retail `ONE/SRC_ALPHA` refraction composite,
+`refr_k=(1-distf)*refl_str*(1-frefl)`, scalar reflection scale, light direction, and reflected-ray hemisphere.
+The D3D12 pass now copies opaque reversed-Z depth to an R32 SRV before water and applies a
+conservative shoreline alpha factor; the resource clear value and debug-layer validation are clean.
+Vulkan still uses the authored water alpha without the depth-copy shoreline term; a first input-
+attachment/subpass implementation was reverted after a clear-only runtime capture, so do not
+resume from that experiment. The combined
+frontend build was reconfigured with Vulkan enabled and clean-built: generated SPIR-V plus both
+native frontend backends compile. Vulkan world parity fixes in this continuation are: match the
+D3D12 `CULL_NONE` policy (the cooked MDL winding is mixed) and use the same orbit camera basis;
+the Vulkan world now renders the complete terrain/castle scene instead of losing large faces. The
+Vulkan water PSO also now matches D3D12's depth policy: it tests against opaque depth but does not
+write depth. D3D12 shoreline UVs are clamped at the render-target edge before sampling the copied
+R32 depth texture. Vulkan also now enforces the same opaque-first, water-second draw ordering as
+D3D12 instead of relying on the current cooker append order. The D3D12 material-index clamp was
+also updated from the old two-texture bound to the current three-slot albedo/normal/spec bound.
+The D3D12 water draw now requires both depth resources to be live before binding the water PSO;
+an allocation/resize failure therefore leaves the opaque scene valid instead of sampling an
+unbound t3 descriptor. The known-good `out_waterparams.f2scene` still produces a complete native
+runtime capture after these changes.
+Legacy water materials without `water_params=` now receive the retail parameter defaults,
+including the slums surface/deep colours, reflection, and glitter values, so older F2SCENE
+packages no longer render their water plane black. The capture helper now waits up to 30 seconds
+for a window, covering the roughly 15-second startup of the large `out_realwater.f2scene` package.
+Vulkan now also has the D3D12 Phase-0 procedural sky gradient as a dedicated pre-world pass,
+using the authored zenith color and the RE'd blue complementary horizon tint; both backend smoke
+captures show the gradient behind the complete world. The Vulkan sky renderer now cleans up all
+partially-created resources on initialization failure. Vulkan scene-depth shoreline remains
+deferred: the default frontend uses 4x MSAA, so a correct implementation needs a supported depth
+resolve/copy phase and a second water pass rather than the reverted input-attachment experiment.
+Legacy-water regression coverage now asserts that an F2SCENE material without `water_params=`
+loads the retail defaults, including reflection strength and glitter power.
+The Vulkan install manifest was tightened to the six supported generated SPIR-V files only
+(sky, UI, and world vertex/fragment pairs), excluding stale experimental shader binaries from
+older build directories. A staged `cmake --install` check reported exactly six shaders, and
+post-install Vulkan and D3D12 smoke captures both showed the complete scene with the expected
+sky pass.
+The Vulkan MSAA render pass now has an explicit opaque subpass followed by a water subpass;
+MSAA color remains live for the translucent composite and resolves only after water. This was
+compiled and runtime-captured on the real-water scene for Vulkan and D3D12. The render-pass2/
+depth-resolve step is now implemented: devices exposing
+`VK_KHR_create_renderpass2` and
+`VK_KHR_depth_stencil_resolve` resolve opaque depth with `MAX` (correct for reversed-Z), transition
+it to shader-read layout in the water subpass, and apply the shoreline factor in Vulkan water.
+Devices without those extensions retain the validated subpass path with the shoreline term off.
+The resolved-depth Vulkan real-water capture and the D3D12 regression capture both completed
+successfully after the change. The current AMD Radeon RX 9060 XT driver advertises both required
+extensions and all four depth resolve modes, including `MAX`; the Vulkan window title now marks
+whether the MSAA depth-resolve path or the legacy fallback was selected. Optional resolve-image
+allocation failure also rebuilds the legacy render pass instead of aborting frontend startup.
+The free-flight inspection camera is now wired on Vulkan as well as D3D12: `WASD` moves on the
+view plane, `Q`/`E` move vertically, arrows look, and `Shift` boosts. It lazily frames the cooked
+scene on World entry and clears on exit, making close-range material, water, and shoreline
+inspection consistent across both backends.
 
 **Recook command of record (chapter2slums, staged inputs in scratchpad/lvl/):**
 ```
@@ -33,11 +96,12 @@ python Fable2Native/tools/cook_levels.py <chapter2slums.engine_level> --cook out
   --f2tool f2tool.exe --tex-cook f2native_cook_lh_tex.exe \
   --header-bnk Globals/globals_model_headers.bnk --body-bnk chapter2slums_models.bnk --types 2,21 \
   --terrain-ghf slums.ghf --terrain-ehf slums.ehf --terrain-stride 2 --splat-bake terrain_splat_bake.exe \
-  --level-lmp chapter2slums.lmp --water-file slums.water --water-file sea_vista.water --vista-ehf sea_vista.ehf \
+  --level-lmp chapter2slums.lmp --water-file slums.water --water-file sea_vista.water \
   --props --propdump propdump.exe \
   --lights --lightdump lightdump.exe --level-save chapter2slums.save --level-gdb chapter2slums.gdb --globals-gdb Globals/globals.gdb \
   --textures-bnk shared_6281.bnk --textures-bnk shared_2445.bnk --textures-bnk level_textures.bnk \
-  --textures-bnk Globals/1024mip0_textures.bnk --textures-bnk Globals/globals_textures.bnk
+  --textures-bnk Globals/1024mip0_textures.bnk --textures-bnk Globals/globals_textures.bnk \
+  --texture-headers-bnk Globals/globals_texture_headers.bnk
 ```
 **AssetBrowser oracle (parity):** `Fable_2_Asset_Browser.exe --autoroot=<...\assets\game\data> --autoload=chapter2slums
 --autoshot=<png> --autotime=12.0 --cleanshot --autowait=120 --autoexit` — `=`-form args REQUIRED; FOREGROUND the window

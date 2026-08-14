@@ -34,6 +34,10 @@ struct Lights {
     float color_intensity[64][4]{};  // rgb = colour, w = intensity
 };
 
+struct WaterConstants {
+    std::array<std::array<float, 4>, 10> params{};
+};
+
 struct Geometry {
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
@@ -42,6 +46,7 @@ struct Geometry {
         std::uint32_t index_count = 0;
         std::uint32_t material_index = 0;
         bool is_water = false;
+        bool is_character = false;
     };
     std::vector<DrawRange> draw_ranges;
 };
@@ -132,11 +137,12 @@ Geometry make_geometry(const NativeScene& scene) {
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
         const bool is_water = mesh.material < scene.materials.size() &&
                               scene.materials[mesh.material].name == "water";
+        const bool is_character = mesh.name.rfind("hero", 0) == 0;
         geometry.draw_ranges.push_back({first_index,
                                         static_cast<std::uint32_t>(mesh.indices.size()),
                                         std::min(mesh.material,
                                                  NativeVulkanWorldRenderer::kMaxMaterialTextures - 1),
-                                        is_water});
+                                        is_water, is_character});
     }
 
     if (!geometry.vertices.empty()) return geometry;
@@ -426,6 +432,7 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
                                            VkRenderPass render_pass,
                                            VkFormat color_format,
                                            VkSampleCountFlagBits samples,
+                                           VkImageView depth_resolve_view,
                                            const std::filesystem::path& texture_root,
                                            const std::filesystem::path& shader_directory,
                                            const NativeScene& scene,
@@ -433,6 +440,8 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     device_ = device;
     command_pool_ = command_pool;
     queue_ = queue;
+    depth_resolve_view_ = depth_resolve_view;
+    depth_resolve_enabled_ = depth_resolve_view_ != VK_NULL_HANDLE;
     const auto geometry = make_geometry(scene);
     if (geometry.vertices.empty() || geometry.indices.empty()) {
         error = "The native Vulkan world has no renderable geometry.";
@@ -567,7 +576,22 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         }
     }
 
-    VkDescriptorSetLayoutBinding bindings[5]{};
+    water_buffers_.resize(material_count, VK_NULL_HANDLE);
+    water_memories_.resize(material_count, VK_NULL_HANDLE);
+    for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
+        WaterConstants constants{};
+        if (material_index < scene.materials.size()) {
+            const auto& material = scene.materials[material_index];
+            for (std::size_t i = 0; i < material.water_params.size(); ++i)
+                constants.params[i / 4][i % 4] = material.water_params[i];
+            constants.params[9][1] = material.water_opacity;
+        }
+        if (!upload_buffer(physical_device, device_, &constants, sizeof(constants),
+                           VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, water_buffers_[material_index],
+                           water_memories_[material_index], error)) return false;
+    }
+
+    VkDescriptorSetLayoutBinding bindings[7]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -588,8 +612,16 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[4].descriptorCount = 1;
     bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[5].binding = 5;  // authored WaterFile params + WaterTheme opacity
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[5].descriptorCount = 1;
+    bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[6].binding = 6;  // resolved opaque depth; fallback albedo is used when unavailable
+    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[6].descriptorCount = 1;
+    bindings[6].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_info.bindingCount = 5;
+    layout_info.bindingCount = 7;
     layout_info.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &descriptor_set_layout_) != VK_SUCCESS) {
         error = "Vulkan could not create the world descriptor layout.";
@@ -597,8 +629,8 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     }
 
     VkDescriptorPoolSize pool_sizes[] = {
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<std::uint32_t>(material_count * 2)},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<std::uint32_t>(material_count * 3)},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<std::uint32_t>(material_count * 3)},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<std::uint32_t>(material_count * 4)},
     };
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool_info.maxSets = static_cast<std::uint32_t>(material_count);
@@ -623,7 +655,9 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     std::vector<VkDescriptorImageInfo> image_infos(material_count);   // albedo (t0)
     std::vector<VkDescriptorImageInfo> normal_infos(material_count);  // normal map (t1)
     std::vector<VkDescriptorImageInfo> spec_infos(material_count);    // spec/"material" (t2)
-    std::vector<VkWriteDescriptorSet> writes(material_count * 5);
+    std::vector<VkDescriptorImageInfo> depth_infos(material_count);   // resolved opaque depth
+    std::vector<VkDescriptorBufferInfo> water_infos(material_count);
+    std::vector<VkWriteDescriptorSet> writes(material_count * 7);
     for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
         image_infos[material_index] = {texture_samplers_[material_index],
                                        texture_views_[material_index],
@@ -634,41 +668,61 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         spec_infos[material_index] = {spec_samplers_[material_index],
                                       spec_views_[material_index],
                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        auto& uniform_write = writes[material_index * 5];
+        depth_infos[material_index] = {
+            depth_resolve_enabled_ ? texture_samplers_[material_index] : texture_samplers_[0],
+            depth_resolve_enabled_ ? depth_resolve_view_ : texture_views_[0],
+            depth_resolve_enabled_ ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                   : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        water_infos[material_index] = {water_buffers_[material_index], 0, sizeof(WaterConstants)};
+        auto& uniform_write = writes[material_index * 7];
         uniform_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         uniform_write.dstSet = descriptor_sets_[material_index];
         uniform_write.dstBinding = 0;
         uniform_write.descriptorCount = 1;
         uniform_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         uniform_write.pBufferInfo = &buffer_info;
-        auto& image_write = writes[material_index * 5 + 1];
+        auto& image_write = writes[material_index * 7 + 1];
         image_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         image_write.dstSet = descriptor_sets_[material_index];
         image_write.dstBinding = 1;
         image_write.descriptorCount = 1;
         image_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         image_write.pImageInfo = &image_infos[material_index];
-        auto& normal_write = writes[material_index * 5 + 2];
+        auto& normal_write = writes[material_index * 7 + 2];
         normal_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         normal_write.dstSet = descriptor_sets_[material_index];
         normal_write.dstBinding = 2;
         normal_write.descriptorCount = 1;
         normal_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         normal_write.pImageInfo = &normal_infos[material_index];
-        auto& lights_write = writes[material_index * 5 + 3];
+        auto& lights_write = writes[material_index * 7 + 3];
         lights_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         lights_write.dstSet = descriptor_sets_[material_index];
         lights_write.dstBinding = 3;
         lights_write.descriptorCount = 1;
         lights_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         lights_write.pBufferInfo = &lights_info;
-        auto& spec_write = writes[material_index * 5 + 4];
+        auto& spec_write = writes[material_index * 7 + 4];
         spec_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         spec_write.dstSet = descriptor_sets_[material_index];
         spec_write.dstBinding = 4;
         spec_write.descriptorCount = 1;
         spec_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         spec_write.pImageInfo = &spec_infos[material_index];
+        auto& water_write = writes[material_index * 7 + 5];
+        water_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        water_write.dstSet = descriptor_sets_[material_index];
+        water_write.dstBinding = 5;
+        water_write.descriptorCount = 1;
+        water_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        water_write.pBufferInfo = &water_infos[material_index];
+        auto& depth_write = writes[material_index * 7 + 6];
+        depth_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        depth_write.dstSet = descriptor_sets_[material_index];
+        depth_write.dstBinding = 6;
+        depth_write.descriptorCount = 1;
+        depth_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        depth_write.pImageInfo = &depth_infos[material_index];
     }
     vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()),
                            writes.data(), 0, nullptr);
@@ -722,7 +776,9 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     viewport.scissorCount = 1;
     VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    // Match D3D12's CULL_NONE. The cooked MDL triangle winding is not guaranteed to use
+    // one global front-face convention (and the native D3D path intentionally draws both).
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.lineWidth = 1.0f;
     VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
@@ -733,12 +789,12 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     depth_stencil.depthTestEnable = VK_TRUE;
     depth_stencil.depthWriteEnable = VK_TRUE;
     depth_stencil.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;  // reversed-Z
-    // Alpha blend so translucent water composites over the opaque world. Opaque fragments
-    // output alpha=1 -> src*1 + dst*0 = src (a no-op), so only water actually blends.
+    // Opaque world geometry uses a non-blended PSO. Water gets a separate PSO below because
+    // Vulkan blend state is pipeline-static; retail water itself uses ONE/SRC_ALPHA.
     VkPipelineColorBlendAttachmentState blend_attachment{};
-    blend_attachment.blendEnable = VK_TRUE;
-    blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blend_attachment.blendEnable = VK_FALSE;
+    blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
     blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
     blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
@@ -752,11 +808,11 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dynamic.dynamicStateCount = 2;
     dynamic.pDynamicStates = dynamic_states;
-    // Push constant: is_water (uint) selects the procedural water path in the fragment shader.
+    // Push constants select the water path, depth availability, and optional hero offset.
     VkPushConstantRange push_range{};
-    push_range.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     push_range.offset = 0;
-    push_range.size = sizeof(std::uint32_t);
+    push_range.size = 48;
     VkPipelineLayoutCreateInfo pipeline_layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pipeline_layout.setLayoutCount = 1;
     pipeline_layout.pSetLayouts = &descriptor_set_layout_;
@@ -781,8 +837,28 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     pipeline_info.pDynamicState = &dynamic;
     pipeline_info.layout = pipeline_layout_;
     pipeline_info.renderPass = render_pass;
+    pipeline_info.subpass = 0;
     if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline_) != VK_SUCCESS) {
         error = "Vulkan could not create the native world pipeline.";
+        vkDestroyShaderModule(device_, vertex_module, nullptr);
+        vkDestroyShaderModule(device_, fragment_module, nullptr);
+        return false;
+    }
+    // Water PSO: the shader emits the refraction coefficient as alpha and the framebuffer behind
+    // the surface supplies the scene term (water_system_re.txt §5-6).
+    blend_attachment.blendEnable = VK_TRUE;
+    blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    // Match D3D12: the translucent water surface tests against the opaque depth buffer
+    // but must not replace it, otherwise later water ranges can occlude one another and
+    // the pass no longer behaves like a composited surface.
+    depth_stencil.depthWriteEnable = VK_FALSE;
+    // Under MSAA the frontend resolves color in the second subpass, where water is drawn over
+    // the opaque multisample image. The single-sample render pass remains one subpass.
+    pipeline_info.subpass = samples > VK_SAMPLE_COUNT_1_BIT ? 1u : 0u;
+    if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipeline_info, nullptr,
+                                  &water_pipeline_) != VK_SUCCESS) {
+        error = "Vulkan could not create the native water pipeline.";
         vkDestroyShaderModule(device_, vertex_module, nullptr);
         vkDestroyShaderModule(device_, fragment_module, nullptr);
         return false;
@@ -794,10 +870,11 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     return true;
 }
 
-void NativeVulkanWorldRenderer::render(VkCommandBuffer command_buffer,
-                                       std::uint32_t width,
-                                       std::uint32_t height,
-                                       double elapsed_seconds) {
+void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
+                                            std::uint32_t width,
+                                            std::uint32_t height,
+                                            double elapsed_seconds,
+                                            bool water) {
     if (!pipeline_ || !mapped_constants_ || width == 0 || height == 0) return;
 
     const float angle = static_cast<float>(elapsed_seconds * 0.25);
@@ -818,8 +895,10 @@ void NativeVulkanWorldRenderer::render(VkCommandBuffer command_buffer,
         forward = normalise(subtract(target, eye));
     }
     const std::array<float, 3> up{0.0f, 1.0f, 0.0f};
-    const auto right = normalise(cross(forward, up));
-    const auto camera_up = cross(right, forward);
+    // Match D3D12's camera basis exactly. The Vulkan viewport handles the API's vertical
+    // origin separately; the world-space right/up vectors must remain identical.
+    const auto right = normalise(cross(up, forward));
+    const auto camera_up = cross(forward, right);
     std::array<float, 16> view{};
     view[0] = right[0]; view[1] = camera_up[0]; view[2] = -forward[0]; view[3] = 0.0f;
     view[4] = right[1]; view[5] = camera_up[1]; view[6] = -forward[1]; view[7] = 0.0f;
@@ -851,26 +930,66 @@ void NativeVulkanWorldRenderer::render(VkCommandBuffer command_buffer,
     vkCmdSetViewport(command_buffer, 0, 1, &viewport);
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
     VkDeviceSize offset = 0;
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
     vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer_, &offset);
     vkCmdBindIndexBuffer(command_buffer, index_buffer_, 0, VK_INDEX_TYPE_UINT32);
     for (const auto& range : draw_ranges_) {
+        if (range.is_water != water) continue;
         const auto material_index = std::min<std::size_t>(range.material_index,
                                                            descriptor_sets_.size() - 1);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 pipeline_layout_, 0, 1,
                                 &descriptor_sets_[material_index], 0, nullptr);
-        const std::uint32_t is_water = range.is_water ? 1u : 0u;
-        vkCmdPushConstants(command_buffer, pipeline_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                           sizeof(is_water), &is_water);
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          water ? water_pipeline_ : pipeline_);
+        struct PushConstants {
+            std::uint32_t is_water = 0;
+            std::uint32_t has_scene_depth = 0;
+            std::uint32_t is_character = 0;
+            std::uint32_t padding = 0;
+            std::array<float, 4> character_offset{};
+            std::array<float, 4> character_motion{};
+        } push_constants;
+        push_constants.is_water = water ? 1u : 0u;
+        push_constants.has_scene_depth = depth_resolve_enabled_ ? 1u : 0u;
+        push_constants.is_character = range.is_character ? 1u : 0u;
+        push_constants.character_offset = {character_offset_[0], character_offset_[1],
+                                           character_offset_[2], 0.0f};
+        push_constants.character_motion = {character_motion_phase_, character_motion_strength_,
+                                           0.0f, 0.0f};
+        vkCmdPushConstants(command_buffer, pipeline_layout_,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(push_constants), &push_constants);
         vkCmdDrawIndexed(command_buffer, range.index_count, 1, range.first_index, 0, 0);
     }
+}
+
+void NativeVulkanWorldRenderer::render(VkCommandBuffer command_buffer,
+                                       std::uint32_t width,
+                                       std::uint32_t height,
+                                       double elapsed_seconds) {
+    render_pass(command_buffer, width, height, elapsed_seconds, false);
+    render_pass(command_buffer, width, height, elapsed_seconds, true);
+}
+
+void NativeVulkanWorldRenderer::render_opaque(VkCommandBuffer command_buffer,
+                                              std::uint32_t width,
+                                              std::uint32_t height,
+                                              double elapsed_seconds) {
+    render_pass(command_buffer, width, height, elapsed_seconds, false);
+}
+
+void NativeVulkanWorldRenderer::render_water(VkCommandBuffer command_buffer,
+                                             std::uint32_t width,
+                                             std::uint32_t height,
+                                             double elapsed_seconds) {
+    render_pass(command_buffer, width, height, elapsed_seconds, true);
 }
 
 void NativeVulkanWorldRenderer::destroy() {
     if (device_ == VK_NULL_HANDLE) return;
     if (mapped_constants_) vkUnmapMemory(device_, constant_memory_);
     if (pipeline_) vkDestroyPipeline(device_, pipeline_, nullptr);
+    if (water_pipeline_) vkDestroyPipeline(device_, water_pipeline_, nullptr);
     if (pipeline_layout_) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
     for (const auto sampler : texture_samplers_) {
         if (sampler) vkDestroySampler(device_, sampler, nullptr);
@@ -914,6 +1033,12 @@ void NativeVulkanWorldRenderer::destroy() {
     if (constant_memory_) vkFreeMemory(device_, constant_memory_, nullptr);
     if (lights_buffer_) vkDestroyBuffer(device_, lights_buffer_, nullptr);
     if (lights_memory_) vkFreeMemory(device_, lights_memory_, nullptr);
+    for (const auto buffer : water_buffers_) {
+        if (buffer) vkDestroyBuffer(device_, buffer, nullptr);
+    }
+    for (const auto memory : water_memories_) {
+        if (memory) vkFreeMemory(device_, memory, nullptr);
+    }
     if (index_buffer_) vkDestroyBuffer(device_, index_buffer_, nullptr);
     if (index_memory_) vkFreeMemory(device_, index_memory_, nullptr);
     if (vertex_buffer_) vkDestroyBuffer(device_, vertex_buffer_, nullptr);
@@ -929,11 +1054,14 @@ void NativeVulkanWorldRenderer::destroy() {
     constant_memory_ = VK_NULL_HANDLE;
     lights_buffer_ = VK_NULL_HANDLE;
     lights_memory_ = VK_NULL_HANDLE;
+    water_buffers_.clear();
+    water_memories_.clear();
     mapped_constants_ = nullptr;
     descriptor_set_layout_ = VK_NULL_HANDLE;
     descriptor_pool_ = VK_NULL_HANDLE;
     pipeline_layout_ = VK_NULL_HANDLE;
     pipeline_ = VK_NULL_HANDLE;
+    water_pipeline_ = VK_NULL_HANDLE;
     descriptor_sets_.clear();
     texture_images_.clear();
     texture_memories_.clear();

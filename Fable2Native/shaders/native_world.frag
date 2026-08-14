@@ -20,28 +20,79 @@ layout(set = 0, binding = 3) uniform Lights {
     vec4 light_color_intensity[64];  // rgb = colour, w = intensity
 } lights;
 layout(set = 0, binding = 4) uniform sampler2D specTex;  // spec/"material" mask (t2)
-layout(push_constant) uniform Push { uint is_water; } pc;
+layout(set = 0, binding = 5) uniform Water {
+    vec4 params[10]; // WaterFile::params[37], then WaterTheme opacity in params[9].y
+} water_params;
+layout(set = 0, binding = 6) uniform sampler2D sceneDepth;
+layout(push_constant) uniform Push {
+    uint is_water;
+    uint has_scene_depth;
+    uint is_character;
+    uint _padding;
+    vec4 character_offset;
+    vec4 character_motion;
+} pc;
 layout(location = 0) out vec4 out_color;
 
-// Animated translucent water (mirror of native_world_renderer.cpp ps_water): dual-scrolled
-// procedural ripple normal, fresnel deep<->surface colour, sky reflection, sun glitter.
+// Animated translucent water: authored dual-scrolled bump normal, Fresnel deep<->surface colour,
+// sky reflection, and sun glitter. WaterFile params are bound per material at binding 5.
 vec4 water() {
     vec3 wp = world_pos;
     float t = camera.eye_time.w;
     vec2 p = wp.xz;
-    vec2 uv0 = p * 0.188 + vec2(0.052, 0.011) * t;
-    vec2 uv1 = p * 0.220 + vec2(-0.019, 0.019) * t;
-    vec2 n0 = vec2(sin(uv0.x * 6.2831853), sin(uv0.y * 6.2831853));
-    vec2 n1 = vec2(sin(uv1.x * 6.2831853 + 1.7), sin(uv1.y * 6.2831853 + 1.7));
-    vec2 nxy = (n0 + n1) * 0.12;
+    vec2 uv0 = p * water_params.params[1].zw + water_params.params[0].zw * t;
+    vec2 uv1 = p * water_params.params[2].xy + water_params.params[1].xy * t;
+    vec2 n0 = texture(normalTex, uv0).xy * 2.0 - 1.0;
+    vec2 n1 = texture(normalTex, uv1).xy * 2.0 - 1.0;
+    vec2 nxy = (n0 + n1) * 0.35;
+    // Retail uses m_ReflectionScale (params[25]) as a scalar for both components; params[26]
+    // belongs to the dropped screen-space refraction tile.
     vec3 N = normalize(vec3(nxy.x, 1.0, nxy.y));
     vec3 V = normalize(camera.eye_time.xyz - wp);
-    float fres = 0.20 + 0.80 * pow(1.0 - clamp(dot(V, N), 0.0, 1.0), 5.0);
-    vec3 watercol = mix(vec3(0.370, 0.470, 0.750), vec3(0.000, 0.1275, 0.1913), fres);
-    vec3 col = mix(watercol, vec3(0.6549, 0.8157, 1.0), 0.75 * fres);  // sky reflection
-    vec3 L = -normalize(camera.sun_direction.xyz);
-    col += pow(clamp(dot(V, reflect(-L, N)), 0.0, 1.0), 128.0) * 5.0;  // sun glitter
-    return vec4(col, clamp(0.72 + 0.22 * fres, 0.0, 1.0));
+    // Retail uses a nearly horizontal Fresnel normal (water_system_re §5, NORMAL_SCALE=0.05).
+    // Keep reflection and glitter on a broad upward normal; the high-frequency normal map
+    // produces white noise when applied directly to this term.
+    vec3 Nf = normalize(vec3(nxy.x, 1.0, nxy.y));
+    float fres = water_params.params[0].x +
+                 (1.0 - water_params.params[0].x) *
+                     pow(1.0 - clamp(dot(V, Nf), 0.0, 1.0), 5.0);
+    vec3 surface = vec3(water_params.params[4].z, water_params.params[4].w,
+                        water_params.params[5].x);
+    vec3 deep = water_params.params[5].yzw;
+    vec3 watercol = mix(deep, surface, fres);
+    float fres_reflect = clamp(fres + water_params.params[0].y, 0.0, 1.0);
+    float distf = clamp(length(camera.eye_time.xyz - wp) / 75.0, 0.0, 1.0);
+    vec3 reflection_ray = reflect(-V, N);
+    reflection_ray.y = abs(reflection_ray.y);
+    float sky_t = clamp(reflection_ray.y * 0.5 + 0.5, 0.0, 1.0);
+    // Same resolved chapter2slums theme endpoints as the native sky pass
+    // (env_theme_colors_re §0): complementary horizon -> sky_colour zenith.
+    vec3 sky = mix(vec3(0.222, 0.5789, 1.11), vec3(0.6549, 0.8157, 1.0), sky_t);
+    float refl_strength = clamp(water_params.params[7].y, 0.0, 1.0);
+    float refl = refl_strength * mix(fres_reflect, 1.0, distf);
+    vec3 col = watercol * (1.0 - refl_strength) + sky * refl;
+    vec3 L = normalize(camera.sun_direction.xyz);
+    vec3 Ng = Nf;
+    // The authored PF40 normal map supplies the water ripple detail and glitter response.
+    // Keep the authored glitter power, but attenuate its brightness for the native HDR-less
+    // target; the retail compositor applies an exposure stage that is not present here.
+    col += camera.sun_color.rgb * pow(clamp(dot(V, reflect(L, Ng)), 0.0, 1.0),
+                                      water_params.params[9].x) * water_params.params[8].w * 0.25;
+    // Retail emits the refraction coefficient as alpha; the ONE/SRC_ALPHA blend lets the
+    // framebuffer behind the surface supply the scene/refraction term. Vulkan optionally adds
+    // the resolved scene-depth edge factor below when MSAA depth resolve is supported.
+    float refr_k = (1.0 - distf) * refl_strength * (1.0 - fres_reflect);
+    if (pc.has_scene_depth != 0u) {
+        vec2 screen_uv = clamp(gl_FragCoord.xy / vec2(textureSize(sceneDepth, 0)),
+                               vec2(0.0), vec2(1.0));
+        float scene_z = texture(sceneDepth, screen_uv).r;
+        // Reversed-Z: opaque geometry beneath water has a larger depth value than the water
+        // surface. Fade the refraction term at the resolved shoreline while leaving open water
+        // (resolved far clear = 0) fully visible.
+        float shoreline = mix(0.05, 1.0, clamp((gl_FragCoord.z - scene_z) * 256.0, 0.0, 1.0));
+        refr_k *= shoreline;
+    }
+    return vec4(col, clamp(refr_k, 0.0, 1.0));
 }
 
 void main() {

@@ -276,7 +276,7 @@ def _instance_transform(block: dict, inst: dict):
 
 
 def _cook_textures(tokens, textures_bnks, tex_cook: Path, f2tool: Path,
-                   out_dir: Path, tmp: Path, log=print) -> dict:
+                   out_dir: Path, tmp: Path, texture_headers_bnks=None, log=print) -> dict:
     """Extract + decode each referenced `.tex` into a loose DDS, searching every source bnk.
 
     `textures_bnks` = ordered list of container Paths (e.g. globals_textures.bnk, the level's
@@ -291,6 +291,8 @@ def _cook_textures(tokens, textures_bnks, tex_cook: Path, f2tool: Path,
         return {}
     out_dir.mkdir(parents=True, exist_ok=True)
     indices = [(b, _bnk_name_index(b)) for b in sources]
+    header_sources = [b for b in (texture_headers_bnks or []) if b]
+    header_indices = [(b, _bnk_name_index(b)) for b in header_sources]
     cooked: dict[str, str] = {}
     for token in tokens:
         if token in cooked:
@@ -313,8 +315,26 @@ def _cook_textures(tokens, textures_bnks, tex_cook: Path, f2tool: Path,
         try:
             subprocess.run([str(f2tool), "extract", str(bnk), exact, str(raw)],
                            check=True, capture_output=True)
-            result = subprocess.run([str(tex_cook), str(raw), str(dds)],
-                                    capture_output=True, text=True)
+            cook_args = [str(tex_cook), str(raw), str(dds)]
+            # Some globals textures are bare payloads paired with an entry in
+            # globals_texture_headers.bnk rather than self-describing LhTex mips. Supply
+            # PF/width/height metadata to the native cooker when that header is available.
+            for hb, hidx in header_indices:
+                h_exact = _resolve(hidx, token)
+                if not h_exact:
+                    continue
+                hraw = tmp / f"{stem}.texture_header"
+                subprocess.run([str(f2tool), "extract", str(hb), h_exact, str(hraw)],
+                               check=True, capture_output=True)
+                header = hraw.read_bytes()
+                if len(header) >= 0x1c:
+                    pf = struct.unpack_from(">I", header, 0x18)[0]
+                    hw = struct.unpack_from(">I", header, 0x10)[0]
+                    hh = struct.unpack_from(">I", header, 0x14)[0]
+                    if pf and hw and hh:
+                        cook_args += ["--pf", str(pf), "--width", str(hw), "--height", str(hh)]
+                break
+            result = subprocess.run(cook_args, capture_output=True, text=True)
             if result.returncode != 0 or not dds.is_file():
                 log(f"  tex skip ({result.stdout.strip() or result.stderr.strip()}): {token}")
                 continue
@@ -571,7 +591,8 @@ def _build_terrain(ghf_bytes: bytes, stride: int = 1, uv_scale: float = TERRAIN_
 def _build_water(water_bytes: bytes):
     """Parse a .water file → one merged flat water-plane mesh in GAME space (worldX, worldZ,
     base_height); the F2SCENE writer's {x,z,y} swap puts the plane at render Y=base_height.
-    Faithful port of ghidra_out/water_system_re.txt (BE). Returns (pos,nrm,uv,idx) or None."""
+    Faithful port of ghidra_out/water_system_re.txt (BE). Returns authored body tuples
+    (pos,nrm,uv,idx,normal_map,params) or None."""
     MARKER = 0x00000FEC
     r = BeReader(water_bytes)
     version = r.u32()
@@ -579,7 +600,7 @@ def _build_water(water_bytes: bytes):
     if version != 2 or not body_count or body_count > 256:
         return None  # empty/vista placeholder or corrupt
     offsets = [r.u32() for _ in range(body_count)]
-    pos, nrm, uv, idx = [], [], [], []
+    bodies = []
     for off in offsets:
         if off is None or off >= r.n:
             continue
@@ -588,13 +609,14 @@ def _build_water(water_bytes: bytes):
             continue
         r.f32()                                   # param_a
         base_h = r.f32()
-        for _ in range(37):                       # material params (shader-side; skip)
-            r.f32()
-        r.cstr()                                  # normal_map path
+        params = [r.f32() for _ in range(37)]     # WaterFile::params, shader-side
+        body_normal_map = r.cstr()                # normal_map path
+        body_normal_map = body_normal_map.replace("\\", "/") if body_normal_map else ""
         r.cstr()                                  # secondary_map path
         patch_count = r.u32()
         if patch_count is None or patch_count > 4096:
             continue
+        pos, nrm, uv, idx = [], [], [], []
         for _t in range(patch_count):
             if r.u32() != MARKER:
                 break
@@ -631,7 +653,9 @@ def _build_water(water_bytes: bytes):
                     v01 = base_v + (mz + 1) * (cw + 1) + mx
                     v11 = v01 + 1
                     idx.extend((v00, v11, v10, v00, v01, v11))
-    return (pos, nrm, uv, idx) if idx else None
+        if idx:
+            bodies.append((pos, nrm, uv, idx, body_normal_map, params))
+    return bodies or None
 
 
 # Default child-male villager part set (all validated through fable_mdl_format's
@@ -764,20 +788,18 @@ def read_lights(level_save: Path, level_gdb: Path, lightdump: Path,
     return lights
 
 
-def _build_ehf(ehf_bytes: bytes, fill_max_x: float = None):
-    """Cook a flat sea/backdrop .ehf vista mesh (the distant coast that fills the void
-    between the town heightfield and the castle). ghidra_out/ehf_vista_re.txt: the 63-byte
+def _build_ehf(ehf_bytes: bytes):
+    """Cook a flat sea/backdrop .ehf vista mesh at its authored footprint.
+    ghidra_out/ehf_vista_re.txt: the 63-byte
     BE header carries origin (f0/f1), grid dims (u0/u1) and tile (f2); the render surface is
     a flat plane whose height is the constant repeated across the body's 850A0 vertices.
     Returns (pos,nrm,uv,idx) in GAME space (X, Y, height) — the writer applies the {x,z,y}
     swap. Flat-vista path only (the sea_vista is planar).
 
-    `fill_max_x`: extend the flat plane's X out to this game-X (the town terrain's max X) so
-    the sea plane spans the WHOLE seaward band under the Fairfax castle (which sits at game
-    X~173, Y~-92, OUTSIDE the town .ghf), not just the sea_vista's own X[0,64] footprint.
-    The plane height is the authored sea level (~35.3), so the castle's cliff rises from it
-    exactly as in-game (below-sea cliff is meant to be submerged). castle-gap RE
-    (ghidra_out/ehf_vista_re.txt §5 + the castle-gap decomp)."""
+    The mesh remains at the authored footprint and is a backdrop/vista surface, not a
+    substitute for a shipped `.water` body. In particular, do not widen `sea_vista.ehf`
+    across the castle approach: that creates a second surface underneath the real
+    `sea_vista.water` and invents geometry in the backdrop/skybox region."""
     if len(ehf_bytes) < 0x3f or ehf_bytes[:23] != b"HeightFieldGraphicsFile":
         return None
     ox, oy = struct.unpack_from(">ff", ehf_bytes, 0x1b)
@@ -873,12 +895,9 @@ def _build_ehf(ehf_bytes: bytes, fill_max_x: float = None):
     if coarse:
         return coarse
 
-    # FLAT-VISTA path (sea_vista): header grid at the constant plane height, optionally widened
-    # in X to span the full seaward band under the castle.
+    # FLAT-VISTA path (sea_vista): header grid at the authored constant plane height and
+    # footprint. Real water is parsed separately from the matching .water file.
     nx = u0
-    if fill_max_x is not None and fill_max_x > ox + (u0 - 1) * tile:
-        nx = int(round((fill_max_x - ox) / tile)) + 1
-        nx = max(u0, min(nx, 8192))
     pos, nrm, uv, idx = [], [], [], []
     for cy in range(u1):
         for cx in range(nx):
@@ -898,7 +917,7 @@ def _build_ehf(ehf_bytes: bytes, fill_max_x: float = None):
 
 def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
                out_scene: Path, types=(2, 21), max_per_block=None, log=print,
-               textures_bnks=None, tex_cook: Path = None,
+               textures_bnks=None, texture_headers_bnks=None, tex_cook: Path = None,
                tex_out_dir: Path = None, terrain_ghf: Path = None,
                terrain_ehf: Path = None, terrain_splat: bool = True,
                terrain_splat_res: int = 2048, splat_bake: Path = None,
@@ -986,6 +1005,7 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
     # First pass: cook models + assign stable mesh/material names.
     mesh_names: dict[str, list] = {}   # model key -> [mesh_name per geom]
     materials, meshes = [], []          # F2SCENE material / mesh records
+    hero_start = None                   # render-space PlayerStart + yaw for inspection framing
     for block in info["prop_blocks"]:
         if block["kind"] not in types or not block.get("model"):
             continue
@@ -1127,36 +1147,34 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             wbuilt = None
             log(f"  water skip ({type(exc).__name__}: {exc})")
         if wbuilt:
-            w_pos, w_nrm, w_uv, w_idx = wbuilt
-            w_mat = len(materials)
-            wname = f"water{wi}"
+            for bi, (w_pos, w_nrm, w_uv, w_idx, w_normal_map, w_params) in enumerate(wbuilt):
+                w_mat = len(materials)
+                wname = f"water{wi}_{bi}"
             # Material name MUST stay "water" — the renderer keys the animated translucent
-            # water shader off material.name == "water" (native_world_renderer.cpp).
-            materials.append(("water", [], (0.14, 0.34, 0.52, 1.0)))
-            meshes.append((wname, w_mat, w_pos, w_nrm, w_uv, w_idx))
-            instances.append((wname, (0.0, 0.0, 0.0), 0.0, 1.0))
-            n_inst += 1
-            log(f"water{wi} ({Path(wf).name}): {len(w_pos)//3} verts / {len(w_idx)//3} tris")
+                # water shader off material.name == "water" (native_world_renderer.cpp).
+                w_opts = ["normal=" + w_normal_map] if w_normal_map else []
+                w_opts.append("water_params=" + ",".join(f"{p:.9g}" for p in w_params))
+                w_opts.append("water_opacity=0.42")
+                materials.append(("water", w_opts, (0.14, 0.34, 0.52, 1.0)))
+                meshes.append((wname, w_mat, w_pos, w_nrm, w_uv, w_idx))
+                instances.append((wname, (0.0, 0.0, 0.0), 0.0, 1.0))
+                n_inst += 1
+                log(f"water{wi}_{bi} ({Path(wf).name}): {len(w_pos)//3} verts / {len(w_idx)//3} tris")
 
     # Distant sea/coast backdrop (.ehf) — the flat plane that fills the seaward void
-    # between the town heightfield and Fairfax castle (ghidra_out/ehf_vista_re.txt).
+    # between the town heightfield and Fairfax castle, kept at its authored footprint.
+    # Shipped .water bodies are the only source of native water geometry; do not widen
+    # or relabel this vista across the castle approach.
     if vista_ehf:
-        # Widen the flat sea plane out to the town terrain's max X so it spans the whole
-        # seaward band under the castle (not just the sea_vista's X[0,64]).
-        _vfill = (t_uv_world[0] + t_uv_world[2]) if (terrain_ghf and t_uv_world) else None
         try:
-            vbuilt = _build_ehf(Path(vista_ehf).read_bytes(), fill_max_x=_vfill)
+            vbuilt = _build_ehf(Path(vista_ehf).read_bytes())
         except Exception as exc:  # noqa: BLE001
             vbuilt = None
             log(f"  vista skip ({type(exc).__name__}: {exc})")
         if vbuilt:
             v_pos, v_nrm, v_uv, v_idx = vbuilt
             v_mat = len(materials)
-            # Render the widened seaward plane as ANIMATED WATER (material name "water" flags
-            # the water shader in both renderers), so the whole sea under the castle is ONE
-            # consistent moving water surface instead of a flat grey slab with a two-tone seam
-            # where the translucent .water planes ended. Colour ignored by the water PS.
-            materials.append(("water", [], (0.24, 0.33, 0.46, 1.0)))
+            materials.append(("vista", [], (0.24, 0.33, 0.46, 1.0)))
             meshes.append(("vista0", v_mat, v_pos, v_nrm, v_uv, v_idx))
             instances.append(("vista0", (0.0, 0.0, 0.0), 0.0, 1.0))
             n_inst += 1
@@ -1186,6 +1204,7 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                     hx, hy, hz = hero_pos
                 else:
                     hx, hy, hz = 192.622, 48.637, 169.201
+                hero_start = (hx, hy, hz, hero_yaw)
                 for gi, g in enumerate(hgeoms or []):
                     mat_idx = len(materials)
                     opts = []
@@ -1452,7 +1471,8 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
     tex_sources = [b for b in (textures_bnks or []) if b]
     tex_map = _cook_textures(albedo_tokens, tex_sources, tex_cook, f2tool,
                              tex_out_dir or (out_scene.parent / (out_scene.stem + ".textures")),
-                             tmp, log=log) if (tex_sources and tex_cook) else {}
+                             tmp, texture_headers_bnks=texture_headers_bnks,
+                             log=log) if (tex_sources and tex_cook) else {}
     n_tex = sum(1 for v in tex_map.values() if v)
     if tex_sources and tex_cook:
         log(f"cooked {n_tex}/{len(tex_map)} distinct albedo textures -> DDS")
@@ -1470,6 +1490,9 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
         # (env_theme_colors_re.txt §0); the world PS tints the N.L term with it.
         out.write("sunlight 1.0 0.902 0.4353\n")
         out.write("sky 0.6549 0.8157 1.0 1\n")
+        if hero_start is not None:
+            out.write(f"hero_start {hero_start[0]:.6g} {hero_start[1]:.6g} "
+                      f"{hero_start[2]:.6g} {hero_start[3]:.6g}\n")
         # Camera-fit bounds (render space) over the TOWN geometry only — every instance except
         # the horizon vista props (backdrop_mesh_names). Emitting an explicit `focus` frees the
         # renderer's auto-orbit from having to fit the ~1000wu spire (which would shrink the town
@@ -1577,6 +1600,9 @@ def main() -> int:
     ap.add_argument("--textures-bnk", type=Path, action="append", dest="textures_bnk",
                     help="a .tex source bnk (repeatable: globals_textures.bnk, the level's textures.bnk). "
                          "Searched in order.")
+    ap.add_argument("--texture-headers-bnk", type=Path, action="append", dest="texture_headers_bnk",
+                    help="a texture-header bnk (repeatable; supplies PF/width/height for bare global "
+                         "texture payloads such as PF40 water normals)")
     ap.add_argument("--tex-cook", type=Path,
                     default=Path(__file__).resolve().parents[1] / "build" / "RelWithDebInfo"
                     / "f2native_cook_lh_tex.exe",
@@ -1681,7 +1707,8 @@ def main() -> int:
         tex_cook = args.tex_cook if (args.tex_cook and args.tex_cook.is_file()) else None
         cook_level(args.engine_level, args.header_bnk, args.body_bnk, args.f2tool,
                    args.cook, types=types, max_per_block=args.max_per_block,
-                   textures_bnks=args.textures_bnk, tex_cook=tex_cook,
+                   textures_bnks=args.textures_bnk, texture_headers_bnks=args.texture_headers_bnk,
+                   tex_cook=tex_cook,
                    tex_out_dir=args.tex_out_dir, terrain_ghf=args.terrain_ghf,
                    terrain_ehf=args.terrain_ehf, terrain_splat=args.terrain_splat,
                    terrain_splat_res=args.terrain_splat_res, splat_bake=args.splat_bake,
