@@ -13,6 +13,7 @@
 #include "f2/native_vulkan_video_texture.h"
 #include "f2/native_vulkan_world_renderer.h"
 #include "f2/native_vulkan_sky_renderer.h"
+#include "f2/native_vulkan_cloud_renderer.h"
 #include "f2/render/ui_draw_list.h"
 
 #include <windows.h>
@@ -276,6 +277,15 @@ public:
                                       F2NATIVE_VULKAN_SHADER_DIR, sky_error)) {
             MessageBoxA(window_, sky_error.c_str(), "Fable II Native - Vulkan sky failed",
                         MB_OK | MB_ICONWARNING);
+        }
+        // Cloud-layer pass (non-fatal on failure, like the sky): scrolling theme cloud layers
+        // drawn over the sky and behind the world.
+        std::string cloud_error;
+        if (!cloud_renderer_.initialise(physical_device_, device_, command_pool_, queue_,
+                                        render_pass_, msaa_samples_, F2NATIVE_VULKAN_SHADER_DIR,
+                                        cloud_error)) {
+            OutputDebugStringA(
+                ("Fable2Native: Vulkan cloud renderer disabled: " + cloud_error + "\n").c_str());
         }
 
         ShowWindow(window_, SW_SHOWDEFAULT);
@@ -1561,6 +1571,16 @@ private:
                 sky_renderer_.render(command_buffers_[image_index], extent_.width, extent_.height,
                                      game_.scene, sky_camera);
             }
+            // Cloud layers over the sky, still behind the world (same opaque subpass).
+            if (cloud_renderer_.ready() && !game_.scene.clouds.empty()) {
+                const f2::SkyCamera cam = world_renderer_.compute_camera(
+                    extent_.width, extent_.height, game_.elapsed_seconds);
+                const auto vp = world_renderer_.compute_view_projection(
+                    extent_.width, extent_.height, game_.elapsed_seconds);
+                cloud_renderer_.render(command_buffers_[image_index], extent_.width, extent_.height,
+                                       game_.scene, vp, cam.position, cam.forward,
+                                       game_.elapsed_seconds);
+            }
             if (msaa_clear) {
                 world_renderer_.render_opaque(command_buffers_[image_index], extent_.width,
                                               extent_.height, game_.elapsed_seconds);
@@ -1664,6 +1684,7 @@ private:
         font_texture_.destroy();
         video_texture_.destroy();
         video_decoder_.close();
+        cloud_renderer_.destroy();
         sky_renderer_.destroy();
         world_renderer_.destroy();
         destroy_msaa_image();
@@ -1739,6 +1760,7 @@ private:
     std::string video_error_;
     f2::NativeVulkanWorldRenderer world_renderer_;
     f2::NativeVulkanSkyRenderer sky_renderer_;
+    f2::NativeVulkanCloudRenderer cloud_renderer_;
     bool world_cam_initialised_ = false;
     std::array<float, 3> character_offset_{0.0f, 0.0f, 0.0f};
     float character_motion_phase_ = 0.0f;

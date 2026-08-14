@@ -912,6 +912,34 @@ SkyCamera NativeVulkanWorldRenderer::compute_camera(std::uint32_t width, std::ui
     return cam;
 }
 
+std::array<float, 16> NativeVulkanWorldRenderer::compute_view_projection(
+    std::uint32_t width, std::uint32_t height, double elapsed_seconds) const {
+    // Same projection*view render_pass() builds, exposed for the cloud pass. Mirrors it exactly.
+    const auto cam = compute_camera(width, height, elapsed_seconds);
+    const auto eye = cam.position;
+    const auto forward = cam.forward;
+    const auto right = cam.right;
+    const auto camera_up = cam.up;
+    std::array<float, 16> view{};
+    view[0] = right[0]; view[1] = camera_up[0]; view[2] = -forward[0]; view[3] = 0.0f;
+    view[4] = right[1]; view[5] = camera_up[1]; view[6] = -forward[1]; view[7] = 0.0f;
+    view[8] = right[2]; view[9] = camera_up[2]; view[10] = -forward[2]; view[11] = 0.0f;
+    view[12] = -dot(right, eye); view[13] = -dot(camera_up, eye);
+    view[14] = dot(forward, eye); view[15] = 1.0f;
+    const float aspect =
+        height == 0 ? 1.0f : static_cast<float>(width) / static_cast<float>(height);
+    const float scale = 1.0f / std::tan(0.5f);
+    const float near_plane = free_camera_ ? 0.5f : std::max(0.1f, scene_radius_ * 0.05f);
+    const float far_plane = scene_radius_ * 8.0f + 10.0f;
+    std::array<float, 16> projection{};
+    projection[0] = scale / aspect;
+    projection[5] = scale;
+    projection[10] = near_plane / (far_plane - near_plane);
+    projection[11] = -1.0f;
+    projection[14] = (near_plane * far_plane) / (far_plane - near_plane);
+    return multiply(projection, view);
+}
+
 void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
                                             std::uint32_t width,
                                             std::uint32_t height,

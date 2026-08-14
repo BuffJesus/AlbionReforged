@@ -345,6 +345,40 @@ def _cook_textures(tokens, textures_bnks, tex_cook: Path, f2tool: Path,
     return cooked
 
 
+def _fnv1_env(s: str, lower: bool) -> int:
+    """EnvironmentTextureHash (SkyboxPreviewBinding.cpp): FNV-1 (mul-then-xor) over a texture
+    path with '/'->'\\' and optional lowercasing. The theme stores this hash for its textures."""
+    if lower:
+        s = s.lower()
+    s = s.replace("/", "\\")
+    h = 0x811C9DC5
+    for ch in s.encode("utf-8", "ignore"):
+        h = (h * 0x01000193) & 0xFFFFFFFF
+        h ^= ch
+    return h
+
+
+def _resolve_env_texture_hash(target_hash: int, texture_bnks) -> str:
+    """Map a theme texture GUID back to its exact .tex bnk entry name by hashing every entry
+    name (4 variants: full-path/leaf x lower/as-is), mirroring ResolveEnvironmentTextureHash."""
+    if not target_hash or target_hash == 0x811C9DC5:
+        return None
+    for b in texture_bnks or []:
+        if not b:
+            continue
+        try:
+            by_norm, _ = _bnk_name_index(b)
+        except Exception:  # noqa: BLE001 - a bad bnk just yields no match
+            continue
+        for exact in by_norm.values():
+            leaf = exact.replace("/", "\\").rsplit("\\", 1)[-1]
+            for cand in (exact, leaf):
+                for lc in (True, False):
+                    if _fnv1_env(cand, lc) == target_hash:
+                        return exact
+    return None
+
+
 def _terrain_ground_texture(ehf_path: Path, f2tool: Path, log=print):
     """Pick the dominant ground albedo for a terrain .ehf from its LOD table + splat map.
 
@@ -1194,10 +1228,75 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
     # sunlight the world PS multiplies into N.L: main_light_colour * sun_intensity
     sunlight = [c * sun_int for c in main]
 
+    # Cloud layers (SkyboxRenderer.cpp cloud pass; EnvironmentThemeParser applyCloudThemeRecord).
+    # The theme's Clouds sub-record holds up to 4 Layer records, each a density-map texture GUID
+    # + scroll/shape/lighting params. finaliseCloudTheme counts a layer as enabled when it carries
+    # >=1 field. We resolve them here (faithful to readCloudLayerRecord) and hand the raw params to
+    # cook_level, which resolves the density GUID -> a cooked DDS and emits the cloud opcodes.
+    kClouds = 0x7439046F
+    kLayer = (0x6A570941, 0x6A570942, 0x6A570943, 0x6A570944)
+    kDensityMap = 0x13821B7F
+    kPosX, kPosY = 0x1E72B2E4, 0x1E72B2E5
+    kSizeX, kSizeY = 0x9C014CCE, 0x9C014CCF
+    kTexScaleX, kTexScaleY = 0x0A8BA024, 0x0A8BA025
+    kVelX, kVelY = 0x5CE30740, 0x5CE30741
+    kHeight, kTransparency = 0xF47DB020, 0x383FDB33
+    kNormalStrength, kTranslucency = 0xB5B0AE93, 0x114E67B1
+    kBrightness, kAmbient = 0xC452018C, 0x15DD1091
+
+    def read_cloud_layer(layer_rec):
+        """readCloudLayerRecord: return a dict of the layer's params (only present fields), or
+        None if the record carries no cloud fields at all."""
+        n = 0
+        out = {}
+
+        def p(hash_, key):
+            nonlocal n
+            v = read_float(layer_rec, hash_)
+            if v is not None:
+                out[key] = v
+                n += 1
+
+        # density map: the raw u32 field value (a texture GUID), NOT resolved to a record here.
+        dm = find_field(layer_rec, kDensityMap, 0xFF)
+        if dm is not None:
+            raw = beU(gd, dm[1])
+            if raw not in (0, 0x811C9DC5):
+                out["density_hash"] = raw
+                n += 1
+        p(kPosX, "position_x"); p(kPosY, "position_y")
+        p(kSizeX, "size_x"); p(kSizeY, "size_y")
+        p(kTexScaleX, "texture_scale_x"); p(kTexScaleY, "texture_scale_y")
+        p(kVelX, "velocity_x"); p(kVelY, "velocity_y")
+        p(kHeight, "height"); p(kTransparency, "transparency")
+        p(kBrightness, "brightness"); p(kAmbient, "ambient_light")
+        p(kNormalStrength, "normal_strength"); p(kTranslucency, "translucency_strength")
+        return out if n > 0 else None
+
+    def read_clouds(theme):
+        """applyCloudThemeRecord: resolve the Clouds sub-record (or the theme itself), then read
+        the 4 Layer records; fall back to reading layer 0 straight off the Clouds record."""
+        clouds = resolve_ref(theme, kClouds) or theme
+        layers = []
+        for lh in kLayer:
+            lr = resolve_ref(clouds, lh)
+            layers.append(read_cloud_layer(lr) if lr is not None else None)
+        if not any(layers):
+            direct = read_cloud_layer(clouds)
+            # AB requires >=2 fields or a density map for the direct-read fallback
+            if direct is not None and (len(direct) >= 2 or "density_hash" in direct):
+                layers[0] = direct
+        return layers
+
+    clouds = read_clouds(best_theme)
+    n_clouds = sum(1 for l in clouds if l)
+    if n_clouds:
+        log(f"genv theme: {n_clouds} cloud layer(s) resolved")
+
     log(f"genv theme: dominant zone {picked_zone[0]:#010x} ({picked_zone[1]} cells), "
         f"theme @tod={picked_zone[2]:.3f} sky=({sky[0]:.3f},{sky[1]:.3f},{sky[2]:.3f}) "
         f"sun_int={sun_int:.2f}")
-    return {"sun_dir": sun_dir, "sunlight": sunlight, "sky": sky,
+    return {"clouds": clouds, "sun_dir": sun_dir, "sunlight": sunlight, "sky": sky,
             "sky_colour": sky, "sun_intensity": sun_int,
             "sun_elev": elev, "main_light": main, "tod": want,
             "horizon": horizon, "sunset": sunset, "compl_bias": compl_bias,
@@ -1817,6 +1916,52 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                 fc = [min(max(c, 0.0), 1.0) for c in fc]
                 out.write(f"fog_color {fc[0]:.5g} {fc[1]:.5g} {fc[2]:.5g}\n")
                 out.write(f"fog_range {fs:.6g} {fe:.6g} {min(max(fm, 0.0), 1.0):.5g}\n")
+            # Cloud layers (SkyboxRenderer.cpp cloud pass). Each theme Layer carries a density-map
+            # texture GUID + scroll/shape/lighting params; we resolve the GUID -> exact .tex name,
+            # cook it to DDS alongside the other textures, and emit one `cloud_layer` per layer plus
+            # a `cloud_globals`. The cloud pass draws each layer as a flat scrolling quad at its
+            # authored height, alpha-blended behind the world. Emitted only when a layer resolves a
+            # density map (IsActive requires a bound density texture); absent -> no cloud pass, so
+            # scenes/themes without clouds are byte-identical.
+            cl_layers = env_theme.get("clouds") or []
+            cl_emitted = 0
+            for li, layer in enumerate(cl_layers):
+                if not layer or "density_hash" not in layer:
+                    continue
+                tok = _resolve_env_texture_hash(layer["density_hash"], tex_sources)
+                if not tok:
+                    log(f"  cloud L{li + 1}: density GUID {layer['density_hash']:#010x} "
+                        f"unresolved in the texture bnks; skipping layer")
+                    continue
+                dmap = _cook_textures([tok], tex_sources, tex_cook, f2tool,
+                                      tex_out_dir or (out_scene.parent / (out_scene.stem + ".textures")),
+                                      tmp, texture_headers_bnks=texture_headers_bnks, log=log)
+                dds = dmap.get(tok, "")
+                if not dds:
+                    log(f"  cloud L{li + 1}: density '{tok}' failed to cook; skipping layer")
+                    continue
+                g = layer.get
+                if cl_emitted == 0:
+                    # cloud_global.x = global brightness (1), .z = alpha-test reference. Retail
+                    # cloud context uses 5/255 (AlphaTestThreshold(config, render_context_two)).
+                    out.write("cloud_globals 1 0.019608\n")
+                # density path first, then: height size_x size_y scale_x scale_y vel_x vel_y
+                #   transparency brightness ambient normal_strength (all in authored units;
+                #   the renderer applies the *0.001 velocity scale + ShaderNormalStrength).
+                out.write("cloud_layer {} {:.6g} {:.6g} {:.6g} {:.7g} {:.7g} {:.6g} {:.6g} "
+                          "{:.6g} {:.6g} {:.6g} {:.6g}\n".format(
+                              dds,
+                              g("height", 0.0), g("size_x", 0.0), g("size_y", 0.0),
+                              g("texture_scale_x", 0.001), g("texture_scale_y", 0.001),
+                              g("velocity_x", 0.0), g("velocity_y", 0.0),
+                              g("transparency", 0.0), g("brightness", 1.0),
+                              g("ambient_light", 0.0), g("normal_strength", 0.0)))
+                cl_emitted += 1
+                log(f"  cloud L{li + 1}: '{tok}' h={g('height', 0.0):.1f} "
+                    f"size=({g('size_x', 0.0):.0f},{g('size_y', 0.0):.0f}) "
+                    f"alpha={g('transparency', 0.0):.2f}")
+            if cl_emitted:
+                log(f"clouds: emitted {cl_emitted} layer(s)")
         else:
             # Real chapter2slums midday theme (ghidra_out/env_theme_colors_re.txt, from
             # environmentthemes.gdb, BE bytes /255): sun = light DIRECTION = -sun_toward

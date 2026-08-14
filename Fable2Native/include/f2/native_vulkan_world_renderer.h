@@ -53,6 +53,13 @@ public:
     [[nodiscard]] SkyCamera compute_camera(std::uint32_t width, std::uint32_t height,
                                            double elapsed_seconds) const;
 
+    // The exact column-major (GLSL) view_projection render_pass() builds this frame, so a
+    // companion pass (clouds) projects real geometry to line up with the world. Mirrors the
+    // matrix render_pass() uses (projection * view, reversed-Z).
+    [[nodiscard]] std::array<float, 16> compute_view_projection(std::uint32_t width,
+                                                                std::uint32_t height,
+                                                                double elapsed_seconds) const;
+
     // Free-fly camera override (level inspection) — mirrors the D3D12 renderer.
     void set_free_camera(const std::array<float, 3>& eye, float yaw, float pitch) {
         free_camera_ = true;

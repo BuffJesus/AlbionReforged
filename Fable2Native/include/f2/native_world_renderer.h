@@ -50,6 +50,12 @@ public:
     SkyCamera compute_camera(std::uint32_t width, std::uint32_t height,
                              double elapsed_seconds) const;
 
+    // The exact row-major reversed-Z view_projection render() builds this frame, flattened
+    // [row*4+col], so a companion pass (clouds) can project real geometry to line up
+    // pixel-for-pixel with the world. Shares compute_camera() + the same near/far framing.
+    std::array<float, 16> compute_view_projection(std::uint32_t width, std::uint32_t height,
+                                                  double elapsed_seconds) const;
+
     // Free-fly camera override (for level inspection). When set, compute_camera and
     // render() use this eye+yaw+pitch basis instead of the auto-orbit; the sky follows
     // since it shares compute_camera. Cleared back to orbit with clear_free_camera().

@@ -67,11 +67,37 @@ struct NativeLight {
     float intensity = 1.0f;
 };
 
+// A scrolling cloud layer resolved from the theme Clouds record (SkyboxRenderer.cpp cloud pass).
+// Drawn as one flat quad at `height` (render-space Y), spanning ±size in render X/Z and centred at
+// the world origin, alpha-blended behind the world. `density_map` is a cooked DDS whose .a is the
+// density mask and .rgb the cloud tint. Velocity is the authored scroll speed (the renderer applies
+// the retail *0.001 velocity scale + ShaderNormalStrength(normal_strength)). See cook_levels.py
+// `cloud_layer` emit. An empty clouds vector -> no cloud pass, so non-cloud scenes are unchanged.
+struct NativeCloudLayer {
+    std::string density_map;
+    float height = 0.0f;
+    float size_x = 0.0f;
+    float size_y = 0.0f;
+    float texture_scale_x = 0.001f;
+    float texture_scale_y = 0.001f;
+    float velocity_x = 0.0f;
+    float velocity_y = 0.0f;
+    float transparency = 0.0f;   // layer_params.x  (alpha multiplier)
+    float brightness = 1.0f;     // layer_params.z  (colour scale)
+    float ambient = 0.0f;        // layer_params.y  (ambient add)
+    float normal_strength = 0.0f;  // authored; runtime -> ShaderNormalStrength -> layer_params.w
+};
+
 struct NativeScene {
     std::vector<NativeMaterial> materials;
     std::vector<NativeMesh> meshes;
     std::vector<NativeInstance> instances;
     std::vector<NativeLight> lights;
+    // Cloud layers (theme Clouds). Empty by default so scenes without a `cloud_layer` opcode
+    // render exactly as before. cloud_global.x = global brightness, .z = alpha-test reference.
+    std::vector<NativeCloudLayer> clouds;
+    float cloud_global_brightness = 1.0f;
+    float cloud_alpha_ref = 0.019608f;
     std::array<float, 3> sun_direction{0.3f, -1.0f, 0.2f};
     // Directional sun colour (theme main_light_colour). Default warm white; the world PS
     // tints the N.L sun term with it. env_theme_colors_re.txt: chapter2slums = (1.0,0.902,0.435).

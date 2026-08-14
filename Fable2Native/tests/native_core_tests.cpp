@@ -427,6 +427,23 @@ int main() {
         mesh.indices = {0, 1, 2};
         written.meshes.push_back(mesh);
         written.instances.push_back({0, {12.5f, 0.0f, -8.25f}, {0.0f, 1.5708f, 0.0f}, 2.0f});
+        // Cloud layers (theme Clouds) must round-trip through the F2SCENE writer/reader too.
+        written.cloud_global_brightness = 1.0f;
+        written.cloud_alpha_ref = 0.019608f;
+        f2::NativeCloudLayer cloud;
+        cloud.density_map = "clouds/cloud_03.dds";
+        cloud.height = 500.0f;
+        cloud.size_x = 3000.0f;
+        cloud.size_y = 3000.0f;
+        cloud.texture_scale_x = 3.0f;
+        cloud.texture_scale_y = 5.0f;
+        cloud.velocity_x = 10.0f;
+        cloud.velocity_y = 20.0f;
+        cloud.transparency = 0.5f;
+        cloud.brightness = 0.25f;
+        cloud.ambient = 0.9f;
+        cloud.normal_strength = 0.5f;
+        written.clouds.push_back(cloud);
 
         const auto scene_path = std::filesystem::temp_directory_path() / "f2native_scene_roundtrip.f2scene";
         std::string scene_error;
@@ -459,6 +476,16 @@ int main() {
         assert(approx(reloaded.instances[0].scale, 2.0f));
         assert(approx(reloaded.sun_direction[1], -0.9f));
         assert(approx(reloaded.sky_color[2], 0.4f));
+        assert(reloaded.clouds.size() == 1);
+        assert(reloaded.clouds[0].density_map == "clouds/cloud_03.dds");
+        assert(approx(reloaded.clouds[0].height, 500.0f));
+        assert(approx(reloaded.clouds[0].size_x, 3000.0f));
+        assert(approx(reloaded.clouds[0].texture_scale_y, 5.0f));
+        assert(approx(reloaded.clouds[0].velocity_y, 20.0f));
+        assert(approx(reloaded.clouds[0].transparency, 0.5f));
+        assert(approx(reloaded.clouds[0].ambient, 0.9f));
+        assert(approx(reloaded.clouds[0].normal_strength, 0.5f));
+        assert(approx(reloaded.cloud_alpha_ref, 0.019608f));
         std::filesystem::remove(scene_path);
     }
 

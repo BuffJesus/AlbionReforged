@@ -10,6 +10,7 @@
 #include "f2/native_video_decoder.h"
 #include "f2/render/texture_registry.h"
 #include "f2/render/ui_draw_list.h"
+#include "f2/native_cloud_renderer.h"
 #include "f2/native_world_renderer.h"
 
 
@@ -296,6 +297,13 @@ public:
         std::string sky_error;
         if (!sky_renderer_.initialise(device_.Get(), queue_.Get(), sky_error)) {
             OutputDebugStringA(("Fable2Native: sky renderer disabled: " + sky_error + "\n").c_str());
+        }
+        // Cloud-layer pass (self-contained like the sky). Non-fatal on failure: the sky just
+        // renders without its scrolling cloud layers.
+        std::string cloud_error;
+        if (!cloud_renderer_.initialise(device_.Get(), queue_.Get(), cloud_error)) {
+            OutputDebugStringA(
+                ("Fable2Native: cloud renderer disabled: " + cloud_error + "\n").c_str());
         }
         std::string ui_renderer_error;
         if (!native_ui_renderer_.initialise(device_.Get(), 1, ui_renderer_error)) {
@@ -1494,6 +1502,17 @@ private:
                                      game_.elapsed_seconds);
                 command_list_->SetDescriptorHeaps(1, heaps);
             }
+            // Cloud layers over the sky, still behind the world (own descriptor heap like the sky;
+            // re-bind the app heap for the world material table afterwards).
+            if (cloud_renderer_.ready() && !game_.scene.clouds.empty()) {
+                const auto cam =
+                    world_renderer_.compute_camera(width_, height_, game_.elapsed_seconds);
+                const auto vp =
+                    world_renderer_.compute_view_projection(width_, height_, game_.elapsed_seconds);
+                cloud_renderer_.render(command_list_.Get(), game_.scene, vp, cam.position,
+                                       cam.forward, width_, height_, game_.elapsed_seconds);
+                command_list_->SetDescriptorHeaps(1, heaps);
+            }
             world_renderer_.render(command_list_.Get(), game_.scene, width_, height_,
                                    game_.elapsed_seconds);
         }
@@ -1652,6 +1671,7 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE video_gpu_handle_{};
     f2::NativeWorldRenderer world_renderer_;
     f2::NativeSkyRenderer sky_renderer_;  // procedural atmosphere drawn behind the world
+    f2::NativeCloudRenderer cloud_renderer_;  // scrolling cloud layers over the sky, behind world
     f2::NativeUiRenderer native_ui_renderer_;
     f2::render::TextureRegistry texture_registry_;  // maps ui slots -> stable TextureIds (neutral scene)
     std::optional<f2::FrontendSceneBuilder> scene_builder_;  // shared backend-neutral scene builder

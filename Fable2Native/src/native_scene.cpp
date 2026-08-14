@@ -259,6 +259,26 @@ bool load_native_scene(const std::filesystem::path& path,
                 return fail(&error, "invalid light at line " + std::to_string(line_number));
             }
             parsed.lights.push_back(light);
+        } else if (opcode == "cloud_globals") {
+            // cloud_globals <global_brightness> <alpha_ref> (cloud_global.x/.z).
+            if (!read_value(line, parsed.cloud_global_brightness) ||
+                !read_value(line, parsed.cloud_alpha_ref)) {
+                return fail(&error, "invalid cloud_globals at line " + std::to_string(line_number));
+            }
+        } else if (opcode == "cloud_layer") {
+            // cloud_layer <density_dds> <height> <size_x> <size_y> <scale_x> <scale_y>
+            //   <vel_x> <vel_y> <transparency> <brightness> <ambient> <normal_strength>
+            NativeCloudLayer layer;
+            if (!(line >> layer.density_map) || !read_value(line, layer.height) ||
+                !read_value(line, layer.size_x) || !read_value(line, layer.size_y) ||
+                !read_value(line, layer.texture_scale_x) ||
+                !read_value(line, layer.texture_scale_y) ||
+                !read_value(line, layer.velocity_x) || !read_value(line, layer.velocity_y) ||
+                !read_value(line, layer.transparency) || !read_value(line, layer.brightness) ||
+                !read_value(line, layer.ambient) || !read_value(line, layer.normal_strength)) {
+                return fail(&error, "invalid cloud_layer at line " + std::to_string(line_number));
+            }
+            parsed.clouds.push_back(std::move(layer));
         } else {
             return fail(&error, "unknown opcode '" + opcode + "' at line " +
                                   std::to_string(line_number));
@@ -330,6 +350,16 @@ bool save_native_scene(const std::filesystem::path& path,
         output << "light " << light.position[0] << ' ' << light.position[1] << ' '
                << light.position[2] << ' ' << light.color[0] << ' ' << light.color[1] << ' '
                << light.color[2] << ' ' << light.range << ' ' << light.intensity << '\n';
+    }
+    if (!scene.clouds.empty()) {
+        output << "cloud_globals " << scene.cloud_global_brightness << ' '
+               << scene.cloud_alpha_ref << '\n';
+        for (const NativeCloudLayer& c : scene.clouds) {
+            output << "cloud_layer " << c.density_map << ' ' << c.height << ' ' << c.size_x << ' '
+                   << c.size_y << ' ' << c.texture_scale_x << ' ' << c.texture_scale_y << ' '
+                   << c.velocity_x << ' ' << c.velocity_y << ' ' << c.transparency << ' '
+                   << c.brightness << ' ' << c.ambient << ' ' << c.normal_strength << '\n';
+        }
     }
     return static_cast<bool>(output);
 }

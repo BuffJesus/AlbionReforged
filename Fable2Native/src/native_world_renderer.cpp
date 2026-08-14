@@ -850,6 +850,49 @@ SkyCamera NativeWorldRenderer::compute_camera(std::uint32_t width, std::uint32_t
     return cam;
 }
 
+std::array<float, 16> NativeWorldRenderer::compute_view_projection(std::uint32_t width,
+                                                                   std::uint32_t height,
+                                                                   double elapsed_seconds) const {
+    const auto camera = compute_camera(width, height, elapsed_seconds);
+    const auto eye = camera.position;
+    const auto forward = camera.forward;
+    const auto right = camera.right;
+    const auto camera_up = camera.up;
+    const float eye_dot_right = dot(eye, right);
+    const float eye_dot_up = dot(eye, camera_up);
+    const float eye_dot_forward = dot(eye, forward);
+    const float aspect =
+        height == 0 ? 1.0f : static_cast<float>(width) / static_cast<float>(height);
+    const float y_scale = 1.0f / std::tan(0.5f);
+    const float x_scale = y_scale / aspect;
+    // A small near plane when free-flying so close geometry doesn't clip; the orbit sits
+    // far enough out to afford a generous near for depth precision.
+    const float near_plane = free_camera_ ? 0.5f : std::max(0.1f, scene_radius_ * 0.05f);
+    const float far_plane = scene_radius_ * 8.0f + 10.0f;
+    // Reversed-Z depth row: clip.z = near/(far-near) * (far - view_depth); with clip.w =
+    // view_depth this gives z_ndc = near→1, far→0 (see DepthFunc GREATER_EQUAL + 0.0 clear).
+    const float rz = near_plane / (far_plane - near_plane);
+    std::array<float, 16> m{};
+    auto at = [&](int r, int c) -> float& { return m[r * 4 + c]; };
+    at(0, 0) = right[0] * x_scale;
+    at(1, 0) = right[1] * x_scale;
+    at(2, 0) = right[2] * x_scale;
+    at(3, 0) = -eye_dot_right * x_scale;
+    at(0, 1) = camera_up[0] * y_scale;
+    at(1, 1) = camera_up[1] * y_scale;
+    at(2, 1) = camera_up[2] * y_scale;
+    at(3, 1) = -eye_dot_up * y_scale;
+    at(0, 2) = -rz * forward[0];
+    at(1, 2) = -rz * forward[1];
+    at(2, 2) = -rz * forward[2];
+    at(3, 2) = rz * (eye_dot_forward + far_plane);
+    at(0, 3) = forward[0];
+    at(1, 3) = forward[1];
+    at(2, 3) = forward[2];
+    at(3, 3) = -eye_dot_forward;
+    return m;
+}
+
 void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
                                  const NativeScene& scene, std::uint32_t width,
                                  std::uint32_t height, double elapsed_seconds) {
@@ -857,40 +900,9 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
 
     const auto camera = compute_camera(width, height, elapsed_seconds);
     const std::array<float, 3> eye = camera.position;
-    const std::array<float, 3> up{0.0f, 1.0f, 0.0f};
-    const auto forward = camera.forward;
-    const auto right = camera.right;
-    const auto camera_up = camera.up;
-    const float eye_dot_right = dot(eye, right);
-    const float eye_dot_up = dot(eye, camera_up);
-    const float eye_dot_forward = dot(eye, forward);
-    const float aspect = static_cast<float>(width) / static_cast<float>(height);
-    const float y_scale = 1.0f / std::tan(0.5f);
-    const float x_scale = y_scale / aspect;
-    // A small near plane when free-flying so close geometry doesn't clip; the orbit sits
-    // far enough out to afford a generous near for depth precision.
-    const float near_plane = free_camera_ ? 0.5f : std::max(0.1f, scene_radius_ * 0.05f);
-    const float far_plane = scene_radius_ * 8.0f + 10.0f;
     Constants constants{};
-    constants.view_projection[0][0] = right[0] * x_scale;
-    constants.view_projection[1][0] = right[1] * x_scale;
-    constants.view_projection[2][0] = right[2] * x_scale;
-    constants.view_projection[3][0] = -eye_dot_right * x_scale;
-    constants.view_projection[0][1] = camera_up[0] * y_scale;
-    constants.view_projection[1][1] = camera_up[1] * y_scale;
-    constants.view_projection[2][1] = camera_up[2] * y_scale;
-    constants.view_projection[3][1] = -eye_dot_up * y_scale;
-    // Reversed-Z depth row: clip.z = near/(far-near) * (far - view_depth); with clip.w =
-    // view_depth this gives z_ndc = near→1, far→0 (see DepthFunc GREATER_EQUAL + 0.0 clear).
-    const float rz = near_plane / (far_plane - near_plane);
-    constants.view_projection[0][2] = -rz * forward[0];
-    constants.view_projection[1][2] = -rz * forward[1];
-    constants.view_projection[2][2] = -rz * forward[2];
-    constants.view_projection[3][2] = rz * (eye_dot_forward + far_plane);
-    constants.view_projection[0][3] = forward[0];
-    constants.view_projection[1][3] = forward[1];
-    constants.view_projection[2][3] = forward[2];
-    constants.view_projection[3][3] = -eye_dot_forward;
+    const auto vp = compute_view_projection(width, height, elapsed_seconds);
+    std::memcpy(constants.view_projection, vp.data(), sizeof(constants.view_projection));
     const auto sun = normalise(scene.sun_direction);
     constants.sun_direction[0] = sun[0];
     constants.sun_direction[1] = sun[1];
