@@ -1080,6 +1080,7 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
     SR, SG, SB, SF = 0x86B2D6AD, 0x0E4C7541, 0xFDCC27B4, 0x1273DB31
     MR, MG, MB, MF = 0x9F76036F, 0xE3D88F9B, 0x3E7D387A, 0xE67DD6DB
     kSunInt, kElev, kZoff, kXY = 0xC868C0DC, 0x2682515B, 0x2EF474B9, 0x2E4D729C
+    kRayleigh, kMie = 0x59837340, 0xD7FC122C  # BetaRayleighMult / BetaMieMult
     kTOD, kTheme = 0x9723C2C9, 0xB57E3290
     # complementary (horizon) + sunset colours: sub-record OR flat fields
     kCompl, kComplBias = 0x5CBE1462, 0x2DA0C989
@@ -1148,6 +1149,9 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
         log("genv theme: theme has no SkyColour; skipping"); return None
     # explicit None checks: a legitimately-stored 0.0 must not be clobbered by `or`
     _si = read_float(sky_rec, kSunInt); sun_int = _si if _si is not None else 1.0
+    # atmosphere scattering multipliers (Hoffman-Preetham betas; SkyboxRenderer.cpp PS).
+    _ray = read_float(sky_rec, kRayleigh); rayleigh = _ray if _ray is not None else 1.0
+    _mie = read_float(sky_rec, kMie); mie = _mie if _mie is not None else 0.83
     elev = read_float(sky_rec, kElev) or 0.0
     zoff = read_float(sky_rec, kZoff) or 0.0
     xy = read_float(sky_rec, kXY) or 0.0
@@ -1198,7 +1202,8 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
             "sun_elev": elev, "main_light": main, "tod": want,
             "horizon": horizon, "sunset": sunset, "compl_bias": compl_bias,
             "fog_color": fog_color, "fog_start": fog_start,
-            "fog_end": fog_end, "fog_max": fog_max}
+            "fog_end": fog_end, "fog_max": fog_max,
+            "rayleigh": rayleigh, "mie": mie}
 
 
 def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
@@ -1799,6 +1804,11 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             cb = env_theme.get("compl_bias")
             if cb is not None:
                 out.write(f"sky_bias {min(max(cb, 0.0), 1.0):.5g}\n")
+            # Analytic-atmosphere params (Hoffman-Preetham single scattering; SkyboxRenderer PS).
+            # Presence of this line switches the sky from the flat gradient stand-in to the retail
+            # atmosphere dome. sun_intensity, rayleigh (BetaRayleighMult), mie (BetaMieMult).
+            out.write(f"sky_atmos {env_theme['sun_intensity']:.5g} "
+                      f"{env_theme.get('rayleigh', 1.0):.5g} {env_theme.get('mie', 0.83):.5g}\n")
             # Distance fog on world geometry (env_theme_colors_re.txt §6). Emitted only when the
             # theme carries a full fogging record; fog_range max=far_density enables it.
             fc = env_theme.get("fog_color")

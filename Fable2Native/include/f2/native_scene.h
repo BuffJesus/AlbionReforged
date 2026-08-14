@@ -92,6 +92,12 @@ struct NativeScene {
     // ramp so the horizon tint extends further up at higher bias. 0 = the old linear ramp, so
     // scenes without a `sky_bias` opcode are unchanged. See cook_levels.py `sky_bias` emit.
     float sky_bias = 0.0f;
+    // Analytic-atmosphere params (SkyboxRenderer PS). sky_rayleigh > 0 switches the sky from the
+    // flat gradient stand-in to the retail single-scattering atmosphere; 0 (default) keeps the
+    // gradient, so scenes without a `sky_atmos` opcode are unchanged.
+    float sky_sun_intensity = 0.0f;
+    float sky_rayleigh = 0.0f;
+    float sky_mie = 0.83f;
     // Distance fog on world geometry (theme fogging; env_theme_colors_re.txt §6 "ties world to
     // horizon"). Linear from fog_start to fog_end reaching fog_max toward fog_color. fog_max = 0
     // (default) disables it, so scenes without `fog_color`/`fog_range` are unchanged.

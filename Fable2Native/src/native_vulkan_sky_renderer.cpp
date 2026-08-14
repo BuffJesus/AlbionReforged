@@ -19,6 +19,7 @@ struct SkyConstants {
     float camera_right[4]{};    // w = tan(fov_x/2)
     float camera_up[4]{};       // w = tan(fov_y/2)
     float camera_forward[4]{};
+    float theme_params[4]{};    // x=sun_intensity y=bias z=rayleigh(>0 => atmosphere) w=mie
 };
 
 bool read_spirv(const std::filesystem::path& path, std::vector<std::uint32_t>& words,
@@ -247,6 +248,10 @@ void NativeVulkanSkyRenderer::render(VkCommandBuffer command_buffer, std::uint32
     }
     constants.camera_right[3] = camera.tan_half_fov_x;
     constants.camera_up[3] = camera.tan_half_fov_y;
+    constants.theme_params[0] = scene.sky_sun_intensity;
+    constants.theme_params[1] = scene.sky_bias;
+    constants.theme_params[2] = scene.sky_rayleigh;  // > 0 selects the analytic atmosphere
+    constants.theme_params[3] = scene.sky_mie;
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
     VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width),
                         -static_cast<float>(height), 0.0f, 1.0f};

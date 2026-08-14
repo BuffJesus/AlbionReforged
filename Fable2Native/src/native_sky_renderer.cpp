@@ -211,6 +211,7 @@ struct SkyConstants {
     float sky_colour[4]{};         // for the Phase 0 gradient fallback
     float complementary_colour[4]{};
     float sunset_colour[4]{};       // rgb = theme sunset tint, w = strength (0 = off)
+    float theme_params[4]{};        // x=sun_intensity y=bias z=rayleigh(>0 => atmosphere) w=mie
 };
 
 // Vertex shader: SkyDomeXex fullscreen triangle. Reconstructs the engine-space ray from the
@@ -229,6 +230,7 @@ cbuffer SkyCB : register(b0) {
     float4 sky_colour;
     float4 complementary_colour;
     float4 sunset_colour;     // rgb = sunset tint, w = strength (0 = off)
+    float4 theme_params;      // x=sun_intensity y=bias z=rayleigh(>0 => atmosphere) w=mie
 }
 Texture2D in_scatter_lut : register(t0);   // 64x1 RGBA16F
 SamplerState clamp_sampler : register(s0);
@@ -258,6 +260,42 @@ VSOUT vs_main(uint id : SV_VertexID) {
 // with the SKY_OVERLAY cross-fade and background-map branch dropped (both no-ops for a
 // first sky). Output wrapped in Reinhard (host stand-in until a tone-map pass exists).
 float4 ps_main(VSOUT input) : SV_Target {
+    // ---- Analytic atmosphere (retail reference: SkyboxRenderer.cpp PS single scattering) ----
+    // Enabled when the cooked theme supplies scattering params (theme_params.z = rayleigh > 0);
+    // this is the retail sky. Falls through to the flat gradient stand-in for scenes without it.
+    if (dome_misc.w >= 1.5 && theme_params.z > 0.0) {
+        float3 ray = normalize(input.ray);
+        float3 sun_dir = normalize(sun_direction.xyz);
+        float rayleigh = max(theme_params.z, 0.05);
+        float mie = max(theme_params.w, 0.05);
+        float3 betaR = float3(0.007337, 0.009459, 0.0257276) * rayleigh;
+        float3 betaM = float3(0.0056149, 0.0063754, 0.0105143) * mie;
+        float cosT = dot(ray, sun_dir);
+        float phaseR = 0.059683103 * (1.0 + cosT * cosT);
+        float gm = 0.80;
+        float hg = 1.0 + gm * gm - 2.0 * gm * cosT;
+        float phaseM = 0.079577468 * (1.0 - gm * gm) / max(pow(abs(hg), 1.5), 0.0001);
+        float elev = max(ray.y, 0.004);
+        float path = 1.0 / (elev + 0.09);
+        float3 od = (betaR + betaM) * path * 26.0;
+        float3 extinct = exp(-od);
+        float3 beta_sum = max(betaR + betaM, 0.00001);
+        float3 inscatter = (betaR * phaseR + betaM * phaseM) / beta_sum * (1.0 - extinct);
+        float sun_h = saturate(sun_dir.y * 2.2 + 0.12);
+        float3 col = inscatter * (7.2 * sun_h) * sky_colour.rgb;
+        float horizonf = 1.0 - saturate(elev * 3.2);
+        float bias = saturate(theme_params.y);
+        col = lerp(col, complementary_colour.rgb * (0.35 + 0.65 * sun_h),
+                   horizonf * (0.55 + 0.30 * bias));
+        float sunset_w = saturate(1.0 - abs(sun_dir.y) * 5.0) * saturate(cosT * 0.5 + 0.5);
+        col = lerp(col, sunset_colour.rgb * (0.4 + 0.8 * phaseM),
+                   sunset_w * 0.45 * sunset_colour.w);
+        float night = saturate((-sun_dir.y + 0.05) / 0.45);
+        col = lerp(col, col * 0.22 + float3(0.010, 0.018, 0.050), night);
+        float hh = saturate(ray.y * 0.5 + 0.5);
+        col += sky_colour.rgb * (1.0 - hh) * 0.05;
+        return float4(col, 1.0);
+    }
     // ---- Phase 0 gradient fallback (dome_misc.w >= 1.5) ----
     if (dome_misc.w >= 1.5) {
         float v = saturate(input.ndc.y * 0.5 + 0.5);   // 0 = bottom, 1 = top
@@ -607,6 +645,10 @@ void NativeSkyRenderer::render(ID3D12GraphicsCommandList* command_list,
     }
     c.sunset_colour[3] = scene.has_sky_sunset ? 1.0f : 0.0f;  // strength gate
     c.complementary_colour[3] = scene.sky_bias;               // gradient ramp bias (0 = linear)
+    c.theme_params[0] = scene.sky_sun_intensity;
+    c.theme_params[1] = scene.sky_bias;
+    c.theme_params[2] = scene.sky_rayleigh;  // > 0 selects the analytic atmosphere
+    c.theme_params[3] = scene.sky_mie;
     std::memcpy(mapped_constants_, &c, sizeof(c));
 
     const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width),

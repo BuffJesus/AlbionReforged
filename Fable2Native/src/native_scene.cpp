@@ -218,6 +218,13 @@ bool load_native_scene(const std::filesystem::path& path,
             if (!read_value(line, parsed.sky_bias)) {
                 return fail(&error, "invalid sky_bias at line " + std::to_string(line_number));
             }
+        } else if (opcode == "sky_atmos") {
+            // sky_atmos <sun_intensity> <rayleigh> <mie> — enables the analytic atmosphere sky.
+            if (!read_value(line, parsed.sky_sun_intensity) ||
+                !read_value(line, parsed.sky_rayleigh) ||
+                !read_value(line, parsed.sky_mie)) {
+                return fail(&error, "invalid sky_atmos at line " + std::to_string(line_number));
+            }
         } else if (opcode == "fog_color") {
             if (!read_vec3(line, parsed.fog_color)) {
                 return fail(&error, "invalid fog_color at line " + std::to_string(line_number));
