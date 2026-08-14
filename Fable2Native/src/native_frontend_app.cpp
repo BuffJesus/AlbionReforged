@@ -12,6 +12,7 @@
 #include "f2/render/ui_draw_list.h"
 #include "f2/native_cloud_renderer.h"
 #include "f2/native_sky_billboard_renderer.h"
+#include "f2/native_sky_stars_renderer.h"
 #include "f2/native_world_renderer.h"
 
 
@@ -310,6 +311,11 @@ public:
         if (!billboard_renderer_.initialise(device_.Get(), queue_.Get(), billboard_error)) {
             OutputDebugStringA(
                 ("Fable2Native: billboard renderer disabled: " + billboard_error + "\n").c_str());
+        }
+        std::string stars_error;
+        if (!stars_renderer_.initialise(device_.Get(), stars_error)) {
+            OutputDebugStringA(
+                ("Fable2Native: stars renderer disabled: " + stars_error + "\n").c_str());
         }
         std::string ui_renderer_error;
         if (!native_ui_renderer_.initialise(device_.Get(), 1, ui_renderer_error)) {
@@ -1526,6 +1532,14 @@ private:
                 billboard_renderer_.render(command_list_.Get(), game_.scene, cam, width_, height_);
                 command_list_->SetDescriptorHeaps(1, heaps);
             }
+            // Procedural night stars (additive point sprites), drawn last of the sky passes
+            // (retail order), still behind the world.
+            if (stars_renderer_.ready() && game_.scene.star_brightness > 0.0f) {
+                const auto cam =
+                    world_renderer_.compute_camera(width_, height_, game_.elapsed_seconds);
+                stars_renderer_.render(command_list_.Get(), game_.scene, cam, width_, height_,
+                                       game_.elapsed_seconds);
+            }
             world_renderer_.render(command_list_.Get(), game_.scene, width_, height_,
                                    game_.elapsed_seconds);
         }
@@ -1686,6 +1700,7 @@ private:
     f2::NativeSkyRenderer sky_renderer_;  // procedural atmosphere drawn behind the world
     f2::NativeCloudRenderer cloud_renderer_;  // scrolling cloud layers over the sky, behind world
     f2::NativeSkyBillboardRenderer billboard_renderer_;  // night moon + glare over the clouds
+    f2::NativeSkyStarsRenderer stars_renderer_;  // procedural night star field
     f2::NativeUiRenderer native_ui_renderer_;
     f2::render::TextureRegistry texture_registry_;  // maps ui slots -> stable TextureIds (neutral scene)
     std::optional<f2::FrontendSceneBuilder> scene_builder_;  // shared backend-neutral scene builder

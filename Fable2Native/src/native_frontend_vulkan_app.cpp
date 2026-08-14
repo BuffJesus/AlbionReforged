@@ -15,6 +15,7 @@
 #include "f2/native_vulkan_sky_renderer.h"
 #include "f2/native_vulkan_cloud_renderer.h"
 #include "f2/native_vulkan_sky_billboard_renderer.h"
+#include "f2/native_vulkan_sky_stars_renderer.h"
 #include "f2/render/ui_draw_list.h"
 
 #include <windows.h>
@@ -295,6 +296,12 @@ public:
             OutputDebugStringA(
                 ("Fable2Native: Vulkan billboard renderer disabled: " + billboard_error + "\n")
                     .c_str());
+        }
+        std::string stars_error;
+        if (!stars_renderer_.initialise(physical_device_, device_, render_pass_, msaa_samples_,
+                                        F2NATIVE_VULKAN_SHADER_DIR, stars_error)) {
+            OutputDebugStringA(
+                ("Fable2Native: Vulkan stars renderer disabled: " + stars_error + "\n").c_str());
         }
 
         ShowWindow(window_, SW_SHOWDEFAULT);
@@ -1597,6 +1604,13 @@ private:
                 billboard_renderer_.render(command_buffers_[image_index], extent_.width,
                                            extent_.height, game_.scene, cam);
             }
+            // Procedural night stars, drawn last of the sky passes (retail order), behind the world.
+            if (stars_renderer_.ready() && game_.scene.star_brightness > 0.0f) {
+                const f2::SkyCamera cam = world_renderer_.compute_camera(
+                    extent_.width, extent_.height, game_.elapsed_seconds);
+                stars_renderer_.render(command_buffers_[image_index], extent_.width, extent_.height,
+                                       game_.scene, cam, game_.elapsed_seconds);
+            }
             if (msaa_clear) {
                 world_renderer_.render_opaque(command_buffers_[image_index], extent_.width,
                                               extent_.height, game_.elapsed_seconds);
@@ -1700,6 +1714,7 @@ private:
         font_texture_.destroy();
         video_texture_.destroy();
         video_decoder_.close();
+        stars_renderer_.destroy();
         billboard_renderer_.destroy();
         cloud_renderer_.destroy();
         sky_renderer_.destroy();
@@ -1779,6 +1794,7 @@ private:
     f2::NativeVulkanSkyRenderer sky_renderer_;
     f2::NativeVulkanCloudRenderer cloud_renderer_;
     f2::NativeVulkanSkyBillboardRenderer billboard_renderer_;
+    f2::NativeVulkanSkyStarsRenderer stars_renderer_;
     bool world_cam_initialised_ = false;
     std::array<float, 3> character_offset_{0.0f, 0.0f, 0.0f};
     float character_motion_phase_ = 0.0f;
