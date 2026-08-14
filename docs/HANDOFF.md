@@ -187,8 +187,20 @@ New tools this line: `f2tool ehf` (EHF LOD/splat dump), `terrain_splat_bake` (of
    fog (near-black, end 130, max 0.48) → cohesive moody haze; screenshot-verified parity. ⚠ fog is authored for a
    CLOSE gameplay camera, so at the far inspection orbit it reads as a uniform haze (fine once a gameplay camera exists).
    The ATMOSPHERE PIPELINE (theme → sun/sunlight/sky/horizon/sunset/bias/fog) is now COMPLETE on both backends.
-   REMAINING (optional): a visual balance pass on `sunlight = main_light*sun_intensity`; a horizon-tinted aerial-
-   perspective fog variant if the void-edges should fade to sky instead of darken.
+   (e) ✅ ANALYTIC ATMOSPHERE SKY (commit `8c236d8`) — USER DIRECTIVE "match retail as closely as possible". The flat
+   gradient was a Phase-0 stand-in; retail (= the AssetBrowser, a faithful port of the retail Xenos sky ucode) uses an
+   analytic single-scattering atmosphere. Ported the AssetBrowser `SkyboxRenderer.cpp` PS (Hoffman-Preetham Rayleigh+Mie
+   in-scatter + theme colour ramp + sunset lobe + night fade) into BOTH native sky renderers, driven by the resolved
+   theme params. New `sky_atmos <sun_intensity> <rayleigh> <mie>` opcode (resolve_genv_theme reads BetaRayleigh/BetaMie)
+   + a `theme_params` cbuffer/UBO float4; presence of the opcode (rayleigh>0) switches gradient→atmosphere, so non-themed
+   scenes are unchanged. chapter2slums midday = pale hazy overcast sky with a real atmospheric sun-glow (matches the AB
+   oracle's muted slums sky, verified with the new `--autoyaw/--autodist` camera control); night = dark night-fade sky.
+   Screenshot-verified both backends + both TODs. **★ RETAIL-FIDELITY REMAINING (to fully match the retail sky/scene):**
+   (1) CLOUD LAYERS — up to 4 scrolling layers (the dark band in the AB oracle); port the cloud shader + theme cloud
+   params from `SkyboxRenderer.cpp`. (2) CELESTIAL BILLBOARDS — sun disc / sun beams / glare / moon (phase) / stars;
+   need the shipped textures (SkyboxRenderer draws them; `sky_system_re.txt` §Phase-2). (3) HDR TONEMAP/EXPOSURE — retail
+   HDR-tonemaps; we clamp (the AB town renders darker = its exposure). (4) water night-lighting (water plane stays bright
+   at night — reflection/refraction doesn't night-darken). (5) sunlight balance pass (`main_light*sun_intensity`).
 
 **★ WORLD-GAPS VERDICT (2026-08-13, ultracode investigation w1orc8fp5):** the "gaps between castle/water/terrain"
 are **BY-DESIGN backdrop/skybox void, NOT missing geometry and NOT a cook bug** (high confidence). The AssetBrowser
