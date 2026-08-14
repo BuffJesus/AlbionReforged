@@ -1,6 +1,39 @@
 # Handoff — resume here
 
-## ▶▶▶ START HERE (2026-08-14) — CLOUD LAYERS DONE; ★ NEXT = CELESTIAL BILLBOARDS / HDR TONEMAP
+## ▶▶▶ START HERE (2026-08-14 late) — CLOUDS + NIGHT MOON DONE; ★ NEXT = STARS / SUN DISC / HDR TONEMAP
+Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `960152b`. Continuing the sky-fidelity work,
+this session added **celestial moon + glare billboards** (night) on BOTH backends, after the cloud layers.
+- **Data finding (grounded):** at MIDDAY chapter2slums authors NO celestial billboards (moon_intensity=0,
+  star_brightness=0, no sun disc/beams/glare) — the daytime sun is purely the atmosphere glow, so billboards
+  are a NIGHT feature. At `--tod 0` it authors a real moon (MoonPhases.tex, intensity 1, size 1.7, glare 50)
+  + stars (brightness 1). The sun disc/beams/glare are read by the cook but chapter2slums authors none (other
+  levels/themes may). The moon/disc/glare/sunbeams texture GUIDs all resolve via `_resolve_env_texture_hash`.
+- **Tex-cook fix (reusable):** `cook_lh_tex.cpp` gained a **pf39 (DXT5/BC3) header-backed** branch (mirror of
+  the existing pf40 BC5 case) — the shared sky textures ship as a BE mip0-size prefix + Xbox360-tiled DXT5
+  mip0, which the LhTex parser mis-read as a definition header. MoonPhases (1024×128, an 8-phase strip) +
+  sunglare (256×256) now cook. ⚠ needs the Release `f2native_cook_lh_tex.exe` rebuilt (done).
+- **Cook**: `resolve_genv_theme` reads the Sky record moon params + axis, computes the render-space moon
+  direction (EvaluateFrame axis+tod math), and `cook_level` cooks the moon/glare DDS + emits `sky_moon`
+  (+ `sky_stars`). Phase is runtime lunar state (not in the theme) → baked static **full moon (cell 4)**.
+- **Renderers**: `NativeSkyBillboardRenderer` (D3D12) + `NativeVulkanSkyBillboardRenderer` (+
+  `native_billboard.vert/.frag`) draw the moon disc (alpha) + glare halo (additive) as camera-facing quads,
+  sharing the retail `draw_billboard` geometry via a backend-neutral `sky_billboard.h build_billboard()`.
+  Drawn after the clouds, behind the world. NativeScene gained `NativeMoon`/`has_moon`/`star_brightness` +
+  F2SCENE parse/save + round-trip test.
+- **Verified**: full moon + glare render on D3D12 == Vulkan (`native_shots`-style `moon_final_{d3d12,vulkan}`).
+  ⚠ The auto-orbit town camera looks DOWN, so the 50°-elevation moon is ABOVE the default frame (correct — the
+  moon is high in the sky); an azimuth-swept debug shot (`moon_az0`) confirmed the projection + disc + glare.
+  Repro: `scratchpad/make_night_scene.py` (cooks moon/glare + appends `sky_moon`/clouds to a `--tod 0` scene).
+
+**★ NEXT — RETAIL-FIDELITY REMAINING:** (1) **STARS** — a 512-point procedural star field at night
+(star_brightness already cooked to `sky_stars`); it's a separate GPU point-sprite shader (SkyDomeXex
+kStarsVertex/PixelShader, kStarCount 512), not a textured billboard. (2) **SUN DISC/BEAMS/GLARE** — for
+levels/themes that author them (chapter2slums does not); same billboard pattern (the element pass already has
+the params/textures wired in the cook resolver — just not emitted yet). (3) **HDR TONEMAP/EXPOSURE** — retail
+HDR-tonemaps; we clamp (the AB town renders darker = its exposure) — a post-process pass, universally visible.
+(4) water night-lighting; (5) sunlight balance. Full list = frontier §3(e).
+
+## ▶▶ (history) START HERE (2026-08-14) — CLOUD LAYERS DONE; NIGHT MOON (now DONE, see above)
 Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `91af4f2`. This session shipped the
 **scrolling cloud layers** (the biggest remaining sky-fidelity gap — the dark band across the top of the
 AB oracle), on BOTH D3D12 + Vulkan, screenshot-verified in parity and against the oracle. Port source =
