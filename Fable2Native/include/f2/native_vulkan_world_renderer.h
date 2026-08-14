@@ -89,6 +89,10 @@ private:
     std::vector<VkDeviceMemory> water_memories_;
     std::array<float, 3> sun_direction_{0.0f, -1.0f, 0.0f};  // from the cooked scene
     std::array<float, 3> sun_color_{1.0f, 1.0f, 1.0f};
+    std::array<float, 3> scene_fog_color_{0.0f, 0.0f, 0.0f};  // distance fog (0 max = off)
+    float scene_fog_start_ = 0.0f;
+    float scene_fog_end_ = 1.0f;
+    float scene_fog_max_ = 0.0f;
     std::array<float, 3> scene_center_{0.0f, 0.0f, 0.0f};    // geometry bounds -> auto-frame camera
     float scene_radius_ = 1.0f;
     bool free_camera_ = false;

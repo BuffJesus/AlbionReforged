@@ -27,6 +27,8 @@ struct Constants {
     float sun_direction[4]{0.0f, -1.0f, 0.0f, 0.0f};  // xyz = normalised light dir (world), w unused
     float eye_time[4]{0.0f, 0.0f, 0.0f, 0.0f};         // xyz = camera eye (world), w = elapsed seconds
     float sun_color[4]{1.0f, 1.0f, 1.0f, 0.0f};        // rgb = directional sun colour (theme)
+    float fog_color[4]{0.0f, 0.0f, 0.0f, 0.0f};        // rgb + w = max density (0 = off)
+    float fog_range[4]{0.0f, 1.0f, 0.0f, 0.0f};        // x = start dist, y = end dist
     float viewport_size[4]{0.0f, 0.0f, 0.0f, 0.0f};    // xy = render width/height
 };
 
@@ -501,6 +503,8 @@ cbuffer Camera : register(b0) {
     float4 sun_direction;
     float4 eye_time;
     float4 sun_color;
+    float4 fog_color;   // rgb = fog colour, w = max density (0 = off)
+    float4 fog_range;   // x = start dist, y = end dist
     float4 viewport_size;
 };
 // Local point lights (level_lights_effects_re.txt §3.1): lamp posts, lanterns, braziers.
@@ -591,6 +595,13 @@ float4 ps_main(PSInput input) : SV_TARGET {
                    (ndl_p * atten * light_color_intensity[li].w);
         }
     }
+    // Distance fog toward the theme fog colour (fog_color.w = max density, 0 = off). Ties distant
+    // world geometry to the horizon/backdrop. Matches the Vulkan world PS.
+    if (fog_color.w > 0.0) {
+        float fd = length(eye_time.xyz - input.world_pos);
+        float f = saturate((fd - fog_range.x) / max(fog_range.y - fog_range.x, 1.0)) * fog_color.w;
+        lit = lerp(lit, fog_color.rgb, f);
+    }
     float3 color = lit;
     return float4(color, base.a);
 }
@@ -657,6 +668,12 @@ float4 ps_water(PSInput input) : SV_TARGET {
     float water_z = input.position.z;
     float shoreline = lerp(0.05, 1.0, saturate((water_z - scene_z) * 256.0));
     refr_k *= shoreline;
+    // Distance fog on the water surface too (coherent with opaque geometry).
+    if (fog_color.w > 0.0) {
+        float ffd = length(eye_time.xyz - wp);
+        float ff = saturate((ffd - fog_range.x) / max(fog_range.y - fog_range.x, 1.0)) * fog_color.w;
+        col = lerp(col, fog_color.rgb, ff);
+    }
     return float4(col, saturate(refr_k));
 }
 )";
@@ -889,6 +906,12 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     constants.eye_time[1] = eye[1];
     constants.eye_time[2] = eye[2];
     constants.eye_time[3] = static_cast<float>(elapsed_seconds);
+    constants.fog_color[0] = scene.fog_color[0];
+    constants.fog_color[1] = scene.fog_color[1];
+    constants.fog_color[2] = scene.fog_color[2];
+    constants.fog_color[3] = scene.fog_max;
+    constants.fog_range[0] = scene.fog_start;
+    constants.fog_range[1] = scene.fog_end;
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     // The world render must set its OWN viewport/scissor — nothing else does before it,

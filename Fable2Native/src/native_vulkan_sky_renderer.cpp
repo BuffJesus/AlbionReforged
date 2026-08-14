@@ -231,7 +231,7 @@ void NativeVulkanSkyRenderer::render(VkCommandBuffer command_buffer, std::uint32
     constants.horizon_color[0] = scene.sky_horizon_color[0];
     constants.horizon_color[1] = scene.sky_horizon_color[1];
     constants.horizon_color[2] = scene.sky_horizon_color[2];
-    constants.horizon_color[3] = 1.0f;
+    constants.horizon_color[3] = scene.sky_bias;  // gradient ramp bias (0 = linear)
     // Sunset tint + strength gate (w=0 -> the dawn/dusk halo term is a no-op). Mirrors D3D12.
     for (int i = 0; i < 3; ++i) constants.sunset_color[i] = scene.sky_sunset_color[i];
     constants.sunset_color[3] = scene.has_sky_sunset ? 1.0f : 0.0f;

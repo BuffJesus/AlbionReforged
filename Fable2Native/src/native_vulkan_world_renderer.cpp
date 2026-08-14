@@ -24,6 +24,8 @@ struct Constants {
     std::array<float, 4> sun_direction{0.0f, -1.0f, 0.0f, 0.0f};  // xyz = light dir (world)
     std::array<float, 4> sun_color{1.0f, 1.0f, 1.0f, 0.0f};       // rgb = directional sun colour
     std::array<float, 4> eye_time{0.0f, 0.0f, 0.0f, 0.0f};        // xyz = camera eye, w = seconds
+    std::array<float, 4> fog_color{0.0f, 0.0f, 0.0f, 0.0f};       // rgb + w = max density (0 = off)
+    std::array<float, 4> fog_range{0.0f, 1.0f, 0.0f, 0.0f};       // x = start dist, y = end dist
 };
 
 // b1-equivalent point-light UBO (level_lights_effects_re.txt §3.1); mirrors the D3D12 layout.
@@ -449,6 +451,10 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     }
     sun_direction_ = normalise(scene.sun_direction);
     sun_color_ = scene.sun_color;
+    scene_fog_color_ = scene.fog_color;
+    scene_fog_start_ = scene.fog_start;
+    scene_fog_end_ = scene.fog_end;
+    scene_fog_max_ = scene.fog_max;
     // Bounds -> auto-frame the orbit camera (mirror native_world_renderer.cpp) so the whole
     // town is in view instead of the old fixed radius-7 demo orbit. A cooked `focus` (town
     // bounds excluding horizon backdrop props) wins so the ~1000wu spire vista doesn't blow
@@ -958,6 +964,9 @@ void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
     constants.sun_direction = {sun_direction_[0], sun_direction_[1], sun_direction_[2], 0.0f};
     constants.sun_color = {sun_color_[0], sun_color_[1], sun_color_[2], 0.0f};
     constants.eye_time = {eye[0], eye[1], eye[2], static_cast<float>(elapsed_seconds)};
+    constants.fog_color = {scene_fog_color_[0], scene_fog_color_[1], scene_fog_color_[2],
+                           scene_fog_max_};
+    constants.fog_range = {scene_fog_start_, scene_fog_end_, 0.0f, 0.0f};
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width),

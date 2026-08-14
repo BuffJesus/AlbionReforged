@@ -213,6 +213,21 @@ bool load_native_scene(const std::filesystem::path& path,
                 return fail(&error, "invalid sky_sunset at line " + std::to_string(line_number));
             }
             parsed.has_sky_sunset = true;
+        } else if (opcode == "sky_bias") {
+            // Sky-gradient ramp bias (theme complementary_bias). Optional; 0 = linear (default).
+            if (!read_value(line, parsed.sky_bias)) {
+                return fail(&error, "invalid sky_bias at line " + std::to_string(line_number));
+            }
+        } else if (opcode == "fog_color") {
+            if (!read_vec3(line, parsed.fog_color)) {
+                return fail(&error, "invalid fog_color at line " + std::to_string(line_number));
+            }
+        } else if (opcode == "fog_range") {
+            // fog_range <start> <end> <max> — linear distance fog; max>0 enables it.
+            if (!read_value(line, parsed.fog_start) || !read_value(line, parsed.fog_end) ||
+                !read_value(line, parsed.fog_max)) {
+                return fail(&error, "invalid fog_range at line " + std::to_string(line_number));
+            }
         } else if (opcode == "focus") {
             // focus <cx> <cy> <cz> <radius> — camera-fit bounds over the town geometry only
             // (excludes horizon backdrop props). The world renderers frame this instead of the

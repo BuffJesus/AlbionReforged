@@ -14,6 +14,9 @@ layout(location = 0) out vec4 out_color;
 
 void main() {
     float v = clamp(ndc.y * 0.5 + 0.5, 0.0, 1.0);
+    // Ramp bias (theme complementary_bias in horizon_color.w): higher bias raises the exponent
+    // so the horizon tint extends further up. 0 = the old linear ramp (matches D3D12).
+    v = pow(v, 1.0 + 2.0 * sky.horizon_color.w);
     vec3 col = mix(sky.horizon_color.rgb, sky.sky_color.rgb, v);
     // Sunset halo (SkyboxRenderer.cpp:170-174): a Mie-forward-lobe warm tint toward the sun,
     // active ONLY when the sun is near the horizon (dawn/dusk). Gated by sunset_color.w (0

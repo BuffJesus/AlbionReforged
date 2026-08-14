@@ -261,6 +261,9 @@ float4 ps_main(VSOUT input) : SV_Target {
     // ---- Phase 0 gradient fallback (dome_misc.w >= 1.5) ----
     if (dome_misc.w >= 1.5) {
         float v = saturate(input.ndc.y * 0.5 + 0.5);   // 0 = bottom, 1 = top
+        // Ramp bias (theme complementary_bias in complementary_colour.w): higher bias raises
+        // the exponent so the horizon tint extends further up. 0 = the old linear ramp.
+        v = pow(v, 1.0 + 2.0 * complementary_colour.w);
         float3 g = lerp(complementary_colour.rgb, sky_colour.rgb, v);
         // Sunset halo (SkyboxRenderer.cpp:170-174): a Mie-forward-lobe warm tint toward the
         // sun, active ONLY when the sun is near the horizon (dawn/dusk). Gated by
@@ -603,6 +606,7 @@ void NativeSkyRenderer::render(ID3D12GraphicsCommandList* command_list,
         c.sunset_colour[i] = scene.sky_sunset_color[i];
     }
     c.sunset_colour[3] = scene.has_sky_sunset ? 1.0f : 0.0f;  // strength gate
+    c.complementary_colour[3] = scene.sky_bias;               // gradient ramp bias (0 = linear)
     std::memcpy(mapped_constants_, &c, sizeof(c));
 
     const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width),

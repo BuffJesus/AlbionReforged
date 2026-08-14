@@ -11,6 +11,8 @@ layout(set = 0, binding = 0) uniform Camera {
     vec4 sun_direction;
     vec4 sun_color;
     vec4 eye_time;   // xyz = camera eye (world), w = elapsed seconds
+    vec4 fog_color;  // rgb = fog colour, w = max density (0 = off)
+    vec4 fog_range;  // x = start dist, y = end dist
 } camera;
 layout(set = 0, binding = 1) uniform sampler2D albedo;
 layout(set = 0, binding = 2) uniform sampler2D normalTex;
@@ -92,6 +94,14 @@ vec4 water() {
         float shoreline = mix(0.05, 1.0, clamp((gl_FragCoord.z - scene_z) * 256.0, 0.0, 1.0));
         refr_k *= shoreline;
     }
+    // Distance fog on the water surface too (coherent with opaque geometry).
+    if (camera.fog_color.w > 0.0) {
+        float fd = length(camera.eye_time.xyz - world_pos);
+        float f = clamp((fd - camera.fog_range.x) /
+                        max(camera.fog_range.y - camera.fog_range.x, 1.0), 0.0, 1.0) *
+                  camera.fog_color.w;
+        col = mix(col, camera.fog_color.rgb, f);
+    }
     return vec4(col, clamp(refr_k, 0.0, 1.0));
 }
 
@@ -136,6 +146,15 @@ void main() {
             lit += base.rgb * lights.light_color_intensity[li].rgb *
                    (ndlp * atten * lights.light_color_intensity[li].w);
         }
+    }
+    // Distance fog toward the theme fog colour (fog_color.w = max density, 0 = off). Ties distant
+    // world geometry to the horizon/backdrop. Matches the D3D12 world PS.
+    if (camera.fog_color.w > 0.0) {
+        float fd = length(camera.eye_time.xyz - world_pos);
+        float f = clamp((fd - camera.fog_range.x) /
+                        max(camera.fog_range.y - camera.fog_range.x, 1.0), 0.0, 1.0) *
+                  camera.fog_color.w;
+        lit = mix(lit, camera.fog_color.rgb, f);
     }
     out_color = vec4(lit, 1.0);  // opaque -> alpha 1 makes the global blend a no-op
 }

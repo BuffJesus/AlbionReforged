@@ -88,6 +88,17 @@ struct NativeScene {
     // (the sunset term contributes nothing). See cook_levels.py `sky_sunset` emit.
     std::array<float, 3> sky_sunset_color{0.0f, 0.0f, 0.0f};
     bool has_sky_sunset = false;
+    // Sky-gradient ramp bias = theme complementary_bias (0..1). Reshapes the horizon->zenith
+    // ramp so the horizon tint extends further up at higher bias. 0 = the old linear ramp, so
+    // scenes without a `sky_bias` opcode are unchanged. See cook_levels.py `sky_bias` emit.
+    float sky_bias = 0.0f;
+    // Distance fog on world geometry (theme fogging; env_theme_colors_re.txt §6 "ties world to
+    // horizon"). Linear from fog_start to fog_end reaching fog_max toward fog_color. fog_max = 0
+    // (default) disables it, so scenes without `fog_color`/`fog_range` are unchanged.
+    std::array<float, 3> fog_color{0.0f, 0.0f, 0.0f};
+    float fog_start = 0.0f;
+    float fog_end = 1.0f;
+    float fog_max = 0.0f;
     // Optional camera-fit override (render space) cooked over the town geometry only, so
     // horizon backdrop props (the Tattered Spire vista at ~1000wu) don't blow up the auto-fit.
     // When has_focus, the world renderers frame focus_center/focus_radius instead of the full

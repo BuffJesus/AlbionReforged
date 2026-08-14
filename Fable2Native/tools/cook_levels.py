@@ -1086,6 +1086,11 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
     CR, CG, CB, CF = 0x507FFA3F, 0xDA12836B, 0x0593BF6A, 0xD433126B
     kSunset = 0x897262B7
     UR, UG, UB, UF = 0x896E8E84, 0x8FC37AA4, 0xCFED8B8F, 0xB2447252
+    # fogging: the Fogging sub-record carries CloseFogColour + near/far fog control points
+    kFogging = 0xDDF56C9A
+    kFogColour = 0x66353755
+    FR, FG, FB, FF = 0x2229E682, 0x4D9D5A22, 0x876515F9, 0x010020C0
+    kFogStart, kNearDist, kFarDist, kFarDens = 0x754D898A, 0xDA3F7AAA, 0xFF154645, 0xE1DF20B4
 
     def norm_tod(t):
         if not _m.isfinite(t): return 0.5
@@ -1161,6 +1166,17 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
     sunset = read_colour_subrec(sky_rec, kSunset) or read_flat(sky_rec, UR, UG, UB, UF)
     compl_bias = read_float(sky_rec, kComplBias)
 
+    # Fogging (env_theme_colors_re.txt §6): the theme's Fogging sub-record -> CloseFogColour +
+    # near/far fog control points. Distance fog on world geometry ties it to the horizon.
+    fog_rec = resolve_ref(best_theme, kFogging)
+    fog_color = fog_start = fog_end = fog_max = None
+    if fog_rec is not None:
+        fog_color = read_colour_subrec(fog_rec, kFogColour) or read_flat(fog_rec, FR, FG, FB, FF)
+        _fs = read_float(fog_rec, kFogStart)
+        fog_start = _fs if _fs is not None else read_float(fog_rec, kNearDist)
+        fog_end = read_float(fog_rec, kFarDist)
+        fog_max = read_float(fog_rec, kFarDens)
+
     # sun_axis -> Y-up sun_toward (sky_system_re.txt §3), tod=want, time_factor=1.0
     theta = (want - 0.5) * 2.0 * _m.pi
     er = _m.radians(elev); phi = _m.radians(xy + zoff)
@@ -1180,7 +1196,9 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
     return {"sun_dir": sun_dir, "sunlight": sunlight, "sky": sky,
             "sky_colour": sky, "sun_intensity": sun_int,
             "sun_elev": elev, "main_light": main, "tod": want,
-            "horizon": horizon, "sunset": sunset, "compl_bias": compl_bias}
+            "horizon": horizon, "sunset": sunset, "compl_bias": compl_bias,
+            "fog_color": fog_color, "fog_start": fog_start,
+            "fog_end": fog_end, "fog_max": fog_max}
 
 
 def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
@@ -1777,6 +1795,18 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             if ss is not None:
                 ss = [min(max(c, 0.0), 1.0) for c in ss]
                 out.write(f"sky_sunset {ss[0]:.5g} {ss[1]:.5g} {ss[2]:.5g}\n")
+            # complementary_bias reshapes the horizon->zenith ramp (0 = linear).
+            cb = env_theme.get("compl_bias")
+            if cb is not None:
+                out.write(f"sky_bias {min(max(cb, 0.0), 1.0):.5g}\n")
+            # Distance fog on world geometry (env_theme_colors_re.txt §6). Emitted only when the
+            # theme carries a full fogging record; fog_range max=far_density enables it.
+            fc = env_theme.get("fog_color")
+            fs, fe, fm = env_theme.get("fog_start"), env_theme.get("fog_end"), env_theme.get("fog_max")
+            if fc is not None and None not in (fs, fe, fm) and fe > fs and fm > 0.0:
+                fc = [min(max(c, 0.0), 1.0) for c in fc]
+                out.write(f"fog_color {fc[0]:.5g} {fc[1]:.5g} {fc[2]:.5g}\n")
+                out.write(f"fog_range {fs:.6g} {fe:.6g} {min(max(fm, 0.0), 1.0):.5g}\n")
         else:
             # Real chapter2slums midday theme (ghidra_out/env_theme_colors_re.txt, from
             # environmentthemes.gdb, BE bytes /255): sun = light DIRECTION = -sun_toward
