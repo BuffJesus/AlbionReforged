@@ -180,8 +180,27 @@ New tools this line: `f2tool ehf` (EHF LOD/splat dump), `terrain_splat_bake` (of
    plumbing the view ray + sun dir into the Vulkan sky pass: the Vulkan world renderer now has compute_camera()
    mirroring D3D12; SkyCamera moved to backend-neutral sky_camera.h. Verified: red-test warms the same sun-facing side
    on D3D12 == Vulkan (no mirror); real muted slums sunset = subtle warm shift at `--tod 6` dawn.
-   REMAINING: a gradient-BIAS opcode (compl_bias resolved+returned, unemitted); optional distance FOG on world geom
-   (env_theme_colors_re.txt §6); a visual balance pass on `sunlight = main_light*sun_intensity`.
+   (d) ✅ `sky_bias` + distance `fog` DONE (commit `ea8434f`) — bias reshapes the sky gradient ramp
+   (pow(v,1+2*bias), packed in horizon.w, both backends); fog resolves the theme Fogging record (CloseFogColour +
+   start/end/max) and applies linear distance fog toward the fog colour on opaque geom AND water on both backends.
+   Default off (fog_max=0 / bias=0) → old scenes byte-identical. chapter2slums midday = the authored hazy overcast
+   fog (near-black, end 130, max 0.48) → cohesive moody haze; screenshot-verified parity. ⚠ fog is authored for a
+   CLOSE gameplay camera, so at the far inspection orbit it reads as a uniform haze (fine once a gameplay camera exists).
+   The ATMOSPHERE PIPELINE (theme → sun/sunlight/sky/horizon/sunset/bias/fog) is now COMPLETE on both backends.
+   REMAINING (optional): a visual balance pass on `sunlight = main_light*sun_intensity`; a horizon-tinted aerial-
+   perspective fog variant if the void-edges should fade to sky instead of darken.
+
+**★ WORLD-GAPS VERDICT (2026-08-13, ultracode investigation w1orc8fp5):** the "gaps between castle/water/terrain"
+are **BY-DESIGN backdrop/skybox void, NOT missing geometry and NOT a cook bug** (high confidence). The AssetBrowser
+oracle (loading only chapter2slums) renders the SAME single bounded terrain slab with NO castle/water-strip/hills —
+those are backdrop elements we layer. slums.ghf/.ehf = exactly [0,288]² @ origin(0,0,0); the castle (game (174,-93),
+`bs_market_fairfaxcastle`, fc_stone_ext) + market props are at NEGATIVE game-Y OUTSIDE the terrain chunk, on their own
+cliff/plinth props. The void = game X[66,288]×Y[-128,0], covered by NO shipped .ghf/.ehf/.water/prop — it is skybox
+space the game ships empty. Sibling heightfields (posh, new9) are alternate SCENARIO variants of the same [0,288]²
+square, not extra land. The cook already consumes every shipped surface. **Fix = render a proper .genv sky/fog backdrop
+(the atmosphere work above), NOT fabricate terrain/sea** — a prior invented widened sea plane was correctly reverted
+(2026-08-12). ⚠ DO NOT add a connecting cliff/bridge mesh or widen the terrain — none is shipped. The AssetBrowser now
+has headless camera control (`--autoyaw`/`--autodist`/`--autoheight`, in AutoPilot.cpp) for matched oracle comparisons.
 3. Foliage LOD/wind; exact hero PlayerStart refinement; frontend fidelity drifts
    (`frontend_visual_fidelity_re.txt` P3-5).
 
