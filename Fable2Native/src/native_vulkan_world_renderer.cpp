@@ -870,6 +870,42 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     return true;
 }
 
+SkyCamera NativeVulkanWorldRenderer::compute_camera(std::uint32_t width, std::uint32_t height,
+                                                    double elapsed_seconds) const {
+    // Same orbit/free-fly basis as render_pass() below, exposed for the sky pass so its rays
+    // line up with world geometry. Mirrors NativeWorldRenderer::compute_camera (D3D12).
+    const float angle = static_cast<float>(elapsed_seconds * 0.25);
+    const float dist = scene_radius_ * 2.4f;
+    std::array<float, 3> eye;
+    std::array<float, 3> forward;
+    if (free_camera_) {
+        eye = free_eye_;
+        const float cp = std::cos(free_pitch_);
+        forward = normalise({cp * std::sin(free_yaw_), std::sin(free_pitch_),
+                             cp * std::cos(free_yaw_)});
+    } else {
+        eye = {scene_center_[0] + std::sin(angle) * dist,
+               scene_center_[1] + dist * 0.55f,
+               scene_center_[2] + std::cos(angle) * dist};
+        const std::array<float, 3> target{scene_center_[0], scene_center_[1], scene_center_[2]};
+        forward = normalise(subtract(target, eye));
+    }
+    const std::array<float, 3> up{0.0f, 1.0f, 0.0f};
+    const auto right = normalise(cross(up, forward));
+    const auto camera_up = cross(forward, right);
+    const float aspect = height == 0 ? 1.0f
+                                     : static_cast<float>(width) / static_cast<float>(height);
+    const float tan_half_y = std::tan(0.5f);
+    SkyCamera cam;
+    cam.position = eye;
+    cam.right = right;
+    cam.up = camera_up;
+    cam.forward = forward;
+    cam.tan_half_fov_x = tan_half_y * aspect;
+    cam.tan_half_fov_y = tan_half_y;
+    return cam;
+}
+
 void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
                                             std::uint32_t width,
                                             std::uint32_t height,

@@ -210,6 +210,7 @@ struct SkyConstants {
     float camera_forward[4]{};
     float sky_colour[4]{};         // for the Phase 0 gradient fallback
     float complementary_colour[4]{};
+    float sunset_colour[4]{};       // rgb = theme sunset tint, w = strength (0 = off)
 };
 
 // Vertex shader: SkyDomeXex fullscreen triangle. Reconstructs the engine-space ray from the
@@ -227,6 +228,7 @@ cbuffer SkyCB : register(b0) {
     float4 camera_forward;
     float4 sky_colour;
     float4 complementary_colour;
+    float4 sunset_colour;     // rgb = sunset tint, w = strength (0 = off)
 }
 Texture2D in_scatter_lut : register(t0);   // 64x1 RGBA16F
 SamplerState clamp_sampler : register(s0);
@@ -260,6 +262,20 @@ float4 ps_main(VSOUT input) : SV_Target {
     if (dome_misc.w >= 1.5) {
         float v = saturate(input.ndc.y * 0.5 + 0.5);   // 0 = bottom, 1 = top
         float3 g = lerp(complementary_colour.rgb, sky_colour.rgb, v);
+        // Sunset halo (SkyboxRenderer.cpp:170-174): a Mie-forward-lobe warm tint toward the
+        // sun, active ONLY when the sun is near the horizon (dawn/dusk). Gated by
+        // sunset_colour.w (0 when no `sky_sunset` opcode) so the default look is unchanged.
+        if (sunset_colour.w > 0.0) {
+            float3 rd = normalize(input.ray);
+            float3 sd = normalize(sun_direction.xyz);     // toward the sun
+            float cosT = dot(rd, sd);
+            float gm = 0.80;
+            float hg = 1.0 + gm * gm - 2.0 * gm * cosT;
+            float phaseM = 0.079577468 * (1.0 - gm * gm) / max(pow(abs(hg), 1.5), 0.0001);
+            float sunset_w = saturate(1.0 - abs(sd.y) * 5.0) * saturate(cosT * 0.5 + 0.5);
+            g = lerp(g, sunset_colour.rgb * (0.4 + 0.8 * phaseM),
+                     sunset_w * 0.45 * sunset_colour.w);
+        }
         return float4(g, 1.0);
     }
 
@@ -584,7 +600,9 @@ void NativeSkyRenderer::render(ID3D12GraphicsCommandList* command_list,
         // field for its below-horizon haze; its prebuilt LUT still uses the hardcoded
         // ThemeInputs value, so a cooked horizon only fully reaches the default gradient path.
         c.complementary_colour[i] = scene.sky_horizon_color[i];
+        c.sunset_colour[i] = scene.sky_sunset_color[i];
     }
+    c.sunset_colour[3] = scene.has_sky_sunset ? 1.0f : 0.0f;  // strength gate
     std::memcpy(mapped_constants_, &c, sizeof(c));
 
     const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width),

@@ -1556,8 +1556,10 @@ private:
         vkCmdBeginRenderPass(command_buffers_[image_index], &pass, VK_SUBPASS_CONTENTS_INLINE);
         if (game_.frontend.state() == f2::FrontendState::World) {
             if (sky_renderer_.ready()) {
+                const f2::SkyCamera sky_camera = world_renderer_.compute_camera(
+                    extent_.width, extent_.height, game_.elapsed_seconds);
                 sky_renderer_.render(command_buffers_[image_index], extent_.width, extent_.height,
-                                     game_.scene);
+                                     game_.scene, sky_camera);
             }
             if (msaa_clear) {
                 world_renderer_.render_opaque(command_buffers_[image_index], extent_.width,

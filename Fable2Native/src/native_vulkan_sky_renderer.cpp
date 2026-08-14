@@ -14,6 +14,11 @@ namespace {
 struct SkyConstants {
     float sky_color[4]{};
     float horizon_color[4]{};
+    float sunset_color[4]{};    // rgb = sunset tint, w = strength (0 = off)
+    float sun_direction[4]{};   // toward the sun (xyz), render space
+    float camera_right[4]{};    // w = tan(fov_x/2)
+    float camera_up[4]{};       // w = tan(fov_y/2)
+    float camera_forward[4]{};
 };
 
 bool read_spirv(const std::filesystem::path& path, std::vector<std::uint32_t>& words,
@@ -212,7 +217,8 @@ bool NativeVulkanSkyRenderer::initialise(VkPhysicalDevice physical_device, VkDev
 }
 
 void NativeVulkanSkyRenderer::render(VkCommandBuffer command_buffer, std::uint32_t width,
-                                      std::uint32_t height, const NativeScene& scene) {
+                                      std::uint32_t height, const NativeScene& scene,
+                                      const SkyCamera& camera) {
     if (!ready() || !mapped_constants_ || width == 0 || height == 0) return;
     SkyConstants constants{};
     constants.sky_color[0] = scene.sky_color[0];
@@ -226,6 +232,21 @@ void NativeVulkanSkyRenderer::render(VkCommandBuffer command_buffer, std::uint32
     constants.horizon_color[1] = scene.sky_horizon_color[1];
     constants.horizon_color[2] = scene.sky_horizon_color[2];
     constants.horizon_color[3] = 1.0f;
+    // Sunset tint + strength gate (w=0 -> the dawn/dusk halo term is a no-op). Mirrors D3D12.
+    for (int i = 0; i < 3; ++i) constants.sunset_color[i] = scene.sky_sunset_color[i];
+    constants.sunset_color[3] = scene.has_sky_sunset ? 1.0f : 0.0f;
+    // Sun direction TOWARD the sun (scene stores light-travel dir) + camera basis, so the
+    // frag can reconstruct the per-pixel ray for the sunset halo (matches the D3D12 sky).
+    constants.sun_direction[0] = -scene.sun_direction[0];
+    constants.sun_direction[1] = -scene.sun_direction[1];
+    constants.sun_direction[2] = -scene.sun_direction[2];
+    for (int i = 0; i < 3; ++i) {
+        constants.camera_right[i] = camera.right[i];
+        constants.camera_up[i] = camera.up[i];
+        constants.camera_forward[i] = camera.forward[i];
+    }
+    constants.camera_right[3] = camera.tan_half_fov_x;
+    constants.camera_up[3] = camera.tan_half_fov_y;
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
     VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width),
                         -static_cast<float>(height), 0.0f, 1.0f};

@@ -82,6 +82,12 @@ struct NativeScene {
     // `sky_horizon` opcode render exactly as before. Fed to the sky pass as the v=0 end of
     // the gradient lerp on both backends. See cook_levels.py `sky_horizon` emit.
     std::array<float, 3> sky_horizon_color{0.222f, 0.5789f, 1.11f};
+    // Sky-gradient sunset tint = theme sunset_colour. A warm Mie-forward-lobe halo added
+    // toward the sun ONLY when the sun is near the horizon (dawn/dusk). Gated by
+    // has_sky_sunset so scenes without a `sky_sunset` opcode render exactly as before
+    // (the sunset term contributes nothing). See cook_levels.py `sky_sunset` emit.
+    std::array<float, 3> sky_sunset_color{0.0f, 0.0f, 0.0f};
+    bool has_sky_sunset = false;
     // Optional camera-fit override (render space) cooked over the town geometry only, so
     // horizon backdrop props (the Tattered Spire vista at ~1000wu) don't blow up the auto-fit.
     // When has_focus, the world renderers frame focus_center/focus_radius instead of the full

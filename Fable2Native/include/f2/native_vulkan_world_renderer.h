@@ -1,6 +1,7 @@
 #pragma once
 
 #include "native_scene.h"
+#include "sky_camera.h"
 
 #include <vulkan/vulkan.h>
 
@@ -46,6 +47,11 @@ public:
                       std::uint32_t height,
                       double elapsed_seconds);
     void destroy();
+
+    // Camera basis for the sky pass (same orbit/free-fly logic the world pass uses), so the
+    // sky's fullscreen-triangle rays line up with world geometry. Mirrors D3D12's compute_camera.
+    [[nodiscard]] SkyCamera compute_camera(std::uint32_t width, std::uint32_t height,
+                                           double elapsed_seconds) const;
 
     // Free-fly camera override (level inspection) — mirrors the D3D12 renderer.
     void set_free_camera(const std::array<float, 3>& eye, float yaw, float pitch) {

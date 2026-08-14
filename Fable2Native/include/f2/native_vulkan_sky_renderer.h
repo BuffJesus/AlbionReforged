@@ -1,6 +1,7 @@
 #pragma once
 
 #include "native_scene.h"
+#include "sky_camera.h"
 
 #include <vulkan/vulkan.h>
 
@@ -22,7 +23,8 @@ public:
     void render(VkCommandBuffer command_buffer,
                 std::uint32_t width,
                 std::uint32_t height,
-                const NativeScene& scene);
+                const NativeScene& scene,
+                const SkyCamera& camera);
     void destroy();
     [[nodiscard]] bool ready() const noexcept { return pipeline_ != VK_NULL_HANDLE; }
 

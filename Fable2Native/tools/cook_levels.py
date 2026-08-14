@@ -1156,9 +1156,8 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
     # horizon (complementary) + sunset tints — raw HDR (Factor can push >1); the emit
     # step display-maps them. horizon = the gradient's bottom; sunset = warm sun-halo.
     horizon = read_colour_subrec(sky_rec, kCompl) or read_flat(sky_rec, CR, CG, CB, CF)
-    # sunset + compl_bias are resolved and returned but not yet emitted — staged for a
-    # future `sky_sunset` / bias opcode (a sun-halo term on the gradient). Only `horizon`
-    # is consumed today (the sky_horizon opcode).
+    # sunset feeds the `sky_sunset` opcode (dawn/dusk sun-halo). compl_bias is resolved and
+    # returned but not yet emitted — staged for a future gradient-bias opcode.
     sunset = read_colour_subrec(sky_rec, kSunset) or read_flat(sky_rec, UR, UG, UB, UF)
     compl_bias = read_float(sky_rec, kComplBias)
 
@@ -1772,6 +1771,12 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
             if hz is not None:
                 hz = [c / (1.0 + c) for c in hz]
                 out.write(f"sky_horizon {hz[0]:.5g} {hz[1]:.5g} {hz[2]:.5g}\n")
+            # sunset tint = theme sunset_colour: a warm dawn/dusk halo the sky PS adds toward
+            # a low sun (no-op when the sun is high/below). Typically LDR; clamp for safety.
+            ss = env_theme.get("sunset")
+            if ss is not None:
+                ss = [min(max(c, 0.0), 1.0) for c in ss]
+                out.write(f"sky_sunset {ss[0]:.5g} {ss[1]:.5g} {ss[2]:.5g}\n")
         else:
             # Real chapter2slums midday theme (ghidra_out/env_theme_colors_re.txt, from
             # environmentthemes.gdb, BE bytes /255): sun = light DIRECTION = -sun_toward

@@ -206,6 +206,13 @@ bool load_native_scene(const std::filesystem::path& path,
             if (!read_vec3(line, parsed.sky_horizon_color)) {
                 return fail(&error, "invalid sky_horizon at line " + std::to_string(line_number));
             }
+        } else if (opcode == "sky_sunset") {
+            // Sky-gradient sunset tint (theme sunset_colour). Optional: enables the dawn/dusk
+            // sun-halo term. Absent -> has_sky_sunset stays false -> the term is a no-op.
+            if (!read_vec3(line, parsed.sky_sunset_color)) {
+                return fail(&error, "invalid sky_sunset at line " + std::to_string(line_number));
+            }
+            parsed.has_sky_sunset = true;
         } else if (opcode == "focus") {
             // focus <cx> <cy> <cz> <radius> — camera-fit bounds over the town geometry only
             // (excludes horizon backdrop props). The world renderers frame this instead of the
