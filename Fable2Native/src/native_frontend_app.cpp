@@ -46,6 +46,7 @@ namespace {
 
 constexpr UINT kFrameCount = 2;
 constexpr DXGI_FORMAT kBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+constexpr UINT kShadowSize = 2048;  // sun shadow-map resolution (square)
 constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
 constexpr UINT kUiTextureCount = 36;
 
@@ -296,6 +297,9 @@ public:
         }
         world_renderer_.set_scene_depth_copy(depth_target_.Get(), depth_copy_.Get(),
                                              depth_gpu_handle_);
+        if (shadow_map_) {
+            world_renderer_.set_shadow_map(shadow_dsv_, shadow_srv_gpu_, kShadowSize);
+        }
         // Procedural sky pass (self-contained: own root sig/PSO/LUT/descriptor heap). A
         // failure here is non-fatal — the World branch falls back to the flat sky_color clear.
         std::string sky_error;
@@ -492,13 +496,19 @@ private:
         rtv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (FAILED(device_->CreateDescriptorHeap(&rtv_desc, IID_PPV_ARGS(&rtv_heap_)))) return false;
         D3D12_DESCRIPTOR_HEAP_DESC dsv_desc{};
-        dsv_desc.NumDescriptors = 1;
+        dsv_desc.NumDescriptors = 2;  // [0] world depth, [1] sun shadow map depth
         dsv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
         if (FAILED(device_->CreateDescriptorHeap(&dsv_desc, IID_PPV_ARGS(&dsv_heap_)))) return false;
         dsv_handle_ = dsv_heap_->GetCPUDescriptorHandleForHeapStart();
+        {
+            const UINT dsv_stride =
+                device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+            shadow_dsv_ = dsv_handle_;
+            shadow_dsv_.ptr += dsv_stride;  // second DSV slot
+        }
         D3D12_DESCRIPTOR_HEAP_DESC srv_desc{};
         srv_desc.NumDescriptors =
-            f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 4;
+            f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 5;
         srv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         srv_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device_->CreateDescriptorHeap(&srv_desc, IID_PPV_ARGS(&descriptor_heap_)))) return false;
@@ -508,6 +518,7 @@ private:
         font_descriptor_index_ = video_descriptor_index_ + 1;
         depth_descriptor_index_ = font_descriptor_index_ + 1;
         hdr_descriptor_index_ = depth_descriptor_index_ + 1;
+        shadow_descriptor_index_ = hdr_descriptor_index_ + 1;
 
         rtv_stride_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         auto handle = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
@@ -524,6 +535,7 @@ private:
         hdr_rtv_ = handle;  // the RTV slot after MSAA, for the HDR scene target
         create_depth_target();
         create_hdr_target();
+        create_shadow_map();
         if (FAILED(device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
                                                frames_[0].allocator.Get(), nullptr,
                                                IID_PPV_ARGS(&command_list_))) ||
@@ -658,6 +670,48 @@ private:
         device_->CreateShaderResourceView(depth_copy_.Get(), &depth_srv, depth_cpu);
         depth_gpu_handle_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
         depth_gpu_handle_.ptr += static_cast<std::size_t>(depth_descriptor_index_) * descriptor_stride_;
+    }
+
+    // Sun shadow map (retail "Render ShadowBuffers"): a fixed-size square depth target the world
+    // renderer replays opaque geometry into from the sun POV, then samples in the world PS. Created
+    // once (size is window-independent); starts in DEPTH_WRITE.
+    void create_shadow_map() {
+        shadow_map_.Reset();
+        if (!device_) return;
+        D3D12_RESOURCE_DESC description{};
+        description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        description.Width = kShadowSize;
+        description.Height = kShadowSize;
+        description.DepthOrArraySize = 1;
+        description.MipLevels = 1;
+        description.Format = DXGI_FORMAT_R32_TYPELESS;  // D32 DSV + R32_FLOAT SRV
+        description.SampleDesc.Count = 1;
+        description.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_CLEAR_VALUE clear{};
+        clear.Format = DXGI_FORMAT_D32_FLOAT;
+        clear.DepthStencil.Depth = 1.0f;  // standard-Z far
+        if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &description,
+                                                    D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear,
+                                                    IID_PPV_ARGS(&shadow_map_)))) {
+            shadow_map_.Reset();
+            return;
+        }
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+        dsv.Format = DXGI_FORMAT_D32_FLOAT;
+        dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        device_->CreateDepthStencilView(shadow_map_.Get(), &dsv, shadow_dsv_);
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Format = DXGI_FORMAT_R32_FLOAT;
+        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels = 1;
+        auto cpu = descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
+        cpu.ptr += static_cast<std::size_t>(shadow_descriptor_index_) * descriptor_stride_;
+        device_->CreateShaderResourceView(shadow_map_.Get(), &srv, cpu);
+        shadow_srv_gpu_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
+        shadow_srv_gpu_.ptr += static_cast<std::size_t>(shadow_descriptor_index_) * descriptor_stride_;
     }
 
     // Optional HDR-compositor tuning overrides (defaults give the retail glow):
@@ -1584,7 +1638,19 @@ private:
         // table (its material textures), which requires the heap already bound.
         ID3D12DescriptorHeap* heaps[] = {descriptor_heap_.Get()};
         command_list_->SetDescriptorHeaps(1, heaps);
+        const bool shadows = state == f2::FrontendState::World && shadow_map_;
         if (state == f2::FrontendState::World) {
+            // Sun shadow pass FIRST (retail Render ShadowBuffers): a depth-only replay of opaque
+            // geometry from the sun POV into the shadow map, then transitioned to a PS resource so
+            // the world PS can sample it. Runs before the sky/world colour passes.
+            if (shadows) {
+                world_renderer_.render_shadow(command_list_.Get(), game_.scene,
+                                              game_.elapsed_seconds);
+                const auto to_srv =
+                    transition(shadow_map_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                command_list_->ResourceBarrier(1, &to_srv);
+            }
             // Rebind the same color target WITH the depth buffer so the world renderer
             // gets real occlusion (frontend states render depthless above).
             if (depth_target_) {
@@ -1646,6 +1712,13 @@ private:
                 command_list_->ResourceBarrier(1, &to_rt);
                 // The compositor bound its own descriptor heap; restore the app heap for the UI.
                 command_list_->SetDescriptorHeaps(1, heaps);
+            }
+            // Restore the shadow map to DEPTH_WRITE for next frame's shadow pass.
+            if (shadows) {
+                const auto to_depth =
+                    transition(shadow_map_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                               D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                command_list_->ResourceBarrier(1, &to_depth);
             }
         }
         if (state == f2::FrontendState::MainMenu || state == f2::FrontendState::ChooseCard ||
@@ -1764,6 +1837,10 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE hdr_rtv_{};
     D3D12_GPU_DESCRIPTOR_HANDLE hdr_gpu_handle_{};  // SRV for the tonemap compositor
     UINT hdr_descriptor_index_ = 0;
+    ComPtr<ID3D12Resource> shadow_map_;  // sun shadow-map depth (retail Render ShadowBuffers)
+    D3D12_CPU_DESCRIPTOR_HANDLE shadow_dsv_{};
+    D3D12_GPU_DESCRIPTOR_HANDLE shadow_srv_gpu_{};
+    UINT shadow_descriptor_index_ = 0;
     float hdr_exposure_ = 1.0f;  // compositor exposure (1.0 == the old direct-to-LDR clamp)
     float hdr_bloom_threshold_ = 0.62f;  // HDR level above which bloom is extracted
     float hdr_bloom_intensity_ = 0.90f;  // bloom add strength (0 == no bloom = byte-identical)

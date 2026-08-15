@@ -36,6 +36,20 @@ public:
                 std::uint32_t height,
                 double elapsed_seconds);
 
+    // Sun shadow map (retail "Render ShadowBuffers"): the frontend owns a depth target + its DSV
+    // and a shader-readable SRV; the renderer replays the opaque geometry into it from the sun's
+    // ortho POV (render_shadow) and samples it in the world PS. size = square resolution.
+    void set_shadow_map(D3D12_CPU_DESCRIPTOR_HANDLE dsv, D3D12_GPU_DESCRIPTOR_HANDLE srv,
+                        std::uint32_t size) {
+        shadow_dsv_ = dsv;
+        shadow_srv_gpu_ = srv;
+        shadow_size_ = size;
+    }
+    // Depth-only shadow pass: render opaque geometry from the sun POV into the shadow DSV. Call
+    // before render(); the frontend transitions the shadow target DEPTH_WRITE -> PIXEL_SHADER between.
+    void render_shadow(ID3D12GraphicsCommandList* command_list, const NativeScene& scene,
+                       double elapsed_seconds);
+
     // The frontend supplies a shader-readable copy of the World depth buffer. It is copied
     // after opaque geometry and sampled by the water pass for the shoreline edge factor.
     void set_scene_depth_copy(ID3D12Resource* source, ID3D12Resource* copy,
@@ -55,6 +69,10 @@ public:
     // pixel-for-pixel with the world. Shares compute_camera() + the same near/far framing.
     std::array<float, 16> compute_view_projection(std::uint32_t width, std::uint32_t height,
                                                   double elapsed_seconds) const;
+
+    // Sun ortho view-projection used for the shadow map (fits a box around the scene along the sun
+    // travel dir, standard Z). Public so the shadow pass and PS share the exact same transform.
+    std::array<float, 16> compute_light_view_projection(const std::array<float, 3>& sun) const;
 
     // Free-fly camera override (for level inspection). When set, compute_camera and
     // render() use this eye+yaw+pitch basis instead of the auto-orbit; the sky follows
@@ -93,6 +111,11 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_state_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> water_pipeline_;  // translucent animated water
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> shadow_root_signature_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> shadow_pipeline_;  // depth-only sun shadow pass
+    D3D12_CPU_DESCRIPTOR_HANDLE shadow_dsv_{};       // frontend-owned shadow depth DSV
+    D3D12_GPU_DESCRIPTOR_HANDLE shadow_srv_gpu_{};   // frontend-owned shadow depth SRV (t4)
+    std::uint32_t shadow_size_ = 0;                  // square shadow-map resolution (0 = disabled)
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> textures_;
     D3D12_VERTEX_BUFFER_VIEW vertex_view_{};
     D3D12_INDEX_BUFFER_VIEW index_view_{};

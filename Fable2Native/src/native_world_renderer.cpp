@@ -36,6 +36,12 @@ struct Constants {
     // RE'd chapter2slums midday values so scenes without a theme are unchanged.
     float sky_zenith[4]{0.6549f, 0.8157f, 1.0f, 1.0f};
     float sky_horizon[4]{0.222f, 0.5789f, 1.11f, 1.0f};
+    // Sun shadow map (retail "Render ShadowBuffers" pass, rendering_pipeline.txt §A#3/§D.1): the
+    // ortho light view-projection the shadow depth was rendered with, so the PS can project each
+    // world_pos into the shadow map and compare depth. shadow_params: x=texel size (1/res),
+    // y=depth bias, z=enabled (1/0), w=strength (how dark the shadowed sun term goes).
+    float light_view_projection[4][4]{};
+    float shadow_params[4]{0.0f, 0.0f, 0.0f, 1.0f};
 };
 
 // b1 point-light cbuffer (level_lights_effects_re.txt §3.1). Mirrors the HLSL layout:
@@ -514,6 +520,8 @@ cbuffer Camera : register(b0) {
     float4 viewport_size;
     float4 sky_zenith;   // theme sky gradient top (water reflection tracks the real sky)
     float4 sky_horizon;  // theme sky gradient bottom
+    row_major float4x4 light_view_projection;  // sun ortho VP the shadow map was rendered with
+    float4 shadow_params;  // x=texel size, y=depth bias, z=enabled, w=strength
 };
 // Local point lights (level_lights_effects_re.txt §3.1): lamp posts, lanterns, braziers.
 cbuffer Lights : register(b1) {
@@ -531,7 +539,25 @@ Texture2D albedo : register(t0);
 Texture2D normalTex : register(t1);
 Texture2D specTex : register(t2);
 Texture2D<float> scene_depth : register(t3);
+Texture2D<float> shadow_map : register(t4);
 SamplerState albedo_sampler : register(s0);
+SamplerComparisonState shadow_sampler : register(s1);
+
+// Sun shadow factor at a world position: 1 = lit, 0 = fully shadowed. Projects world_pos into the
+// light's ortho clip space, then 3x3 PCF SampleCmp against the shadow depth (retail ShadowBuffers).
+float sun_shadow(float3 world_pos) {
+    if (shadow_params.z < 0.5) return 1.0;
+    float4 lp = mul(float4(world_pos, 1.0), light_view_projection);  // ortho -> w = 1
+    float2 uv = lp.xy * float2(0.5, -0.5) + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || lp.z < 0.0 || lp.z > 1.0) return 1.0;
+    float depth = lp.z - shadow_params.y;  // depth bias to kill acne
+    float t = shadow_params.x;
+    float sum = 0.0;
+    [unroll] for (int y = -1; y <= 1; ++y)
+        [unroll] for (int x = -1; x <= 1; ++x)
+            sum += shadow_map.SampleCmpLevelZero(shadow_sampler, uv + float2(x, y) * t, depth);
+    return sum / 9.0;
+}
 struct VSInput { float3 position : POSITION; float3 normal : NORMAL; float4 color : COLOR0; float2 uv : TEXCOORD0; float4 probe : COLOR1; };
 struct PSInput { float4 position : SV_POSITION; float3 normal : NORMAL; float3 world_pos : TEXCOORD1; float4 color : COLOR0; float2 uv : TEXCOORD0; float4 probe : COLOR1; };
 PSInput vs_main(VSInput input) {
@@ -569,6 +595,11 @@ float4 ps_main(PSInput input) : SV_TARGET {
     // Light model (§7): hemisphere ambient (cool sky above, dim ground bounce below by world-up
     // N.y) + N·L sun diffuse — replaces the flat 0.35 that read dark/flat.
     float ndl = saturate(dot(N, -sun_direction.xyz));
+    // Cast shadows: attenuate ONLY the sun (N·L + spec) term, never the ambient, so shadowed
+    // surfaces keep their baked/hemisphere fill (retail: the material PS multiplies the sun
+    // contribution by the sampled shadow buffer). strength (shadow_params.w) sets how dark.
+    float shadow = lerp(1.0, sun_shadow(input.world_pos), shadow_params.w);
+    ndl *= shadow;
     float hemi = 0.5 + 0.5 * N.y;
     float3 ambient = lerp(float3(0.18, 0.20, 0.24), float3(0.55, 0.58, 0.62), hemi);
     // Per-prop baked ambient (.lmp LightmapFile SH probe DC term, world_shading §lmp): when a
@@ -586,7 +617,7 @@ float4 ps_main(PSInput input) : SV_TARGET {
     float3 Vdir = normalize(eye_time.xyz - input.world_pos);
     float3 Hdir = normalize(-sun_direction.xyz + Vdir);
     float spec = pow(saturate(dot(N, Hdir)), 32.0) * specMask;
-    lit += spec * sun_color.rgb;
+    lit += spec * sun_color.rgb * shadow;  // sun specular is shadowed with the diffuse sun term
     // Additive local point lights (level_lights_effects_re.txt §3.1): diffuse N·L with a
     // soft linear-squared falloff clamped at each light's Range. Added AFTER the
     // hemisphere+sun term so lamps/braziers glow warm over the global lighting.
@@ -702,7 +733,7 @@ float4 ps_water(PSInput input) : SV_TARGET {
         return false;
     }
 
-    D3D12_ROOT_PARAMETER root_parameters[6]{};
+    D3D12_ROOT_PARAMETER root_parameters[7]{};
     root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     root_parameters[0].Descriptor.ShaderRegister = 0;
     root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // PS reads sun_direction too
@@ -734,19 +765,37 @@ float4 ps_water(PSInput input) : SV_TARGET {
     root_parameters[5].Constants.ShaderRegister = 3;
     root_parameters[5].Constants.Num32BitValues = 8;
     root_parameters[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-    D3D12_STATIC_SAMPLER_DESC sampler{};
-    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.MaxLOD = D3D12_FLOAT32_MAX;
-    sampler.ShaderRegister = 0;
-    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    // t4 = sun shadow map (PS only), sampled with the s1 comparison sampler.
+    D3D12_DESCRIPTOR_RANGE shadow_range{};
+    shadow_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    shadow_range.NumDescriptors = 1;
+    shadow_range.BaseShaderRegister = 4;
+    root_parameters[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    root_parameters[6].DescriptorTable.NumDescriptorRanges = 1;
+    root_parameters[6].DescriptorTable.pDescriptorRanges = &shadow_range;
+    root_parameters[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC samplers[2]{};
+    samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[0].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[0].ShaderRegister = 0;
+    samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    // s1 = shadow comparison sampler (hardware PCF): LESS_EQUAL, clamp, border=1 (outside = lit).
+    samplers[1].Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    samplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    samplers[1].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[1].ShaderRegister = 1;
+    samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_ROOT_SIGNATURE_DESC root_description{};
-    root_description.NumParameters = 6;
+    root_description.NumParameters = 7;
     root_description.pParameters = root_parameters;
-    root_description.NumStaticSamplers = 1;
-    root_description.pStaticSamplers = &sampler;
+    root_description.NumStaticSamplers = 2;
+    root_description.pStaticSamplers = samplers;
     root_description.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
     Microsoft::WRL::ComPtr<ID3DBlob> root_blob;
     if (FAILED(D3D12SerializeRootSignature(&root_description,
@@ -814,6 +863,69 @@ float4 ps_water(PSInput input) : SV_TARGET {
     water.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     if (FAILED(device->CreateGraphicsPipelineState(&water, IID_PPV_ARGS(&water_pipeline_)))) {
         error = "The native world water pipeline could not be created.";
+        return false;
+    }
+
+    // Sun shadow pass (retail "Render ShadowBuffers"): a depth-only replay of the opaque geometry
+    // from the sun's ortho POV. Reuses the Camera cbuffer (b0) for light_view_projection.
+    constexpr char shadow_source[] = R"(
+cbuffer Camera : register(b0) {
+    row_major float4x4 view_projection; float4 sun_direction; float4 eye_time; float4 sun_color;
+    float4 fog_color; float4 fog_range; float4 viewport_size; float4 sky_zenith; float4 sky_horizon;
+    row_major float4x4 light_view_projection; float4 shadow_params;
+};
+struct VSInput { float3 position : POSITION; float3 normal : NORMAL; float4 color : COLOR0;
+                 float2 uv : TEXCOORD0; float4 probe : COLOR1; };
+float4 vs_shadow(VSInput input) : SV_Position {
+    return mul(float4(input.position, 1.0), light_view_projection);
+}
+)";
+    Microsoft::WRL::ComPtr<ID3DBlob> shadow_vs;
+    if (FAILED(D3DCompile(shadow_source, sizeof(shadow_source) - 1, "native_world_shadow.hlsl",
+                          nullptr, nullptr, "vs_shadow", "vs_5_0", 0, 0, &shadow_vs,
+                          &shader_errors))) {
+        error = "The native world shadow shader could not be compiled.";
+        return false;
+    }
+    // Shadow root signature: just the Camera CBV (b0) for the light VP.
+    D3D12_ROOT_PARAMETER shadow_param{};
+    shadow_param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    shadow_param.Descriptor.ShaderRegister = 0;
+    shadow_param.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    D3D12_ROOT_SIGNATURE_DESC shadow_root_desc{};
+    shadow_root_desc.NumParameters = 1;
+    shadow_root_desc.pParameters = &shadow_param;
+    shadow_root_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+    Microsoft::WRL::ComPtr<ID3DBlob> shadow_root_blob;
+    if (FAILED(D3D12SerializeRootSignature(&shadow_root_desc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                           &shadow_root_blob, &shader_errors)) ||
+        FAILED(device->CreateRootSignature(0, shadow_root_blob->GetBufferPointer(),
+                                           shadow_root_blob->GetBufferSize(),
+                                           IID_PPV_ARGS(&shadow_root_signature_)))) {
+        error = "The native world shadow root signature could not be created.";
+        return false;
+    }
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC shadow_pso{};
+    shadow_pso.pRootSignature = shadow_root_signature_.Get();
+    shadow_pso.VS = {shadow_vs->GetBufferPointer(), shadow_vs->GetBufferSize()};
+    shadow_pso.InputLayout = {input_layout, static_cast<UINT>(std::size(input_layout))};
+    shadow_pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    shadow_pso.NumRenderTargets = 0;  // depth only
+    shadow_pso.SampleDesc.Count = 1;
+    shadow_pso.SampleMask = 0xFFFFFFFFu;
+    shadow_pso.RasterizerState = rasterizer_description();
+    // Depth bias reduces shadow acne on the low-slope terrain/roofs (standard-Z shadow map).
+    shadow_pso.RasterizerState.DepthBias = 5000;
+    shadow_pso.RasterizerState.SlopeScaledDepthBias = 2.0f;
+    shadow_pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;  // mixed winding in the cooked MDL
+    shadow_pso.BlendState = blend_description();
+    shadow_pso.DepthStencilState.DepthEnable = TRUE;
+    shadow_pso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    shadow_pso.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;  // standard Z
+    shadow_pso.DepthStencilState.StencilEnable = FALSE;
+    shadow_pso.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    if (FAILED(device->CreateGraphicsPipelineState(&shadow_pso, IID_PPV_ARGS(&shadow_pipeline_)))) {
+        error = "The native world shadow pipeline could not be created.";
         return false;
     }
 
@@ -906,6 +1018,66 @@ std::array<float, 16> NativeWorldRenderer::compute_view_projection(std::uint32_t
     return m;
 }
 
+// Sun ortho view-projection for the shadow map: fits a box around the scene, looking along the sun
+// travel direction, standard Z in [0,1]. Row-vector × row-major (matches the camera VP + world VS).
+std::array<float, 16> NativeWorldRenderer::compute_light_view_projection(
+    const std::array<float, 3>& sun) const {
+    const std::array<float, 3> up_ref =
+        std::abs(sun[1]) > 0.99f ? std::array<float, 3>{0.0f, 0.0f, 1.0f}
+                                 : std::array<float, 3>{0.0f, 1.0f, 0.0f};
+    const auto forward = normalise(sun);                 // light travels along +sun
+    const auto right = normalise(cross(up_ref, forward));
+    const auto up = cross(forward, right);
+    const float radius = std::max(scene_radius_, 1.0f);
+    const std::array<float, 3> eye = {scene_center_[0] - forward[0] * radius * 2.0f,
+                                      scene_center_[1] - forward[1] * radius * 2.0f,
+                                      scene_center_[2] - forward[2] * radius * 2.0f};
+    const float sx = 1.0f / radius;
+    const float sy = 1.0f / radius;
+    const float near_plane = radius * 0.05f;
+    const float far_plane = radius * 4.0f;
+    const float inv_depth = 1.0f / (far_plane - near_plane);
+    const float edr = dot(eye, right), edu = dot(eye, up), edf = dot(eye, forward);
+    std::array<float, 16> m{};
+    auto at = [&](int r, int c) -> float& { return m[r * 4 + c]; };
+    at(0, 0) = right[0] * sx;   at(1, 0) = right[1] * sx;   at(2, 0) = right[2] * sx;
+    at(3, 0) = -edr * sx;
+    at(0, 1) = up[0] * sy;      at(1, 1) = up[1] * sy;      at(2, 1) = up[2] * sy;
+    at(3, 1) = -edu * sy;
+    at(0, 2) = forward[0] * inv_depth; at(1, 2) = forward[1] * inv_depth;
+    at(2, 2) = forward[2] * inv_depth; at(3, 2) = (-edf - near_plane) * inv_depth;
+    at(3, 3) = 1.0f;  // ortho: w = 1
+    return m;
+}
+
+void NativeWorldRenderer::render_shadow(ID3D12GraphicsCommandList* command_list,
+                                        const NativeScene& scene, double elapsed_seconds) {
+    (void)elapsed_seconds;
+    if (!shadow_pipeline_ || shadow_size_ == 0) return;
+    const auto sun = normalise(scene.sun_direction);
+    if (sun[1] >= -0.05f) return;  // sun below horizon → no shadows (matches render()'s gate)
+    // The light VP lives in the shared Camera cbuffer, written by render() (recorded after this in
+    // the same single-buffered frame; the GPU reads the final value). Depth-only replay.
+    const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(shadow_size_),
+                                  static_cast<float>(shadow_size_), 0.0f, 1.0f};
+    const D3D12_RECT scissor{0, 0, static_cast<LONG>(shadow_size_),
+                             static_cast<LONG>(shadow_size_)};
+    command_list->RSSetViewports(1, &viewport);
+    command_list->RSSetScissorRects(1, &scissor);
+    command_list->OMSetRenderTargets(0, nullptr, FALSE, &shadow_dsv_);
+    command_list->ClearDepthStencilView(shadow_dsv_, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    command_list->SetPipelineState(shadow_pipeline_.Get());
+    command_list->SetGraphicsRootSignature(shadow_root_signature_.Get());
+    command_list->SetGraphicsRootConstantBufferView(0, constant_address_);
+    command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    command_list->IASetVertexBuffers(0, 1, &vertex_view_);
+    command_list->IASetIndexBuffer(&index_view_);
+    for (const auto& range : draw_ranges_) {
+        if (range.is_water) continue;  // water doesn't cast shadows
+        command_list->DrawIndexedInstanced(range.index_count, 1, range.first_index, 0, 0);
+    }
+}
+
 void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
                                  const NativeScene& scene, std::uint32_t width,
                                  std::uint32_t height, double elapsed_seconds) {
@@ -941,6 +1113,16 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
         constants.sky_zenith[i] = scene.sky_color[i];
         constants.sky_horizon[i] = scene.sky_horizon_color[i];
     }
+    // Sun shadow map: enable only when a shadow target is bound AND the sun is above the horizon
+    // (travelling downward → sun.y < 0). At night the sun term is ~0 anyway, so shadows are off.
+    const bool shadows_on = shadow_size_ > 0 && sun[1] < -0.05f;
+    const auto light_vp = compute_light_view_projection(sun);
+    std::memcpy(constants.light_view_projection, light_vp.data(),
+                sizeof(constants.light_view_projection));
+    constants.shadow_params[0] = shadows_on ? 1.0f / static_cast<float>(shadow_size_) : 0.0f;
+    constants.shadow_params[1] = 0.0015f;                 // NDC-z depth bias
+    constants.shadow_params[2] = shadows_on ? 1.0f : 0.0f;  // enabled
+    constants.shadow_params[3] = 0.7f;                    // strength (how dark the sun term goes)
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     // The world render must set its OWN viewport/scissor — nothing else does before it,
@@ -958,6 +1140,9 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     const bool depth_copy_ready = scene_depth_source_ && scene_depth_copy_;
     if (depth_copy_ready) {
         command_list->SetGraphicsRootDescriptorTable(4, scene_depth_gpu_handle_);
+    }
+    if (shadow_size_ > 0) {
+        command_list->SetGraphicsRootDescriptorTable(6, shadow_srv_gpu_);  // t4 shadow map
     }
     command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     command_list->IASetVertexBuffers(0, 1, &vertex_view_);
