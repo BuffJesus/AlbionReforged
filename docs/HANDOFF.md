@@ -1,10 +1,11 @@
 # Handoff — resume here
 
-## ▶▶▶ START HERE (2026-08-15) — HDR TONEMAP/EXPOSURE + BLOOM COMPOSITOR (D3D12 DONE; Vulkan parity in flight)
+## ▶▶▶ START HERE (2026-08-15) — HDR TONEMAP/EXPOSURE + BLOOM COMPOSITOR ✅ DONE (BOTH BACKENDS)
 Branch **`agent/native-spec-maps-and-char`** (PR #3), commits `6eeb61d` (D3D12 HDR scene target + tonemap),
-`af9509c` (D3D12 bloom + exposure tuning). USER CHOSE the **full retail global HDR compositor** (not the
-lighter in-shader bound). Implemented the retail HDR pipeline on D3D12 (ghidra_out/rendering_pipeline.txt §D.3:
-`result = mul_sat(exposure*scene) + bloom`):
+`af9509c` (D3D12 bloom + exposure tuning), `719724d` (**Vulkan HDR+bloom parity**). USER CHOSE the **full retail
+global HDR compositor** (not the lighter in-shader bound). Implemented the retail HDR pipeline on **BOTH D3D12 +
+Vulkan** (ghidra_out/rendering_pipeline.txt §D.3: `result = mul_sat(exposure*scene) + bloom`), screenshot-verified
+in parity on `out_genv.f2scene` (same town/castle/terrain/hazy sky + soft sun-glow bloom; Vulkan validation clean):
 - **Verification first (per the ⚠ in the prior handoff):** retail DOES tonemap the whole world (HDR RGBA16F
   scene → compositor `saturate(exposure*scene)+bloom` w/ auto-exposure LUT). BUT the **AssetBrowser oracle does
   NOT** — its world FBO is plain `GL_RGBA8` (`ModelPreview.cpp:4283`), exposure stand-ins all `1.0`; only its
@@ -26,16 +27,22 @@ lighter in-shader bound). Implemented the retail HDR pipeline on D3D12 (ghidra_o
   clamp. NOTE our scene sits in LDR-ish light range [0,~1.2] (not retail's HDR hundreds), so bloom is subtle by
   design on overcast midday — it will read stronger on genuinely bright content (sun disc, night lights, spec).
 
-**★ IN FLIGHT — Vulkan HDR+bloom parity** (background agent as of this writing): mirror the above on the Vulkan
-backend (offscreen HDR render pass with MSAA resolve, rebaked world pipelines, a `NativeVulkanTonemapRenderer`,
-UI moved to the swapchain pass). Project rule = **D3D12 == Vulkan before "done"**; verify with
-`scratchpad/shot_world.ps1 -Backend d3d12|vulkan`. Until it lands, Vulkan World still renders direct-to-LDR
-(parity holds only at bloom_intensity 0). **Check the agent's report, review its staged diff, build+screenshot
-both backends, then commit.**
+- **Vulkan parity** (`719724d`): `NativeVulkanTonemapRenderer` + `native_tonemap.{vert,_bright,_blur,_composite}`
+  mirror the D3D12 compositor (same Gaussian weights + `saturate(exposure*scene)+intensity*bloom`). An offscreen
+  HDR render pass structurally identical to the World swap-chain pass (same MSAA subpass/water/depth-resolve
+  layout) but HDR color/resolve formats; World/sky/cloud/billboard/stars bake against it; `render_pass_` keeps the
+  composite + UI. `draw()` World branch: HDR pass → sky/clouds/billboards/stars/world(+water) → bloom → swap-chain
+  pass → composite → UI overlay. Resize rebuilds targets; HDR-init failure falls back to the old direct path. Also
+  fixed a pre-existing Vulkan validation error (depth-resolve input-attachment needs `aspectMask=DEPTH`); Vulkan
+  validation now clean. Env overrides + defaults identical to D3D12.
+- ⚠ Shot tool note: `scratchpad/shot_world.ps1 -Backend d3d12|vulkan -Tag <t>` (my copy) works; the native
+  flip-model window sometimes doesn't set `MainWindowHandle`, so an EnumWindows-by-PID variant
+  (`scratchpad/shot_world2.ps1`) is the robust fallback.
 
-**★ NEXT AFTER VULKAN PARITY — retail-fidelity remaining:** (1) sun disc/beams/glare (only on a level/theme that
-authors them — chapter2slums authors none); (2) sunlight balance (`main_light*sun_intensity`); (3) HDR-range
-lighting so bloom/exposure have real HDR to work on. Full list = frontier §3(e).
+**★ NEXT — retail-fidelity remaining:** (1) sun disc/beams/glare (only on a level/theme that authors them —
+chapter2slums authors none); (2) sunlight balance (`main_light*sun_intensity`); (3) HDR-range lighting so
+bloom/exposure have real HDR to work on (our scene currently sits in LDR-ish [0,~1.2], so bloom is subtle by
+design on overcast midday). Full list = frontier §3(e).
 
 ## ▶▶ (history) START HERE (2026-08-14 late night) — CLOUDS+MOON+STARS+WATER-NIGHT DONE; NEXT was HDR TONEMAP
 Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `8b5ddc8`. Fixed the **water night-lighting** bug
