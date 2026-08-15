@@ -325,7 +325,10 @@ public:
         if (!tonemap_renderer_.initialise(device_.Get(), kBackBufferFormat, tonemap_error)) {
             OutputDebugStringA(
                 ("Fable2Native: tonemap compositor disabled: " + tonemap_error + "\n").c_str());
+        } else if (hdr_scene_) {
+            tonemap_renderer_.ensure_targets(device_.Get(), hdr_scene_.Get(), width_, height_);
         }
+        read_hdr_options();
         std::string ui_renderer_error;
         if (!native_ui_renderer_.initialise(device_.Get(), 1, ui_renderer_error)) {
             MessageBoxA(window_, ui_renderer_error.c_str(),
@@ -547,6 +550,9 @@ private:
         create_msaa_target();  // match the MSAA target to the new size
         create_depth_target();  // match the depth buffer to the new size
         create_hdr_target();    // match the HDR scene target to the new size
+        if (tonemap_renderer_.ready() && hdr_scene_) {
+            tonemap_renderer_.ensure_targets(device_.Get(), hdr_scene_.Get(), width_, height_);
+        }
         world_renderer_.set_scene_depth_copy(depth_target_.Get(), depth_copy_.Get(),
                                              depth_gpu_handle_);
     }
@@ -652,6 +658,23 @@ private:
         device_->CreateShaderResourceView(depth_copy_.Get(), &depth_srv, depth_cpu);
         depth_gpu_handle_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
         depth_gpu_handle_.ptr += static_cast<std::size_t>(depth_descriptor_index_) * descriptor_stride_;
+    }
+
+    // Optional HDR-compositor tuning overrides (defaults give the retail glow):
+    //   FABLE2NATIVE_HDR_EXPOSURE, FABLE2NATIVE_BLOOM_THRESHOLD, FABLE2NATIVE_BLOOM_INTENSITY.
+    void read_hdr_options() {
+        const auto env_float = [](const char* name, float& out) {
+            char buf[64];
+            if (GetEnvironmentVariableA(name, buf, sizeof(buf)) > 0) {
+                try {
+                    out = std::stof(buf);
+                } catch (...) {
+                }
+            }
+        };
+        env_float("FABLE2NATIVE_HDR_EXPOSURE", hdr_exposure_);
+        env_float("FABLE2NATIVE_BLOOM_THRESHOLD", hdr_bloom_threshold_);
+        env_float("FABLE2NATIVE_BLOOM_INTENSITY", hdr_bloom_intensity_);
     }
 
     // (Re)create the HDR scene target the World passes render into (RGBA16F). The retail engine
@@ -1615,14 +1638,14 @@ private:
                     transition(hdr_scene_.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                 command_list_->ResourceBarrier(1, &to_srv);
-                command_list_->OMSetRenderTargets(1, &target_rtv, FALSE, nullptr);
-                command_list_->SetDescriptorHeaps(1, heaps);
-                tonemap_renderer_.render(command_list_.Get(), hdr_gpu_handle_, width_, height_,
-                                         hdr_exposure_);
+                tonemap_renderer_.render(command_list_.Get(), target_rtv, width_, height_,
+                                         hdr_exposure_, hdr_bloom_threshold_, hdr_bloom_intensity_);
                 const auto to_rt =
                     transition(hdr_scene_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                                D3D12_RESOURCE_STATE_RENDER_TARGET);
                 command_list_->ResourceBarrier(1, &to_rt);
+                // The compositor bound its own descriptor heap; restore the app heap for the UI.
+                command_list_->SetDescriptorHeaps(1, heaps);
             }
         }
         if (state == f2::FrontendState::MainMenu || state == f2::FrontendState::ChooseCard ||
@@ -1742,6 +1765,8 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE hdr_gpu_handle_{};  // SRV for the tonemap compositor
     UINT hdr_descriptor_index_ = 0;
     float hdr_exposure_ = 1.0f;  // compositor exposure (1.0 == the old direct-to-LDR clamp)
+    float hdr_bloom_threshold_ = 0.62f;  // HDR level above which bloom is extracted
+    float hdr_bloom_intensity_ = 0.90f;  // bloom add strength (0 == no bloom = byte-identical)
     ComPtr<ID3D12Resource> depth_target_;  // D32 depth buffer for the World state (occlusion)
     ComPtr<ID3D12Resource> depth_copy_;    // shader-readable copy for water shoreline depth
     ComPtr<ID3D12DescriptorHeap> dsv_heap_;
