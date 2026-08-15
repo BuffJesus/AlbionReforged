@@ -1,5 +1,6 @@
 #include "f2/native_cloud_renderer.h"
 
+#include "f2/native_scene_color.h"
 #include "f2/native_texture.h"
 
 #include <d3dcompiler.h>
@@ -366,7 +367,7 @@ bool NativeCloudRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     pso.InputLayout = {layout, 2};
     pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     pso.NumRenderTargets = 1;
-    pso.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    pso.RTVFormats[0] = kSceneColorFormat;
     pso.SampleDesc.Count = 1;
     pso.SampleMask = 0xFFFFFFFFu;
     D3D12_RASTERIZER_DESC raster{};

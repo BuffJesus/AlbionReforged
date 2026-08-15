@@ -100,7 +100,8 @@ if(WIN32)
         src/native_sky_renderer.cpp
         src/native_cloud_renderer.cpp
         src/native_sky_billboard_renderer.cpp
-        src/native_sky_stars_renderer.cpp)
+        src/native_sky_stars_renderer.cpp
+        src/native_tonemap_renderer.cpp)
     target_link_libraries(f2native_frontend PRIVATE
         f2native_core
         f2native_video

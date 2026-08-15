@@ -1,4 +1,5 @@
 #include "f2/native_world_renderer.h"
+#include "f2/native_scene_color.h"
 #include "f2/native_texture.h"
 
 #include <d3dcompiler.h>
@@ -777,7 +778,7 @@ float4 ps_water(PSInput input) : SV_TARGET {
     pipeline.InputLayout = {input_layout, static_cast<UINT>(std::size(input_layout))};
     pipeline.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     pipeline.NumRenderTargets = 1;
-    pipeline.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    pipeline.RTVFormats[0] = kSceneColorFormat;
     pipeline.SampleDesc.Count = 1;
     pipeline.SampleMask = 0xFFFFFFFFu;  // 0 (zero-init default) writes no samples -> nothing renders
     pipeline.RasterizerState = rasterizer_description();

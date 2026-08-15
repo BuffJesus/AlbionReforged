@@ -12,7 +12,9 @@
 #include "f2/render/ui_draw_list.h"
 #include "f2/native_cloud_renderer.h"
 #include "f2/native_sky_billboard_renderer.h"
+#include "f2/native_scene_color.h"
 #include "f2/native_sky_stars_renderer.h"
+#include "f2/native_tonemap_renderer.h"
 #include "f2/native_world_renderer.h"
 
 
@@ -317,6 +319,13 @@ public:
             OutputDebugStringA(
                 ("Fable2Native: stars renderer disabled: " + stars_error + "\n").c_str());
         }
+        // HDR -> LDR compositor (tonemap/exposure). Non-fatal: if it fails, the World path falls
+        // back to rendering directly to the LDR back buffer (see render()).
+        std::string tonemap_error;
+        if (!tonemap_renderer_.initialise(device_.Get(), kBackBufferFormat, tonemap_error)) {
+            OutputDebugStringA(
+                ("Fable2Native: tonemap compositor disabled: " + tonemap_error + "\n").c_str());
+        }
         std::string ui_renderer_error;
         if (!native_ui_renderer_.initialise(device_.Get(), 1, ui_renderer_error)) {
             MessageBoxA(window_, ui_renderer_error.c_str(),
@@ -476,7 +485,7 @@ private:
         factory->MakeWindowAssociation(window_, DXGI_MWA_NO_ALT_ENTER);
 
         D3D12_DESCRIPTOR_HEAP_DESC rtv_desc{};
-        rtv_desc.NumDescriptors = kFrameCount + 1;  // +1 for the MSAA resolve target
+        rtv_desc.NumDescriptors = kFrameCount + 2;  // +1 MSAA resolve target, +1 HDR scene target
         rtv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (FAILED(device_->CreateDescriptorHeap(&rtv_desc, IID_PPV_ARGS(&rtv_heap_)))) return false;
         D3D12_DESCRIPTOR_HEAP_DESC dsv_desc{};
@@ -486,7 +495,7 @@ private:
         dsv_handle_ = dsv_heap_->GetCPUDescriptorHandleForHeapStart();
         D3D12_DESCRIPTOR_HEAP_DESC srv_desc{};
         srv_desc.NumDescriptors =
-            f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 3;
+            f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 4;
         srv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         srv_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device_->CreateDescriptorHeap(&srv_desc, IID_PPV_ARGS(&descriptor_heap_)))) return false;
@@ -495,6 +504,7 @@ private:
         video_descriptor_index_ = f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount;
         font_descriptor_index_ = video_descriptor_index_ + 1;
         depth_descriptor_index_ = font_descriptor_index_ + 1;
+        hdr_descriptor_index_ = depth_descriptor_index_ + 1;
 
         rtv_stride_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         auto handle = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
@@ -507,7 +517,10 @@ private:
             device_->CreateRenderTargetView(frames_[i].render_target.Get(), nullptr, frames_[i].rtv);
         }
         msaa_rtv_ = handle;  // the extra RTV slot after the back buffers
+        handle.ptr += rtv_stride_;
+        hdr_rtv_ = handle;  // the RTV slot after MSAA, for the HDR scene target
         create_depth_target();
+        create_hdr_target();
         if (FAILED(device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
                                                frames_[0].allocator.Get(), nullptr,
                                                IID_PPV_ARGS(&command_list_))) ||
@@ -533,6 +546,7 @@ private:
         }
         create_msaa_target();  // match the MSAA target to the new size
         create_depth_target();  // match the depth buffer to the new size
+        create_hdr_target();    // match the HDR scene target to the new size
         world_renderer_.set_scene_depth_copy(depth_target_.Get(), depth_copy_.Get(),
                                              depth_gpu_handle_);
     }
@@ -638,6 +652,50 @@ private:
         device_->CreateShaderResourceView(depth_copy_.Get(), &depth_srv, depth_cpu);
         depth_gpu_handle_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
         depth_gpu_handle_.ptr += static_cast<std::size_t>(depth_descriptor_index_) * descriptor_stride_;
+    }
+
+    // (Re)create the HDR scene target the World passes render into (RGBA16F). The retail engine
+    // renders the world HDR then runs a compositor (tonemap/exposure + bloom) to the LDR back buffer
+    // (rendering_pipeline.txt §D.3); native mirrors that with this target + NativeTonemapRenderer.
+    void create_hdr_target() {
+        hdr_scene_.Reset();
+        if (!device_ || width_ == 0 || height_ == 0) return;
+        D3D12_RESOURCE_DESC description{};
+        description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        description.Width = width_;
+        description.Height = height_;
+        description.DepthOrArraySize = 1;
+        description.MipLevels = 1;
+        description.Format = f2::kSceneColorFormat;
+        description.SampleDesc.Count = 1;
+        description.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        // Clear to the scene sky_color, same as the old direct-to-back-buffer World clear.
+        D3D12_CLEAR_VALUE clear{};
+        clear.Format = f2::kSceneColorFormat;
+        for (int i = 0; i < 4; ++i) clear.Color[i] = game_.scene.sky_color[i];
+        if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &description,
+                                                    D3D12_RESOURCE_STATE_RENDER_TARGET, &clear,
+                                                    IID_PPV_ARGS(&hdr_scene_)))) {
+            hdr_scene_.Reset();
+            return;
+        }
+        D3D12_RENDER_TARGET_VIEW_DESC rtv{};
+        rtv.Format = f2::kSceneColorFormat;
+        rtv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        device_->CreateRenderTargetView(hdr_scene_.Get(), &rtv, hdr_rtv_);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Format = f2::kSceneColorFormat;
+        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels = 1;
+        auto cpu = descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
+        cpu.ptr += static_cast<std::size_t>(hdr_descriptor_index_) * descriptor_stride_;
+        device_->CreateShaderResourceView(hdr_scene_.Get(), &srv, cpu);
+        hdr_gpu_handle_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
+        hdr_gpu_handle_.ptr += static_cast<std::size_t>(hdr_descriptor_index_) * descriptor_stride_;
     }
 
     // (Re)create the multisampled resolve target at the current size + sample count. Released at 1x.
@@ -1483,14 +1541,22 @@ private:
         // it into the back buffer. World renders directly (its pipeline is single-sample).
         const bool msaa =
             msaa_samples_ > 1 && msaa_target_ && state != f2::FrontendState::World;
+        // World renders into the HDR scene target (RGBA16F), then the tonemap compositor resolves it
+        // to the LDR back buffer (rendering_pipeline.txt §D.3). If the compositor is unavailable, the
+        // World branch falls back to rendering directly to the back buffer (old clamp path).
+        const bool use_hdr =
+            state == f2::FrontendState::World && tonemap_renderer_.ready() && hdr_scene_;
         if (!msaa) {
             const auto to_rt = transition(frame.render_target.Get(), D3D12_RESOURCE_STATE_PRESENT,
                                           D3D12_RESOURCE_STATE_RENDER_TARGET);
             command_list_->ResourceBarrier(1, &to_rt);
         }
         const D3D12_CPU_DESCRIPTOR_HANDLE target_rtv = msaa ? msaa_rtv_ : frame.rtv;
-        command_list_->OMSetRenderTargets(1, &target_rtv, FALSE, nullptr);
-        command_list_->ClearRenderTargetView(target_rtv, clear.data(), 0, nullptr);
+        // The World passes draw into scene_rtv (the HDR target when compositing, else the back
+        // buffer); the compositor and every non-World state target the back buffer directly.
+        const D3D12_CPU_DESCRIPTOR_HANDLE scene_rtv = use_hdr ? hdr_rtv_ : target_rtv;
+        command_list_->OMSetRenderTargets(1, &scene_rtv, FALSE, nullptr);
+        command_list_->ClearRenderTargetView(scene_rtv, clear.data(), 0, nullptr);
         // Bind the SRV heap BEFORE any draw: the world renderer sets a root descriptor
         // table (its material textures), which requires the heap already bound.
         ID3D12DescriptorHeap* heaps[] = {descriptor_heap_.Get()};
@@ -1499,7 +1565,7 @@ private:
             // Rebind the same color target WITH the depth buffer so the world renderer
             // gets real occlusion (frontend states render depthless above).
             if (depth_target_) {
-                command_list_->OMSetRenderTargets(1, &target_rtv, FALSE, &dsv_handle_);
+                command_list_->OMSetRenderTargets(1, &scene_rtv, FALSE, &dsv_handle_);
                 // Reversed-Z: clear to 0.0 (the far value); the world PSO tests GREATER_EQUAL.
                 command_list_->ClearDepthStencilView(dsv_handle_, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0,
                                                      0, nullptr);
@@ -1542,6 +1608,22 @@ private:
             }
             world_renderer_.render(command_list_.Get(), game_.scene, width_, height_,
                                    game_.elapsed_seconds);
+            // HDR -> LDR compositor: resolve the RGBA16F scene target to the LDR back buffer
+            // (tonemap/exposure). The UI overlay below then draws on the composited back buffer.
+            if (use_hdr) {
+                const auto to_srv =
+                    transition(hdr_scene_.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                command_list_->ResourceBarrier(1, &to_srv);
+                command_list_->OMSetRenderTargets(1, &target_rtv, FALSE, nullptr);
+                command_list_->SetDescriptorHeaps(1, heaps);
+                tonemap_renderer_.render(command_list_.Get(), hdr_gpu_handle_, width_, height_,
+                                         hdr_exposure_);
+                const auto to_rt =
+                    transition(hdr_scene_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                               D3D12_RESOURCE_STATE_RENDER_TARGET);
+                command_list_->ResourceBarrier(1, &to_rt);
+            }
         }
         if (state == f2::FrontendState::MainMenu || state == f2::FrontendState::ChooseCard ||
             state == f2::FrontendState::Options) {
@@ -1655,6 +1737,11 @@ private:
     UINT msaa_samples_ = 1;  // current MSAA sample count (1 = off)
     ComPtr<ID3D12Resource> msaa_target_;  // multisampled color target resolved into the back buffer
     D3D12_CPU_DESCRIPTOR_HANDLE msaa_rtv_{};
+    ComPtr<ID3D12Resource> hdr_scene_;  // RGBA16F HDR scene target the World passes render into
+    D3D12_CPU_DESCRIPTOR_HANDLE hdr_rtv_{};
+    D3D12_GPU_DESCRIPTOR_HANDLE hdr_gpu_handle_{};  // SRV for the tonemap compositor
+    UINT hdr_descriptor_index_ = 0;
+    float hdr_exposure_ = 1.0f;  // compositor exposure (1.0 == the old direct-to-LDR clamp)
     ComPtr<ID3D12Resource> depth_target_;  // D32 depth buffer for the World state (occlusion)
     ComPtr<ID3D12Resource> depth_copy_;    // shader-readable copy for water shoreline depth
     ComPtr<ID3D12DescriptorHeap> dsv_heap_;
@@ -1701,6 +1788,7 @@ private:
     f2::NativeCloudRenderer cloud_renderer_;  // scrolling cloud layers over the sky, behind world
     f2::NativeSkyBillboardRenderer billboard_renderer_;  // night moon + glare over the clouds
     f2::NativeSkyStarsRenderer stars_renderer_;  // procedural night star field
+    f2::NativeTonemapRenderer tonemap_renderer_;  // HDR->LDR compositor (tonemap/exposure)
     f2::NativeUiRenderer native_ui_renderer_;
     f2::render::TextureRegistry texture_registry_;  // maps ui slots -> stable TextureIds (neutral scene)
     std::optional<f2::FrontendSceneBuilder> scene_builder_;  // shared backend-neutral scene builder
