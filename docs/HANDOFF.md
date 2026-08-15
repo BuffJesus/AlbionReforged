@@ -1,6 +1,31 @@
 # Handoff — resume here
 
-## ▶▶▶ START HERE (2026-08-15) — HDR TONEMAP/EXPOSURE + BLOOM COMPOSITOR ✅ DONE (BOTH BACKENDS)
+## ▶▶▶ START HERE (2026-08-15) — CAST SHADOW MAPPING (D3D12 DONE; Vulkan parity in flight)
+Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `0bc0a22` (D3D12 sun shadow map). USER CHOSE **cast
+shadow mapping** (the faithful, high-fidelity path) after a measure-first pass: the AssetBrowser oracle renders the
+town **moody/dark with heavy self-shadowing** (`native_shots/oracle_chapter2slums.png`) while native was **flat/bright**
+— because native had **no cast shadows** (retail has a dedicated "Render ShadowBuffers" sun-depth pass sampled by the
+material PS, `rendering_pipeline.txt` §A#3/§D.1). ⚠ The exact retail shadow params (cascades/res/bias) are an un-pinned
+RE gap (R2), so this is a standard single sun-view shadow map + PCF — grounded that retail does this; params are
+reasonable choices.
+- **D3D12** (`native_world_renderer.cpp` + `native_frontend_app.cpp`): `compute_light_view_projection(sun)` fits an
+  ortho box around `scene_center_/scene_radius_` along the sun travel dir (standard Z, row-vector × row-major). A
+  depth-only shadow PSO/root-sig replays the opaque draw ranges into a fixed **2048²** sun-POV depth target
+  (`render_shadow`); the world PS projects `world_pos` into it and 3×3-PCF `SampleCmp` (t4 + s1 comparison sampler)
+  to attenuate **only** the sun N·L + specular term (ambient/baked GI untouched → shadowed faces keep their fill).
+  The World frame runs the shadow pass FIRST (DEPTH_WRITE→PIXEL_SHADER_RESOURCE), then sky/world sample it, then it's
+  restored to DEPTH_WRITE. Enabled only when the sun is above the horizon (`sun.y < -0.05`); night = no shadows. Params:
+  bias 0.0015 + rasterizer slope bias, strength 0.7. Screenshot-verified: town/castle gain real cast-shadow contrast
+  (moodier, toward the oracle); D3D12 validation clean.
+- **★ IN FLIGHT — Vulkan shadow parity** (background agent): mirror the shadow pass on `native_vulkan_world_renderer.cpp`
+  + `native_frontend_vulkan_app.cpp` (depth-only shadow render pass/pipeline, PCF sample in the world .frag, mind the
+  Vulkan Y-flip/Z convention + image-layout sync). Verify D3D12==Vulkan (`scratchpad/shot_world.ps1`), then commit.
+  Reference D3D12 shadow shot: `scratchpad/shots/world_shadow_d3d12.png`.
+- **★ NEXT AFTER VULKAN PARITY:** tune shadow strength/bias vs the oracle if needed; then sun disc/beams/glare (needs a
+  level that authors them); HDR-range lighting. Shadow-map frustum currently uses the whole scene bounds (incl. the far
+  spire/backdrop), so town-only shadow resolution could be tightened (fit the `focus` region) if shadows look coarse.
+
+## ▶▶ (history) START HERE (2026-08-15) — HDR TONEMAP/EXPOSURE + BLOOM COMPOSITOR ✅ DONE (BOTH BACKENDS)
 Branch **`agent/native-spec-maps-and-char`** (PR #3), commits `6eeb61d` (D3D12 HDR scene target + tonemap),
 `af9509c` (D3D12 bloom + exposure tuning), `719724d` (**Vulkan HDR+bloom parity**). USER CHOSE the **full retail
 global HDR compositor** (not the lighter in-shader bound). Implemented the retail HDR pipeline on **BOTH D3D12 +
