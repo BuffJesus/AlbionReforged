@@ -123,6 +123,7 @@ if(WIN32)
         set(F2NATIVE_VULKAN_SHADER_OUTPUTS
             "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.vert.spv"
             "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.frag.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world_shadow.vert.spv"
             "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_sky.vert.spv"
             "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_sky.frag.spv"
             "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_cloud.vert.spv"
@@ -152,6 +153,14 @@ if(WIN32)
                     "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.frag.spv"
                     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world.frag"
             DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world.frag"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world_shadow.vert.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world_shadow.vert.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world_shadow.vert"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world_shadow.vert"
             VERBATIM)
         add_custom_command(
             OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_sky.vert.spv"

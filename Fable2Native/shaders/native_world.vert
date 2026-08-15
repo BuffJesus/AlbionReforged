@@ -10,6 +10,13 @@ layout(set = 0, binding = 0) uniform Camera {
     mat4 view_projection;
     vec4 sun_direction;   // xyz = light dir (world)
     vec4 sun_color;       // rgb = directional sun colour
+    vec4 eye_time;
+    vec4 fog_color;
+    vec4 fog_range;
+    vec4 sky_zenith;
+    vec4 sky_horizon;
+    mat4 light_view_projection;  // sun ortho VP (used by the frag shadow term)
+    vec4 shadow_params;
 } camera;
 layout(push_constant) uniform Push {
     uint is_water;

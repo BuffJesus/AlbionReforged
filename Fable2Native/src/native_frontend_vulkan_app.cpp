@@ -1989,6 +1989,15 @@ private:
         // swap-chain pass afterwards. Non-World states, and the fallback when HDR is unavailable, keep
         // the original single-pass path into render_pass_.
         const bool use_hdr = game_.frontend.state() == f2::FrontendState::World && hdr_enabled_;
+        // Sun shadow pass FIRST (retail "Render ShadowBuffers"): a depth-only replay of opaque
+        // geometry from the sun POV into the world renderer's own shadow map, in its OWN render
+        // pass, so it must run before the world/HDR render pass begins. The shadow render pass
+        // leaves the map in SHADER_READ_ONLY, so the world frag samples it (binding 7) directly.
+        // A no-op unless the sun is above the horizon (mirrors the D3D12 frontend wiring).
+        if (game_.frontend.state() == f2::FrontendState::World) {
+            world_renderer_.render_shadow(command_buffers_[image_index], extent_.width,
+                                          extent_.height, game_.elapsed_seconds);
+        }
         VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         pass.renderPass = use_hdr ? hdr_render_pass_ : render_pass_;
         pass.framebuffer = use_hdr ? hdr_framebuffer_ : framebuffers_[image_index];

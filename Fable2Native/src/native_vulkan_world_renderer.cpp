@@ -30,6 +30,12 @@ struct Constants {
     // (night = dark) instead of a hardcoded daytime gradient. Mirrors the D3D12 layout.
     std::array<float, 4> sky_zenith{0.6549f, 0.8157f, 1.0f, 1.0f};
     std::array<float, 4> sky_horizon{0.222f, 0.5789f, 1.11f, 1.0f};
+    // Sun shadow map (retail "Render ShadowBuffers"): the ortho light view-projection the shadow
+    // depth was rendered with, so the frag shader can project each world_pos into the shadow map
+    // and compare depth. shadow_params: x=texel size (1/res), y=depth bias, z=enabled (1/0),
+    // w=strength (how dark the shadowed sun term goes). Mirrors the D3D12 Constants layout.
+    std::array<float, 16> light_view_projection{};
+    std::array<float, 4> shadow_params{0.0f, 0.0f, 0.0f, 1.0f};
 };
 
 // b1-equivalent point-light UBO (level_lights_effects_re.txt §3.1); mirrors the D3D12 layout.
@@ -603,7 +609,123 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
                            water_memories_[material_index], error)) return false;
     }
 
-    VkDescriptorSetLayoutBinding bindings[7]{};
+    // Sun shadow map (retail "Render ShadowBuffers"): a D32 depth image + comparison sampler + a
+    // depth-only render pass/framebuffer. The pipeline is built alongside the world pipeline below
+    // (it reuses pipeline_layout_). On any failure the shadow term is left disabled (shadow_ready_
+    // = false) so the world still renders exactly as before.
+    {
+        VkImageCreateInfo shadow_image_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        shadow_image_info.imageType = VK_IMAGE_TYPE_2D;
+        shadow_image_info.format = VK_FORMAT_D32_SFLOAT;
+        shadow_image_info.extent = {kShadowSize, kShadowSize, 1};
+        shadow_image_info.mipLevels = 1;
+        shadow_image_info.arrayLayers = 1;
+        shadow_image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        shadow_image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        shadow_image_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                  VK_IMAGE_USAGE_SAMPLED_BIT;
+        shadow_image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        bool shadow_ok = vkCreateImage(device_, &shadow_image_info, nullptr, &shadow_image_) ==
+                         VK_SUCCESS;
+        if (shadow_ok) {
+            VkMemoryRequirements req{};
+            vkGetImageMemoryRequirements(device_, shadow_image_, &req);
+            std::uint32_t type_index = 0;
+            shadow_ok = find_memory_type(physical_device, req.memoryTypeBits,
+                                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type_index);
+            if (shadow_ok) {
+                VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+                alloc.allocationSize = req.size;
+                alloc.memoryTypeIndex = type_index;
+                shadow_ok = vkAllocateMemory(device_, &alloc, nullptr, &shadow_memory_) ==
+                                VK_SUCCESS &&
+                            vkBindImageMemory(device_, shadow_image_, shadow_memory_, 0) ==
+                                VK_SUCCESS;
+            }
+        }
+        if (shadow_ok) {
+            VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            view_info.image = shadow_image_;
+            view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            view_info.format = VK_FORMAT_D32_SFLOAT;
+            view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            view_info.subresourceRange.levelCount = 1;
+            view_info.subresourceRange.layerCount = 1;
+            shadow_ok = vkCreateImageView(device_, &view_info, nullptr, &shadow_view_) == VK_SUCCESS;
+        }
+        if (shadow_ok) {
+            // Comparison sampler = hardware PCF. LESS_OR_EQUAL against standard-Z depth, clamp so
+            // samples outside the map read the border (opaque white -> lit). Mirrors the D3D12 s1.
+            VkSamplerCreateInfo sampler_info{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+            sampler_info.magFilter = VK_FILTER_LINEAR;
+            sampler_info.minFilter = VK_FILTER_LINEAR;
+            sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+            sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+            sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+            sampler_info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+            sampler_info.compareEnable = VK_TRUE;
+            sampler_info.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+            sampler_info.maxLod = 1.0f;
+            shadow_ok = vkCreateSampler(device_, &sampler_info, nullptr, &shadow_sampler_) ==
+                        VK_SUCCESS;
+        }
+        if (shadow_ok) {
+            // Depth-only render pass: clear the depth on load, store it for sampling, and leave the
+            // image in SHADER_READ_ONLY so the world pass can sample it without an extra barrier.
+            VkAttachmentDescription depth_attachment{};
+            depth_attachment.format = VK_FORMAT_D32_SFLOAT;
+            depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+            depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            depth_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            depth_attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkAttachmentReference depth_ref{0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+            VkSubpassDescription subpass{};
+            subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            subpass.pDepthStencilAttachment = &depth_ref;
+            // Dependencies: (a) previous frame's fragment reads finish before this write; (b) this
+            // depth write finishes before the world fragment shader samples it.
+            VkSubpassDependency deps[2]{};
+            deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+            deps[0].dstSubpass = 0;
+            deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            deps[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+            deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            deps[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            deps[1].srcSubpass = 0;
+            deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+            deps[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+            deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            deps[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            VkRenderPassCreateInfo rp_info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+            rp_info.attachmentCount = 1;
+            rp_info.pAttachments = &depth_attachment;
+            rp_info.subpassCount = 1;
+            rp_info.pSubpasses = &subpass;
+            rp_info.dependencyCount = 2;
+            rp_info.pDependencies = deps;
+            shadow_ok = vkCreateRenderPass(device_, &rp_info, nullptr, &shadow_render_pass_) ==
+                        VK_SUCCESS;
+        }
+        if (shadow_ok) {
+            VkFramebufferCreateInfo fb_info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            fb_info.renderPass = shadow_render_pass_;
+            fb_info.attachmentCount = 1;
+            fb_info.pAttachments = &shadow_view_;
+            fb_info.width = kShadowSize;
+            fb_info.height = kShadowSize;
+            fb_info.layers = 1;
+            shadow_ok = vkCreateFramebuffer(device_, &fb_info, nullptr, &shadow_framebuffer_) ==
+                        VK_SUCCESS;
+        }
+        shadow_ready_ = shadow_ok;
+    }
+
+    VkDescriptorSetLayoutBinding bindings[8]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
@@ -632,8 +754,12 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[6].descriptorCount = 1;
     bindings[6].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[7].binding = 7;  // sun shadow map (sampler2DShadow, comparison sampler)
+    bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[7].descriptorCount = 1;
+    bindings[7].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_info.bindingCount = 7;
+    layout_info.bindingCount = 8;
     layout_info.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &descriptor_set_layout_) != VK_SUCCESS) {
         error = "Vulkan could not create the world descriptor layout.";
@@ -642,7 +768,8 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
 
     VkDescriptorPoolSize pool_sizes[] = {
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<std::uint32_t>(material_count * 3)},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<std::uint32_t>(material_count * 4)},
+        // 5 combined image samplers per set: albedo, normal, spec, scene depth, sun shadow map.
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<std::uint32_t>(material_count * 5)},
     };
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool_info.maxSets = static_cast<std::uint32_t>(material_count);
@@ -668,8 +795,9 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     std::vector<VkDescriptorImageInfo> normal_infos(material_count);  // normal map (t1)
     std::vector<VkDescriptorImageInfo> spec_infos(material_count);    // spec/"material" (t2)
     std::vector<VkDescriptorImageInfo> depth_infos(material_count);   // resolved opaque depth
+    std::vector<VkDescriptorImageInfo> shadow_infos(material_count);  // sun shadow map (binding 7)
     std::vector<VkDescriptorBufferInfo> water_infos(material_count);
-    std::vector<VkWriteDescriptorSet> writes(material_count * 7);
+    std::vector<VkWriteDescriptorSet> writes(material_count * 8);
     for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
         image_infos[material_index] = {texture_samplers_[material_index],
                                        texture_views_[material_index],
@@ -686,55 +814,69 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
             depth_resolve_enabled_ ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                                    : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         water_infos[material_index] = {water_buffers_[material_index], 0, sizeof(WaterConstants)};
-        auto& uniform_write = writes[material_index * 7];
+        // Sun shadow map (binding 7). When the shadow resources are live, bind the shadow depth
+        // view + comparison sampler; otherwise fall back to material 0's texture (unused — the
+        // frag's sun_shadow() early-returns when shadow_params.z is disabled).
+        shadow_infos[material_index] = {
+            shadow_ready_ ? shadow_sampler_ : texture_samplers_[0],
+            shadow_ready_ ? shadow_view_ : texture_views_[0],
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        auto& uniform_write = writes[material_index * 8];
         uniform_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         uniform_write.dstSet = descriptor_sets_[material_index];
         uniform_write.dstBinding = 0;
         uniform_write.descriptorCount = 1;
         uniform_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         uniform_write.pBufferInfo = &buffer_info;
-        auto& image_write = writes[material_index * 7 + 1];
+        auto& image_write = writes[material_index * 8 + 1];
         image_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         image_write.dstSet = descriptor_sets_[material_index];
         image_write.dstBinding = 1;
         image_write.descriptorCount = 1;
         image_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         image_write.pImageInfo = &image_infos[material_index];
-        auto& normal_write = writes[material_index * 7 + 2];
+        auto& normal_write = writes[material_index * 8 + 2];
         normal_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         normal_write.dstSet = descriptor_sets_[material_index];
         normal_write.dstBinding = 2;
         normal_write.descriptorCount = 1;
         normal_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         normal_write.pImageInfo = &normal_infos[material_index];
-        auto& lights_write = writes[material_index * 7 + 3];
+        auto& lights_write = writes[material_index * 8 + 3];
         lights_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         lights_write.dstSet = descriptor_sets_[material_index];
         lights_write.dstBinding = 3;
         lights_write.descriptorCount = 1;
         lights_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         lights_write.pBufferInfo = &lights_info;
-        auto& spec_write = writes[material_index * 7 + 4];
+        auto& spec_write = writes[material_index * 8 + 4];
         spec_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         spec_write.dstSet = descriptor_sets_[material_index];
         spec_write.dstBinding = 4;
         spec_write.descriptorCount = 1;
         spec_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         spec_write.pImageInfo = &spec_infos[material_index];
-        auto& water_write = writes[material_index * 7 + 5];
+        auto& water_write = writes[material_index * 8 + 5];
         water_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         water_write.dstSet = descriptor_sets_[material_index];
         water_write.dstBinding = 5;
         water_write.descriptorCount = 1;
         water_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         water_write.pBufferInfo = &water_infos[material_index];
-        auto& depth_write = writes[material_index * 7 + 6];
+        auto& depth_write = writes[material_index * 8 + 6];
         depth_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         depth_write.dstSet = descriptor_sets_[material_index];
         depth_write.dstBinding = 6;
         depth_write.descriptorCount = 1;
         depth_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         depth_write.pImageInfo = &depth_infos[material_index];
+        auto& shadow_write = writes[material_index * 8 + 7];
+        shadow_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        shadow_write.dstSet = descriptor_sets_[material_index];
+        shadow_write.dstBinding = 7;
+        shadow_write.descriptorCount = 1;
+        shadow_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        shadow_write.pImageInfo = &shadow_infos[material_index];
     }
     vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()),
                            writes.data(), 0, nullptr);
@@ -875,6 +1017,67 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         vkDestroyShaderModule(device_, fragment_module, nullptr);
         return false;
     }
+    // Sun shadow pipeline (retail "Render ShadowBuffers"): a depth-only replay of opaque geometry
+    // from the sun ortho POV. Reuses pipeline_layout_ (Camera UBO at binding 0 carries the light
+    // VP). Single-sample, no color attachment, depth-write ON, LESS_OR_EQUAL (standard Z), CULL_NONE
+    // (mixed MDL winding), and a fixed depth bias to kill acne (mirrors the D3D12 5000 / 2.0 bias).
+    if (shadow_ready_) {
+        std::vector<std::uint32_t> shadow_code;
+        VkShaderModule shadow_module = VK_NULL_HANDLE;
+        if (!read_spirv(shader_directory / "native_world_shadow.vert.spv", shadow_code, error) ||
+            !create_shader_module(device_, shadow_code, shadow_module)) {
+            error = "Vulkan could not create the native world shadow shader module.";
+            return false;
+        }
+        VkPipelineShaderStageCreateInfo shadow_stage{
+            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        shadow_stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+        shadow_stage.module = shadow_module;
+        shadow_stage.pName = "main";
+        VkPipelineMultisampleStateCreateInfo shadow_multisample{
+            VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+        shadow_multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineRasterizationStateCreateInfo shadow_rasterizer = rasterizer;
+        shadow_rasterizer.cullMode = VK_CULL_MODE_NONE;
+        shadow_rasterizer.depthBiasEnable = VK_TRUE;
+        // Mirror the D3D12 shadow PSO bias (DepthBias 5000 + SlopeScaledDepthBias 2.0). Vulkan's
+        // constant factor is scaled by the D32 format's minimum resolvable difference (r ~ 2^-23),
+        // so 5000 units gives a comparable small push; the frag adds shadow_params.y = 0.0015 too.
+        shadow_rasterizer.depthBiasConstantFactor = 5000.0f;
+        shadow_rasterizer.depthBiasSlopeFactor = 2.0f;
+        VkPipelineDepthStencilStateCreateInfo shadow_depth{
+            VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+        shadow_depth.depthTestEnable = VK_TRUE;
+        shadow_depth.depthWriteEnable = VK_TRUE;
+        shadow_depth.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;  // standard Z (near=0, far=1)
+        VkPipelineColorBlendStateCreateInfo shadow_blend{
+            VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+        shadow_blend.attachmentCount = 0;  // depth only
+        VkGraphicsPipelineCreateInfo shadow_pipeline_info{
+            VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+        shadow_pipeline_info.stageCount = 1;
+        shadow_pipeline_info.pStages = &shadow_stage;
+        shadow_pipeline_info.pVertexInputState = &vertex_input;
+        shadow_pipeline_info.pInputAssemblyState = &input_assembly;
+        shadow_pipeline_info.pViewportState = &viewport;
+        shadow_pipeline_info.pRasterizationState = &shadow_rasterizer;
+        shadow_pipeline_info.pMultisampleState = &shadow_multisample;
+        shadow_pipeline_info.pDepthStencilState = &shadow_depth;
+        shadow_pipeline_info.pColorBlendState = &shadow_blend;
+        shadow_pipeline_info.pDynamicState = &dynamic;
+        shadow_pipeline_info.layout = pipeline_layout_;
+        shadow_pipeline_info.renderPass = shadow_render_pass_;
+        shadow_pipeline_info.subpass = 0;
+        const bool shadow_pipe_ok =
+            vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &shadow_pipeline_info, nullptr,
+                                      &shadow_pipeline_) == VK_SUCCESS;
+        vkDestroyShaderModule(device_, shadow_module, nullptr);
+        if (!shadow_pipe_ok) {
+            error = "Vulkan could not create the native world shadow pipeline.";
+            return false;
+        }
+    }
+
     vkDestroyShaderModule(device_, vertex_module, nullptr);
     vkDestroyShaderModule(device_, fragment_module, nullptr);
     (void)color_format;
@@ -946,6 +1149,46 @@ std::array<float, 16> NativeVulkanWorldRenderer::compute_view_projection(
     return multiply(projection, view);
 }
 
+// Sun ortho view-projection for the shadow map: fits a box around the scene, looking along the sun
+// travel direction, standard Z in [0,1]. Ported EXACTLY from the D3D12 renderer — the math is
+// backend-neutral (row-vector x row-major). The Vulkan shadow pass renders with a negative-height
+// viewport (like the world pass), so the framebuffer store orientation matches D3D12 and the frag
+// shader's uv Y-flip (0.5,-0.5) is byte-for-byte identical.
+std::array<float, 16> NativeVulkanWorldRenderer::compute_light_view_projection(
+    const std::array<float, 3>& sun) const {
+    const std::array<float, 3> up_ref =
+        std::abs(sun[1]) > 0.99f ? std::array<float, 3>{0.0f, 0.0f, 1.0f}
+                                 : std::array<float, 3>{0.0f, 1.0f, 0.0f};
+    const auto forward = normalise(sun);                 // light travels along +sun
+    const auto right = normalise(cross(up_ref, forward));
+    const auto up = cross(forward, right);
+    const float radius = std::max(scene_radius_, 1.0f);
+    const std::array<float, 3> eye = {scene_center_[0] - forward[0] * radius * 2.0f,
+                                      scene_center_[1] - forward[1] * radius * 2.0f,
+                                      scene_center_[2] - forward[2] * radius * 2.0f};
+    const float sx = 1.0f / radius;
+    const float sy = 1.0f / radius;
+    const float near_plane = radius * 0.05f;
+    const float far_plane = radius * 4.0f;
+    const float inv_depth = 1.0f / (far_plane - near_plane);
+    const float edr = dot(eye, right), edu = dot(eye, up), edf = dot(eye, forward);
+    // Row-major, [row*4+col]. This is the SAME storage as the D3D12 compute_light_view_projection.
+    std::array<float, 16> m{};
+    auto at = [&](int r, int c) -> float& { return m[r * 4 + c]; };
+    at(0, 0) = right[0] * sx;   at(1, 0) = right[1] * sx;   at(2, 0) = right[2] * sx;
+    at(3, 0) = -edr * sx;
+    at(0, 1) = up[0] * sy;      at(1, 1) = up[1] * sy;      at(2, 1) = up[2] * sy;
+    at(3, 1) = -edu * sy;
+    at(0, 2) = forward[0] * inv_depth; at(1, 2) = forward[1] * inv_depth;
+    at(2, 2) = forward[2] * inv_depth; at(3, 2) = (-edf - near_plane) * inv_depth;
+    at(3, 3) = 1.0f;  // ortho: w = 1
+    // Convention check: D3D12 does clip[c] = sum_r v[r]*array[r*4+c] (row-vector x row-major).
+    // GLSL builds a mat4 column-major from these 16 floats (g[col][row]=array[col*4+row]) and does
+    // g*v -> result[row] = sum_col array[col*4+row]*v[col], which is the SAME sum. So these exact
+    // row-major floats, fed to GLSL's light_view_projection * vec4(pos), reproduce the D3D12 clip.
+    return m;
+}
+
 void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
                                             std::uint32_t width,
                                             std::uint32_t height,
@@ -1004,6 +1247,15 @@ void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
     constants.sky_zenith = {scene_sky_zenith_[0], scene_sky_zenith_[1], scene_sky_zenith_[2], 1.0f};
     constants.sky_horizon = {scene_sky_horizon_[0], scene_sky_horizon_[1], scene_sky_horizon_[2],
                              1.0f};
+    // Sun shadow map: enable only when the shadow resources are live AND the sun is above the
+    // horizon (travelling downward -> sun.y < 0). Mirrors the D3D12 render() shadow gate + params.
+    const bool shadows_on = shadow_ready_ && sun_direction_[1] < -0.05f;
+    constants.light_view_projection = compute_light_view_projection(sun_direction_);
+    constants.shadow_params = {
+        shadows_on ? 1.0f / static_cast<float>(kShadowSize) : 0.0f,  // texel size (1/res)
+        0.0015f,                                                     // NDC-z depth bias
+        shadows_on ? 1.0f : 0.0f,                                    // enabled
+        0.7f};                                                       // strength
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width),
@@ -1067,11 +1319,77 @@ void NativeVulkanWorldRenderer::render_water(VkCommandBuffer command_buffer,
     render_pass(command_buffer, width, height, elapsed_seconds, true);
 }
 
+void NativeVulkanWorldRenderer::render_shadow(VkCommandBuffer command_buffer,
+                                              std::uint32_t width,
+                                              std::uint32_t height,
+                                              double elapsed_seconds) {
+    (void)width;
+    (void)height;
+    (void)elapsed_seconds;
+    if (!shadow_ready_ || !shadow_pipeline_) return;
+    // Gate on the sun above the horizon (travelling downward -> sun.y < -0.05), matching render().
+    if (sun_direction_[1] >= -0.05f) return;
+    // The light VP lives in the shared Camera UBO, written by the world render_pass() recorded
+    // AFTER this in the same single-buffered frame; the GPU reads the final host-coherent value
+    // for both passes (same contract as the D3D12 renderer). Depth-only replay of opaque geometry.
+    VkClearValue clear{};
+    clear.depthStencil = {1.0f, 0};  // standard-Z far value (LESS_OR_EQUAL, near=0)
+    VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    pass.renderPass = shadow_render_pass_;
+    pass.framebuffer = shadow_framebuffer_;
+    pass.renderArea.extent = {kShadowSize, kShadowSize};
+    pass.clearValueCount = 1;
+    pass.pClearValues = &clear;
+    vkCmdBeginRenderPass(command_buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
+    // Negative-height viewport, exactly like the world pass, so the shadow map stores with the same
+    // framebuffer orientation as the D3D12 shadow map — the frag uv Y-flip (0.5,-0.5) then matches.
+    VkViewport viewport{0.0f, static_cast<float>(kShadowSize), static_cast<float>(kShadowSize),
+                        -static_cast<float>(kShadowSize), 0.0f, 1.0f};
+    VkRect2D scissor{{0, 0}, {kShadowSize, kShadowSize}};
+    vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+    vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow_pipeline_);
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer_, &offset);
+    vkCmdBindIndexBuffer(command_buffer, index_buffer_, 0, VK_INDEX_TYPE_UINT32);
+    // The shadow VS only reads the Camera UBO (binding 0), which is identical across every
+    // per-material descriptor set, so bind material 0's set once. Reuses pipeline_layout_.
+    if (!descriptor_sets_.empty()) {
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_,
+                                0, 1, &descriptor_sets_[0], 0, nullptr);
+    }
+    // A push-constant range is declared on the layout; the shadow VS ignores it, but supply a
+    // zeroed block so no stale/undefined push data is read.
+    struct PushConstants {
+        std::uint32_t is_water = 0;
+        std::uint32_t has_scene_depth = 0;
+        std::uint32_t is_character = 0;
+        std::uint32_t padding = 0;
+        std::array<float, 4> character_offset{};
+        std::array<float, 4> character_motion{};
+    } push_constants;
+    vkCmdPushConstants(command_buffer, pipeline_layout_,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(push_constants), &push_constants);
+    for (const auto& range : draw_ranges_) {
+        if (range.is_water) continue;  // water doesn't cast shadows
+        vkCmdDrawIndexed(command_buffer, range.index_count, 1, range.first_index, 0, 0);
+    }
+    vkCmdEndRenderPass(command_buffer);
+}
+
 void NativeVulkanWorldRenderer::destroy() {
     if (device_ == VK_NULL_HANDLE) return;
     if (mapped_constants_) vkUnmapMemory(device_, constant_memory_);
     if (pipeline_) vkDestroyPipeline(device_, pipeline_, nullptr);
     if (water_pipeline_) vkDestroyPipeline(device_, water_pipeline_, nullptr);
+    if (shadow_pipeline_) vkDestroyPipeline(device_, shadow_pipeline_, nullptr);
+    if (shadow_framebuffer_) vkDestroyFramebuffer(device_, shadow_framebuffer_, nullptr);
+    if (shadow_render_pass_) vkDestroyRenderPass(device_, shadow_render_pass_, nullptr);
+    if (shadow_sampler_) vkDestroySampler(device_, shadow_sampler_, nullptr);
+    if (shadow_view_) vkDestroyImageView(device_, shadow_view_, nullptr);
+    if (shadow_image_) vkDestroyImage(device_, shadow_image_, nullptr);
+    if (shadow_memory_) vkFreeMemory(device_, shadow_memory_, nullptr);
     if (pipeline_layout_) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
     for (const auto sampler : texture_samplers_) {
         if (sampler) vkDestroySampler(device_, sampler, nullptr);
@@ -1144,6 +1462,14 @@ void NativeVulkanWorldRenderer::destroy() {
     pipeline_layout_ = VK_NULL_HANDLE;
     pipeline_ = VK_NULL_HANDLE;
     water_pipeline_ = VK_NULL_HANDLE;
+    shadow_pipeline_ = VK_NULL_HANDLE;
+    shadow_framebuffer_ = VK_NULL_HANDLE;
+    shadow_render_pass_ = VK_NULL_HANDLE;
+    shadow_sampler_ = VK_NULL_HANDLE;
+    shadow_view_ = VK_NULL_HANDLE;
+    shadow_image_ = VK_NULL_HANDLE;
+    shadow_memory_ = VK_NULL_HANDLE;
+    shadow_ready_ = false;
     descriptor_sets_.clear();
     texture_images_.clear();
     texture_memories_.clear();

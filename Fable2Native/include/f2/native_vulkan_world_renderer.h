@@ -46,6 +46,20 @@ public:
                       std::uint32_t width,
                       std::uint32_t height,
                       double elapsed_seconds);
+    // Depth-only sun shadow pass (retail "Render ShadowBuffers"): replay opaque geometry from the
+    // sun's ortho POV into the renderer-owned shadow depth map. Runs its OWN render pass, so the
+    // app must call this BEFORE beginning the world/HDR render pass. Gated on the sun being above
+    // the horizon (sun.y < -0.05); a no-op otherwise. The light VP is written into the shared
+    // camera UBO here so both this pass and the world frag term use the exact same transform.
+    void render_shadow(VkCommandBuffer command_buffer,
+                       std::uint32_t width,
+                       std::uint32_t height,
+                       double elapsed_seconds);
+    // Sun ortho view-projection used for the shadow map (fits a box around the scene along the sun
+    // travel dir, standard Z in [0,1]). Public so the shadow pass and frag term share it. Mirrors
+    // the D3D12 renderer's compute_light_view_projection.
+    [[nodiscard]] std::array<float, 16> compute_light_view_projection(
+        const std::array<float, 3>& sun) const;
     void destroy();
 
     // Camera basis for the sky pass (same orbit/free-fly logic the world pass uses), so the
@@ -78,10 +92,23 @@ public:
     [[nodiscard]] const std::array<float, 3>& scene_center() const noexcept { return scene_center_; }
     [[nodiscard]] float scene_radius() const noexcept { return scene_radius_; }
 
+    // Square sun shadow-map resolution (retail Render ShadowBuffers). Matches the D3D12 kShadowSize.
+    static constexpr std::uint32_t kShadowSize = 2048;
+
 private:
     VkDevice device_ = VK_NULL_HANDLE;
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
     VkQueue queue_ = VK_NULL_HANDLE;
+    // Sun shadow map: a renderer-owned D32 depth image rendered from the sun POV each frame in its
+    // own render pass, then sampled by the world frag shader (sampler2DShadow, binding 7).
+    VkImage shadow_image_ = VK_NULL_HANDLE;
+    VkDeviceMemory shadow_memory_ = VK_NULL_HANDLE;
+    VkImageView shadow_view_ = VK_NULL_HANDLE;
+    VkSampler shadow_sampler_ = VK_NULL_HANDLE;  // comparison sampler (hardware PCF)
+    VkRenderPass shadow_render_pass_ = VK_NULL_HANDLE;
+    VkFramebuffer shadow_framebuffer_ = VK_NULL_HANDLE;
+    VkPipeline shadow_pipeline_ = VK_NULL_HANDLE;  // depth-only
+    bool shadow_ready_ = false;
     VkBuffer vertex_buffer_ = VK_NULL_HANDLE;
     VkDeviceMemory vertex_memory_ = VK_NULL_HANDLE;
     VkBuffer index_buffer_ = VK_NULL_HANDLE;
