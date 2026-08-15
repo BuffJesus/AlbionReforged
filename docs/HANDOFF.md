@@ -1,6 +1,43 @@
 # Handoff — resume here
 
-## ▶▶▶ START HERE (2026-08-14 late night) — CLOUDS+MOON+STARS+WATER-NIGHT DONE; ★ NEXT = HDR TONEMAP
+## ▶▶▶ START HERE (2026-08-15) — HDR TONEMAP/EXPOSURE + BLOOM COMPOSITOR (D3D12 DONE; Vulkan parity in flight)
+Branch **`agent/native-spec-maps-and-char`** (PR #3), commits `6eeb61d` (D3D12 HDR scene target + tonemap),
+`af9509c` (D3D12 bloom + exposure tuning). USER CHOSE the **full retail global HDR compositor** (not the
+lighter in-shader bound). Implemented the retail HDR pipeline on D3D12 (ghidra_out/rendering_pipeline.txt §D.3:
+`result = mul_sat(exposure*scene) + bloom`):
+- **Verification first (per the ⚠ in the prior handoff):** retail DOES tonemap the whole world (HDR RGBA16F
+  scene → compositor `saturate(exposure*scene)+bloom` w/ auto-exposure LUT). BUT the **AssetBrowser oracle does
+  NOT** — its world FBO is plain `GL_RGBA8` (`ModelPreview.cpp:4283`), exposure stand-ins all `1.0`; only its
+  sky/water shaders Reinhard-bound in-shader. So there is **no AB oracle for the exact exposure/bloom amount** —
+  the compositor is implemented per the retail *doc*, tuned to taste. (The old "AB town darker = its exposure"
+  note was imprecise; any daytime brightness gap is lighting, not tonemap.)
+- **Shared HDR format** `f2::kSceneColorFormat = R16G16B16A16_FLOAT` (`include/f2/native_scene_color.h`); all 5
+  D3D12 World-pass PSOs (sky/clouds/billboards/stars/world+water) now declare it as their RTV.
+- **App** (`native_frontend_app.cpp`): `create_hdr_target()` (RGBA16F scene RT, RTV + SRV, recreated on resize);
+  the World branch renders every pass into it (gated `use_hdr`), then the compositor resolves to the LDR back
+  buffer, then the UI overlay draws on the LDR back buffer. Falls back to the old direct-LDR path if the
+  compositor fails to init.
+- **`NativeTonemapRenderer`** (`native_tonemap_renderer.{h,cpp}`): self-contained compositor owning half-res
+  bright + 2 ping-pong blur targets + private SRV/RTV heaps. bright-pass (threshold) → separable 9-tap Gaussian
+  (H,V) → composite `saturate(exposure*scene)+intensity*bloom`. Defaults exposure **1.0** / threshold **0.62** /
+  intensity **0.90** = gentle retail sun-glow bloom (screenshot-verified on `out_genv.f2scene`; strong settings
+  bloom the whole sky+sun, default halos the sun corner only). All 3 env-overridable
+  (`FABLE2NATIVE_HDR_EXPOSURE` / `_BLOOM_THRESHOLD` / `_BLOOM_INTENSITY`); intensity 0 = byte-identical to the old
+  clamp. NOTE our scene sits in LDR-ish light range [0,~1.2] (not retail's HDR hundreds), so bloom is subtle by
+  design on overcast midday — it will read stronger on genuinely bright content (sun disc, night lights, spec).
+
+**★ IN FLIGHT — Vulkan HDR+bloom parity** (background agent as of this writing): mirror the above on the Vulkan
+backend (offscreen HDR render pass with MSAA resolve, rebaked world pipelines, a `NativeVulkanTonemapRenderer`,
+UI moved to the swapchain pass). Project rule = **D3D12 == Vulkan before "done"**; verify with
+`scratchpad/shot_world.ps1 -Backend d3d12|vulkan`. Until it lands, Vulkan World still renders direct-to-LDR
+(parity holds only at bloom_intensity 0). **Check the agent's report, review its staged diff, build+screenshot
+both backends, then commit.**
+
+**★ NEXT AFTER VULKAN PARITY — retail-fidelity remaining:** (1) sun disc/beams/glare (only on a level/theme that
+authors them — chapter2slums authors none); (2) sunlight balance (`main_light*sun_intensity`); (3) HDR-range
+lighting so bloom/exposure have real HDR to work on. Full list = frontier §3(e).
+
+## ▶▶ (history) START HERE (2026-08-14 late night) — CLOUDS+MOON+STARS+WATER-NIGHT DONE; NEXT was HDR TONEMAP
 Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `8b5ddc8`. Fixed the **water night-lighting** bug
 (the canal/sea rendered a bright day-blue even at night, next to the new moon+stars). The water reflection
 hardcoded the chapter2slums *daytime* sky gradient. Per the water RE (`water_system_re.txt` §5: the water
