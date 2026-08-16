@@ -22,6 +22,21 @@ void VillagerComponent::serialize(WorldArchive& ar) {
     ar.visit(job_tag);
 }
 
+bool HealthComponent::modify(float delta) {
+    if (invulnerable && delta < 0.0f) return false;
+    const bool was_alive = health > 0.0f;
+    health += delta;
+    if (health > max_health) health = max_health;
+    if (health < 0.0f) health = 0.0f;
+    return was_alive && health <= 0.0f;
+}
+
+void HealthComponent::serialize(WorldArchive& ar) {
+    ar.visit(health);
+    ar.visit(max_health);
+    ar.visit(invulnerable);
+}
+
 // ---------------- ComponentRegistry ----------------
 
 void ComponentRegistry::insert_sorted(const ComponentDesc& d) {
@@ -65,6 +80,11 @@ void ComponentRegistry::seed_defaults() {
     register_hash(gdb::kCompVillager, kTypeIdVillager,
                   [](NativeEntity&) -> std::unique_ptr<NativeComponent> {
                       return std::make_unique<VillagerComponent>();
+                  });
+    // Health (typeId 36, CECHealth createFn 0x826321A0) — real component.
+    register_hash(gdb::kCompHealth, kTypeIdHealth,
+                  [](NativeEntity&) -> std::unique_ptr<NativeComponent> {
+                      return std::make_unique<HealthComponent>();
                   });
     // NPC/AI family (Brain/Perception/Navigation/Generator) — registered as inert
     // placeholders carrying their retail typeIds so records instantiate faithfully;

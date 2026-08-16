@@ -45,6 +45,7 @@ enum ComponentTypeId : std::uint8_t {
     kTypeIdAIBrain                    = 71,  // CECAIBrain
     kTypeIdCreatureGenerator          = 51,  // CECCreatureGenerator
     kTypeIdVillager                   = 26,  // CECVillager
+    kTypeIdHealth                     = 36,  // CECHealth
     // Transform is engine-special (NOT in the 261-class CEC registry). Retail
     // commits it specially (entity+0x90 |= 0xA0); its exact typeId is ambiguous in
     // the specs (STEP3.6 says 3, but registry 3 = GraphicAppearance). We give it a
@@ -103,6 +104,27 @@ public:
     std::string job_tag;     // JobTag string (0x7FA702D2), e.g. TEXT_CHARACTER_OCCUPATION_*
     [[nodiscard]] std::uint8_t type_id() const noexcept override { return kTypeIdVillager; }
     void serialize(WorldArchive& ar) override;  // age/gender/job/rich/job_tag
+};
+
+// HealthComponent — hit points (CECHealth typeId 36). Fields mirror the real GDB
+// HealthComponent schema (gdb_component_schemas.txt; hashes verified in native_gdb_hash).
+// Damage/heal go through modify() — the retail single damage verb Health.Modify
+// (sub_824CBC68), which on reaching 0 triggers the death/reward dispatch
+// (health_on_changed sub_824CE278). combat_system.txt: "tune that pair and you tune all
+// of combat."
+class HealthComponent final : public NativeComponent {
+public:
+    float health = 70.0f;       // Health (0x83632C03), eg 70
+    float max_health = 70.0f;   // MaxHealth (0x5B42D9DB)
+    bool invulnerable = false;  // Invulnerable (0x3215DFC8)
+    [[nodiscard]] std::uint8_t type_id() const noexcept override { return kTypeIdHealth; }
+
+    // Apply a health delta, clamped to [0, max_health]. Damage (delta<0) is ignored
+    // while invulnerable. Returns true iff this call caused death (alive -> 0) — the
+    // retail on-changed death trigger.
+    bool modify(float delta);
+    [[nodiscard]] bool is_dead() const noexcept { return health <= 0.0f; }
+    void serialize(WorldArchive& ar) override;
 };
 
 // InertComponent — a registered-but-unimplemented component that carries its retail

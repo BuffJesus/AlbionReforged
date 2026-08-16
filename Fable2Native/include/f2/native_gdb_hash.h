@@ -59,6 +59,16 @@ static_assert(fnv1("NavigationComponent") == kCompNavigation, "FNV mismatch");
 // field 0xA2371C5A — independent confirmation of the convention + this hash.
 static_assert(fnv1("CreatureGeneratorComponent") == kCompCreatureGenerator, "FNV mismatch");
 
+// --- HealthComponent (CECHealth typeId 36) — schema-verified ---
+inline constexpr std::uint32_t kCompHealth        = 0x26546FBCu;  // FNV1("HealthComponent")
+inline constexpr std::uint32_t kFieldHealth       = 0x83632C03u;  // float
+inline constexpr std::uint32_t kFieldMaxHealth    = 0x5B42D9DBu;  // float
+inline constexpr std::uint32_t kFieldInvulnerable = 0x3215DFC8u;  // bool
+static_assert(fnv1("HealthComponent") == kCompHealth, "FNV mismatch");
+static_assert(fnv1("Health") == kFieldHealth, "FNV mismatch");
+static_assert(fnv1("MaxHealth") == kFieldMaxHealth, "FNV mismatch");
+static_assert(fnv1("Invulnerable") == kFieldInvulnerable, "FNV mismatch");
+
 // --- VillagerComponent field hashes (schema-verified, gdb_component_schemas.txt) ---
 inline constexpr std::uint32_t kFieldAge    = 0x484C8542u;  // enum
 inline constexpr std::uint32_t kFieldGender = 0x2297CE0Au;  // enum

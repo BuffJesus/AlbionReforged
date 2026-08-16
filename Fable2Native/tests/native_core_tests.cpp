@@ -708,6 +708,34 @@ int main() {
         assert(cc.position[0] < 5.0f - 0.5f + 0.001f);  // blocked before the box interior
     }
 
+    // ---- Combat foundation: HealthComponent (Health.Modify verb) ----
+    {
+        f2::ComponentRegistry reg; reg.seed_defaults();
+        assert(reg.lookup(f2::gdb::kCompHealth)->type_id == f2::kTypeIdHealth);  // 36
+
+        f2::EntityManager em;
+        f2::NativeEntity& e = em.create_entity();
+        auto* h = static_cast<f2::HealthComponent*>(
+            em.create_component_by_hash(e, f2::gdb::kCompHealth));
+        assert(h != nullptr && approx(h->health, 70.0f) && !h->is_dead());
+
+        // Damage clamps and reports death on the killing blow only.
+        assert(!h->modify(-20.0f) && approx(h->health, 50.0f));
+        assert(h->modify(-60.0f) && h->is_dead() && approx(h->health, 0.0f));  // alive->0 = died
+        assert(!h->modify(-10.0f));  // already dead: no second "died"
+        // Heal clamps to max.
+        h->health = 65.0f; h->modify(100.0f); assert(approx(h->health, 70.0f));
+        // Invulnerable ignores damage but allows healing.
+        h->invulnerable = true; h->modify(-50.0f); assert(approx(h->health, 70.0f));
+        h->health = 40.0f; h->modify(10.0f); assert(approx(h->health, 50.0f));
+
+        // Persists through the save archive.
+        h->health = 33.0f; h->max_health = 80.0f; h->invulnerable = false;
+        f2::WorldArchive w(f2::ArchiveMode::Write); h->serialize(w);
+        f2::HealthComponent h2; f2::WorldArchive r(w.take()); h2.serialize(r);
+        assert(approx(h2.health, 33.0f) && approx(h2.max_health, 80.0f) && !h2.invulnerable);
+    }
+
     // ---- P4: NPC agents wired into the world ----
     {
         f2::NativeScene s;
