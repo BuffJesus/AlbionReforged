@@ -80,6 +80,12 @@ void NativeGame::tick(double delta_seconds) {
         if (mode == GameMode::InWorld) {
             script_systems.tick(simulation_step);
 
+            // Entity/brain: tick the live NPCs (ACT layer) against the hero as target/
+            // LOD centre — before movement, so the follow camera later frames the moved
+            // hero. Uses last frame's hero position (1-frame lag, consistent).
+            world.update_npcs(collision, player.position(),
+                              static_cast<float>(simulation_step));
+
             // Movement: camera-relative input -> desired velocity -> collide-and-slide.
             player.update(collision, input, camera_controller.yaw,
                           static_cast<float>(simulation_step));

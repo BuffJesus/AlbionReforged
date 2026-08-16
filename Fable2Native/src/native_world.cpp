@@ -1,6 +1,7 @@
 #include "f2/native_world.h"
 
 #include "f2/native_save.h"
+#include "f2/native_physics.h"
 
 #include <cstddef>
 
@@ -9,6 +10,7 @@ namespace f2 {
 void NativeWorld::spawn_from_scene(const NativeScene& scene) {
     entities.clear();
     hero = nullptr;
+    npcs.clear();
 
     for (std::size_t i = 0; i < scene.instances.size(); ++i) {
         const NativeInstance& inst = scene.instances[i];
@@ -40,7 +42,28 @@ void NativeWorld::spawn_from_scene(const NativeScene& scene) {
             if (!hero) hero = &e;
         } else if (mesh_name.rfind("npc", 0) == 0) {
             entities.create_component_by_hash(e, gdb::kCompVillager);
+            // A live ACT-layer agent for this villager, at its placed transform. One
+            // agent per npc-tagged geom; a multi-part villager (npcP_0..npcP_N) yields
+            // several agents at the same spot — harmless, they move together.
+            NpcAgent agent;
+            agent.entity_uid = e.uid;
+            agent.controller.set_position(inst.position);
+            npcs.push_back(agent);
         }
+    }
+}
+
+void NativeWorld::update_npcs(const NativeCollisionWorld& collision,
+                              const std::array<float, 3>& target, float dt) {
+    for (NpcAgent& agent : npcs) {
+        // LOD centre = the player: NPCs far from the player go inactive (skip tick).
+        agent.controller.update(collision, target, target, lod_radius, dt);
+        // Write the resolved position back to the entity transform so sync_to_scene
+        // moves the drawn instance (the master tick's entity->render bridge).
+        NativeEntity* e = entities.find(agent.entity_uid);
+        if (!e) continue;
+        auto* transform = e->get<TransformComponent>(kTypeIdTransform);
+        if (transform) transform->position = agent.controller.position();
     }
 }
 

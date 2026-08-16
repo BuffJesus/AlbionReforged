@@ -14,14 +14,28 @@
 
 #include "native_entity.h"
 #include "native_scene.h"
+#include "native_npc.h"
+
+#include <cstdint>
+#include <vector>
 
 namespace f2 {
 
-class WorldArchive;  // native_save.h
+class WorldArchive;         // native_save.h
+class NativeCollisionWorld; // native_physics.h
+
+// A live NPC = a villager entity + its ACT-layer controller (native_npc.h). The brain
+// DECIDE layer is a flagged stand-in until the Lua VM (P6).
+struct NpcAgent {
+    std::uint64_t entity_uid = 0;
+    NpcController controller;
+};
 
 struct NativeWorld {
     EntityManager entities;
     NativeEntity* hero = nullptr;
+    std::vector<NpcAgent> npcs;   // one per villager entity, ticked each InWorld step
+    float lod_radius = 60.0f;     // ENGINEERING: NPC active radius (IsEntityWithinDistanceOfLODCentre)
 
     // Build the entity graph from the cooked scene: one entity per NativeInstance,
     // carrying a TransformComponent (seeded from the instance transform) and a
@@ -32,6 +46,13 @@ struct NativeWorld {
     // tick's final "sync entity transforms -> renderer" step). Cheap; only touches
     // instances an entity is bound to.
     void sync_to_scene(NativeScene& scene) const;
+
+    // Tick the live NPCs (the master order's "entity/brain" step): each agent runs its
+    // ACT layer against `target` (the player) with the LOD centre = target, then its
+    // resolved position is written back into the entity's TransformComponent so the
+    // next sync_to_scene moves the drawn instance.
+    void update_npcs(const NativeCollisionWorld& collision,
+                     const std::array<float, 3>& target, float dt);
 
     // Bidirectional entity-graph delta (retail provider vtbl+0x10; gamestate_save_restore
     // §A.3/§B.1). WRITE: walk live entities, emit per-entity {uid, per-component

@@ -708,6 +708,41 @@ int main() {
         assert(cc.position[0] < 5.0f - 0.5f + 0.001f);  // blocked before the box interior
     }
 
+    // ---- P4: NPC agents wired into the world ----
+    {
+        f2::NativeScene s;
+        f2::NativeMesh ground;
+        auto gv = [&](float x, float y, float z) {
+            f2::NativeVertex vv; vv.position = {x, y, z}; ground.vertices.push_back(vv);
+        };
+        gv(-30, 0, -30); gv(30, 0, -30); gv(30, 0, 30); gv(-30, 0, 30);
+        ground.indices = {0, 1, 2, 0, 2, 3};
+        s.meshes.push_back(ground);
+        f2::NativeMesh npc_mesh; npc_mesh.name = "npc0_0"; s.meshes.push_back(npc_mesh);
+        f2::NativeInstance gi; gi.mesh = 0; s.instances.push_back(gi);
+        f2::NativeInstance ni; ni.mesh = 1; ni.position = {2.0f, 0.0f, 0.0f}; s.instances.push_back(ni);
+
+        f2::NativeCollisionWorld collision; collision.build_from_scene(s);
+        f2::NativeWorld w;
+        w.spawn_from_scene(s);
+        assert(w.npcs.size() == 1);                    // one agent for the villager geom
+        assert(w.npcs[0].entity_uid == 2);
+        assert(approx(w.npcs[0].controller.position()[0], 2.0f));  // placed at its instance
+
+        // Player standing next to the NPC with clear LOS -> the agent notices.
+        w.update_npcs(collision, {3.0f, 0.0f, 0.0f}, 1.0f / 60.0f);
+        assert(w.npcs[0].controller.state == f2::NpcState::Notice);
+        // The agent's transform synced back onto its entity (so sync_to_scene moves it).
+        auto* npc_e = w.entities.find(2);
+        auto* npc_tf = npc_e->get<f2::TransformComponent>(f2::kTypeIdTransform);
+        assert(approx(npc_tf->position[0], w.npcs[0].controller.position()[0]));
+
+        // Player far away -> LOD gate makes the agent inactive (no state work).
+        f2::NativeWorld w2; w2.spawn_from_scene(s);
+        w2.update_npcs(collision, {200.0f, 0.0f, 200.0f}, 1.0f / 60.0f);
+        assert(!w2.npcs[0].controller.active);
+    }
+
     // ---- P4 ACT: line-of-sight + NPC perception/LOD/motor ----
     {
         // Ground + a wall quad in the x=5 plane (z in [-3,3], y in [0,3]).
