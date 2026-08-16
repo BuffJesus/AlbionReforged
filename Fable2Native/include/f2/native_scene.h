@@ -54,6 +54,11 @@ struct NativeInstance {
     // -> the renderer falls back to the global hemisphere ambient.
     bool has_probe = false;
     std::array<float, 12> sh{};
+    // Per-instance max draw distance in world units (from the entity's DrawDistance GDB field, set
+    // by the cook). 0 = never cull (default; existing scenes unchanged). The world renderers skip
+    // this instance's draw range when its bounding sphere lies beyond this distance from the camera
+    // — the retail draw-distance LOD gate. See fable2-npc-popin-drawdistance-fix.
+    float max_draw_distance = 0.0f;
 };
 
 // A local point light (lamp post, lantern, brazier, placeable accent) — cooked from

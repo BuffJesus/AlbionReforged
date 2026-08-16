@@ -69,6 +69,11 @@ struct Geometry {
         std::uint32_t material_index = 0;
         bool is_water = false;
         bool is_character = false;
+        // World-space bounding sphere of this instance's baked geometry + its per-instance max draw
+        // distance (0 = never cull). Used for distance-culling in the draw loops.
+        std::array<float, 3> center{};
+        float radius = 0.0f;
+        float max_draw_distance = 0.0f;
     };
     std::vector<DrawRange> draw_ranges;
 };
@@ -163,6 +168,18 @@ std::array<float, 3> place_vertex(const std::array<float, 3>& p,
     return {x3 + translate[0], y3 + translate[1], z2 + translate[2]};
 }
 
+// Distance-cull test: true if this range's instance lies beyond its max draw distance from the eye
+// (its whole bounding sphere is past the gate). max_draw_distance <= 0 → never cull.
+template <typename Range>
+bool range_distance_culled(const Range& range, const std::array<float, 3>& eye) {
+    if (range.max_draw_distance <= 0.0f) return false;
+    const float dx = range.center[0] - eye[0];
+    const float dy = range.center[1] - eye[1];
+    const float dz = range.center[2] - eye[2];
+    const float dist = std::sqrt(dx * dx + dy * dy + dz * dz) - range.radius;
+    return dist > range.max_draw_distance;
+}
+
 Geometry make_geometry(const NativeScene& scene) {
     Geometry geometry;
     for (const auto& instance : scene.instances) {
@@ -170,9 +187,16 @@ Geometry make_geometry(const NativeScene& scene) {
         const auto& mesh = scene.meshes[instance.mesh];
         const auto color = material_color(scene, mesh.material);
         const auto base = static_cast<std::uint32_t>(geometry.vertices.size());
+        // Accumulate this instance's world-space AABB → bounding sphere for distance culling.
+        std::array<float, 3> lo{}, hi{};
+        bool have_bounds = false;
         for (const auto& source : mesh.vertices) {
             const auto world = place_vertex(source.position, instance.rotation,
                                             instance.scale, instance.position);
+            if (!have_bounds) { lo = world; hi = world; have_bounds = true; }
+            else for (int a = 0; a < 3; ++a) {
+                lo[a] = std::min(lo[a], world[a]); hi[a] = std::max(hi[a], world[a]);
+            }
             // Rotate the normal into world space (uniform scale + no translation).
             const auto world_normal = normalise(
                 place_vertex(source.normal, instance.rotation, 1.0f, {0.0f, 0.0f, 0.0f}));
@@ -197,10 +221,17 @@ Geometry make_geometry(const NativeScene& scene) {
         const bool is_water = mesh.material < scene.materials.size() &&
                               scene.materials[mesh.material].name == "water";
         const bool is_character = mesh.name.rfind("hero", 0) == 0;
+        std::array<float, 3> center{0.0f, 0.0f, 0.0f};
+        float radius = 0.0f;
+        if (have_bounds) {
+            for (int a = 0; a < 3; ++a) center[a] = 0.5f * (lo[a] + hi[a]);
+            for (int a = 0; a < 3; ++a) radius = std::max(radius, 0.5f * (hi[a] - lo[a]));
+        }
         geometry.draw_ranges.push_back({first_index,
                                         static_cast<std::uint32_t>(mesh.indices.size()),
                                         std::min(mesh.material, NativeWorldRenderer::kMaxMaterialTextures / 3 - 1),
-                                        is_water, is_character});
+                                        is_water, is_character, center, radius,
+                                        instance.max_draw_distance});
     }
 
     if (!geometry.vertices.empty()) return geometry;
@@ -449,7 +480,8 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     draw_ranges_.clear();
     for (const auto& range : geometry.draw_ranges) {
         draw_ranges_.push_back({range.first_index, range.index_count, range.material_index,
-                                range.is_water});
+                                range.is_water, range.is_character, range.center, range.radius,
+                                range.max_draw_distance});
     }
 
     const auto constant_size = (sizeof(Constants) + 255u) & ~255u;
@@ -1074,6 +1106,7 @@ void NativeWorldRenderer::render_shadow(ID3D12GraphicsCommandList* command_list,
     command_list->IASetIndexBuffer(&index_view_);
     for (const auto& range : draw_ranges_) {
         if (range.is_water) continue;  // water doesn't cast shadows
+        if (range_distance_culled(range, camera_eye_)) continue;  // culled = no shadow either
         command_list->DrawIndexedInstanced(range.index_count, 1, range.first_index, 0, 0);
     }
 }
@@ -1085,6 +1118,7 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
 
     const auto camera = compute_camera(width, height, elapsed_seconds);
     const std::array<float, 3> eye = camera.position;
+    camera_eye_ = eye;  // cache for the shadow pass (runs before render() next frame)
     Constants constants{};
     const auto vp = compute_view_projection(width, height, elapsed_seconds);
     std::memcpy(constants.view_projection, vp.data(), sizeof(constants.view_projection));
@@ -1158,6 +1192,7 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
         command_list->SetPipelineState(pso);
         for (const auto& range : draw_ranges_) {
             if (range.is_water != water) continue;
+            if (range_distance_culled(range, eye)) continue;  // draw-distance LOD gate
             auto texture_handle = texture_gpu_handle_;
             texture_handle.ptr += static_cast<std::size_t>(range.material_index) * 3 *
                                  texture_descriptor_stride_;

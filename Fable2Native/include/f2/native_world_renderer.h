@@ -139,8 +139,14 @@ private:
         std::uint32_t material_index = 0;
         bool is_water = false;  // drawn in the translucent water pass with the water shader
         bool is_character = false;
+        // World-space bounding sphere + per-instance max draw distance (0 = never cull) for the
+        // distance-culling LOD gate (retail draw-distance). fable2-npc-popin-drawdistance-fix.
+        std::array<float, 3> center{};
+        float radius = 0.0f;
+        float max_draw_distance = 0.0f;
     };
     std::vector<DrawRange> draw_ranges_;
+    std::array<float, 3> camera_eye_{0.0f, 0.0f, 0.0f};  // last frame's eye, for shadow-pass culling
     void* mapped_constants_ = nullptr;
     D3D12_GPU_DESCRIPTOR_HANDLE texture_gpu_handle_{};
     std::uint32_t texture_descriptor_stride_ = 0;

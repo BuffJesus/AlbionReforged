@@ -167,8 +167,12 @@ private:
         std::uint32_t material_index = 0;
         bool is_water = false;
         bool is_character = false;
+        std::array<float, 3> center{};
+        float radius = 0.0f;
+        float max_draw_distance = 0.0f;  // 0 = never cull (retail draw-distance LOD gate)
     };
     std::vector<DrawRange> draw_ranges_;
+    std::array<float, 3> camera_eye_{0.0f, 0.0f, 0.0f};  // last eye, for shadow-pass culling
 
     void render_pass(VkCommandBuffer command_buffer,
                      std::uint32_t width,

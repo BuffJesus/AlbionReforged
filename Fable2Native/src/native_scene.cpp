@@ -164,6 +164,10 @@ bool load_native_scene(const std::filesystem::path& path,
                 !read_vec3(line, instance.rotation) || !read_value(line, instance.scale)) {
                 return fail(&error, "invalid instance at line " + std::to_string(line_number));
             }
+            // Optional trailing per-instance max draw distance (world units) for LOD culling;
+            // absent → 0 = never cull (existing F2SCENE packages unchanged). The cook emits it
+            // from the entity's DrawDistance GDB field.
+            read_value(line, instance.max_draw_distance);
             bool found = false;
             for (std::size_t i = 0; i < parsed.meshes.size(); ++i) {
                 if (parsed.meshes[i].name == mesh_name) {

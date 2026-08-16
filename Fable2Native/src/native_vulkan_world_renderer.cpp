@@ -59,6 +59,9 @@ struct Geometry {
         std::uint32_t material_index = 0;
         bool is_water = false;
         bool is_character = false;
+        std::array<float, 3> center{};
+        float radius = 0.0f;
+        float max_draw_distance = 0.0f;  // 0 = never cull
     };
     std::vector<DrawRange> draw_ranges;
 };
@@ -119,6 +122,16 @@ std::array<float, 3> place_vertex(const std::array<float, 3>& p,
     return {x3 + translate[0], y3 + translate[1], z2 + translate[2]};
 }
 
+template <typename Range>
+bool range_distance_culled(const Range& range, const std::array<float, 3>& eye) {
+    if (range.max_draw_distance <= 0.0f) return false;
+    const float dx = range.center[0] - eye[0];
+    const float dy = range.center[1] - eye[1];
+    const float dz = range.center[2] - eye[2];
+    const float dist = std::sqrt(dx * dx + dy * dy + dz * dz) - range.radius;
+    return dist > range.max_draw_distance;
+}
+
 Geometry make_geometry(const NativeScene& scene) {
     Geometry geometry;
     for (const auto& instance : scene.instances) {
@@ -126,9 +139,15 @@ Geometry make_geometry(const NativeScene& scene) {
         const auto& mesh = scene.meshes[instance.mesh];
         const auto color = material_color(scene, mesh.material);
         const auto base = static_cast<std::uint32_t>(geometry.vertices.size());
+        std::array<float, 3> lo{}, hi{};
+        bool have_bounds = false;
         for (const auto& source : mesh.vertices) {
             const auto world = place_vertex(source.position, instance.rotation,
                                             instance.scale, instance.position);
+            if (!have_bounds) { lo = world; hi = world; have_bounds = true; }
+            else for (int a = 0; a < 3; ++a) {
+                lo[a] = std::min(lo[a], world[a]); hi[a] = std::max(hi[a], world[a]);
+            }
             const auto world_normal = normalise(
                 place_vertex(source.normal, instance.rotation, 1.0f, {0.0f, 0.0f, 0.0f}));
             // Per-instance baked order-1 SH ambient (.lmp probe), evaluated against the
@@ -150,11 +169,18 @@ Geometry make_geometry(const NativeScene& scene) {
         const bool is_water = mesh.material < scene.materials.size() &&
                               scene.materials[mesh.material].name == "water";
         const bool is_character = mesh.name.rfind("hero", 0) == 0;
+        std::array<float, 3> center{0.0f, 0.0f, 0.0f};
+        float radius = 0.0f;
+        if (have_bounds) {
+            for (int a = 0; a < 3; ++a) center[a] = 0.5f * (lo[a] + hi[a]);
+            for (int a = 0; a < 3; ++a) radius = std::max(radius, 0.5f * (hi[a] - lo[a]));
+        }
         geometry.draw_ranges.push_back({first_index,
                                         static_cast<std::uint32_t>(mesh.indices.size()),
                                         std::min(mesh.material,
                                                  NativeVulkanWorldRenderer::kMaxMaterialTextures - 1),
-                                        is_water, is_character});
+                                        is_water, is_character, center, radius,
+                                        instance.max_draw_distance});
     }
 
     if (!geometry.vertices.empty()) return geometry;
@@ -883,7 +909,8 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     draw_ranges_.clear();
     for (const auto& range : geometry.draw_ranges) {
         draw_ranges_.push_back({range.first_index, range.index_count, range.material_index,
-                                range.is_water});
+                                range.is_water, range.is_character, range.center, range.radius,
+                                range.max_draw_distance});
     }
 
     std::vector<std::uint32_t> vertex_code;
@@ -1214,6 +1241,7 @@ void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
         forward = normalise(subtract(target, eye));
     }
     const std::array<float, 3> up{0.0f, 1.0f, 0.0f};
+    camera_eye_ = eye;  // cache for the shadow pass (runs before this next frame). D3D12 parity.
     // Match D3D12's camera basis exactly. The Vulkan viewport handles the API's vertical
     // origin separately; the world-space right/up vectors must remain identical.
     const auto right = normalise(cross(up, forward));
@@ -1271,6 +1299,7 @@ void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
     vkCmdBindIndexBuffer(command_buffer, index_buffer_, 0, VK_INDEX_TYPE_UINT32);
     for (const auto& range : draw_ranges_) {
         if (range.is_water != water) continue;
+        if (range_distance_culled(range, camera_eye_)) continue;  // draw-distance LOD gate
         const auto material_index = std::min<std::size_t>(range.material_index,
                                                            descriptor_sets_.size() - 1);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1376,6 +1405,7 @@ void NativeVulkanWorldRenderer::render_shadow(VkCommandBuffer command_buffer,
                        sizeof(push_constants), &push_constants);
     for (const auto& range : draw_ranges_) {
         if (range.is_water) continue;  // water doesn't cast shadows
+        if (range_distance_culled(range, camera_eye_)) continue;  // culled = no shadow either
         vkCmdDrawIndexed(command_buffer, range.index_count, 1, range.first_index, 0, 0);
     }
     vkCmdEndRenderPass(command_buffer);
