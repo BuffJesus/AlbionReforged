@@ -2,6 +2,8 @@
 #include "f2/native_font.h"
 #include "f2/native_frontend_config.h"
 #include "f2/native_game.h"
+#include "f2/native_input_state.h"
+#include "f2/native_script_systems.h"
 #include "f2/native_install.h"
 #include "f2/native_scene.h"
 #include "f2/native_texture.h"
@@ -508,6 +510,57 @@ int main() {
         assert(reloaded.moon.phase == 4);
         assert(approx(reloaded.star_brightness, 1.0f));
         std::filesystem::remove(scene_path);
+    }
+
+    // ---- P0: master gameplay tick order (Quest -> General -> AI) ----
+    {
+        f2::ScriptSystems ss;
+        std::string order;
+        ss.quest.enabled = true;
+        ss.quest.update = [&](double) { order += 'Q'; };
+        ss.general.enabled = true;
+        ss.general.update = [&](double) { order += 'G'; };
+        ss.ai.enabled = true;
+        ss.ai.update = [&](double) { order += 'A'; };
+        ss.tick(1.0 / 60.0);
+        assert(order == "QGA");  // retail-recovered order (Function_82281FE0)
+
+        // Disabled managers are skipped; order of the rest preserved.
+        order.clear();
+        ss.general.enabled = false;
+        ss.tick(1.0 / 60.0);
+        assert(order == "QA");
+    }
+
+    // ---- P0: analog stick deadzone/extent curve (decomp-grounded thresholds) ----
+    {
+        f2::InputAnalogConfig cfg;  // deadzone 0.4, extent 0.8 (shipped defaults)
+        // Inside the deadzone reads as zero.
+        auto z = f2::InputSampler::apply_stick_curve({0.3f, 0.0f}, cfg);
+        assert(approx(z[0], 0.0f) && approx(z[1], 0.0f));
+        // At/above the extent threshold saturates to magnitude 1.0.
+        auto s = f2::InputSampler::apply_stick_curve({0.8f, 0.0f}, cfg);
+        assert(approx(s[0], 1.0f) && approx(s[1], 0.0f));
+        // Halfway between deadzone(0.4) and extent(0.8) -> 0.5 magnitude.
+        auto m = f2::InputSampler::apply_stick_curve({0.6f, 0.0f}, cfg);
+        assert(approx(m[0], 0.5f) && approx(m[1], 0.0f));
+        // Direction preserved on a diagonal past the deadzone.
+        auto d = f2::InputSampler::apply_stick_curve({0.8f, 0.8f}, cfg);
+        assert(d[0] > 0.0f && approx(d[0], d[1]));  // symmetric input -> symmetric output
+    }
+
+    // ---- P0: button edge-detect helpers ----
+    {
+        f2::InputState in;
+        in.buttons = static_cast<std::uint16_t>(f2::PadButton::A);
+        in.buttons_pressed = static_cast<std::uint16_t>(f2::PadButton::A);
+        assert(in.down(f2::PadButton::A));
+        assert(in.pressed(f2::PadButton::A));
+        assert(!in.down(f2::PadButton::B));
+        assert(!in.pressed(f2::PadButton::B));
+        // Default active device + a Frontend-mode game does not tick script systems.
+        f2::NativeGame g;
+        assert(g.mode == f2::GameMode::Frontend);
     }
 
     std::filesystem::remove(path);
