@@ -80,7 +80,7 @@ or bone-matrix upload + the setter, wired into the existing character range. **B
 (1) the anim-sampler RE (bone matrices — the gameplay session's research agent, `anim_havok §F.2`),
 and (2) the A/B choice above. Ping me with the choice + the data shape and I'll land it.
 
-## 3. Water fidelity — reflection RTT ✅ both backends · Fresnel ✅ both backends · refraction grab-pass ✅ D3D12 / 🚧 Vulkan
+## 3. Water fidelity — reflection RTT ✅ · Fresnel ✅ · refraction ✅ — ALL on both backends
 
 Retail water (`Shaders.sbk` shader 62 `PSHADER_WATERPATCH`) is planar reflection/refraction, not
 analytic (see `docs/RENDERER_GROUNDING_AUDIT.md`). **Phase 1 (D3D12, done + verified):** the frontend
@@ -121,11 +121,16 @@ scenes are program 57.
   A/B. **Verified:** pure-refraction red-tint shows the `.water` body sampling the scene-behind (island
   edge through it); grounded combine renders clean. Exact per-packet combine NOT machine-verified
   (subagent decode unreliable) — uses §5 structure + data-backed params.
-- **Vulkan parity — scoped, needs a render-pass split:** Vulkan draws opaque+water in ONE render pass
-  (subpasses under MSAA); you can't `vkCmdCopyImage` a colour attachment mid-pass, and subpass input
-  attachments can't do the distorted (offset) sample. So the world render pass must split into
-  opaque(+sky) → copy HDR colour → water (a frontend-orchestration refactor). Until then Vulkan keeps
-  §5's grounded alpha-blend refraction stand-in (a fidelity gap, not a correctness gap).
+- **Vulkan impl (done + verified, fcdc215):** Vulkan draws opaque+water in ONE render pass (subpasses
+  under MSAA) and can't `vkCmdCopyImage` a colour attachment mid-pass, and subpass input attachments
+  can't do the distorted (offset) sample. Rather than split the MSAA+HDR+subpass render pass (high
+  risk), Vulkan **re-renders opaque geometry with the normal camera** into an isolated refraction tile
+  (`render_refraction`, reusing the reflection render pass + pipeline; reads UBO slice 0 = the main VP
+  it already needs). New binding 9; one flag gates both water tiles. Water frag samples it with the
+  identical distorted-REFRACTION_SCALE + opacity-tint + opaque-output combine as D3D12. Pure-refraction
+  red-tint is pixel-consistent with D3D12. **Backend difference (documented, like the reflection
+  ownership asymmetry):** D3D12 copies the rendered scene (grab-pass); Vulkan re-renders opaque — both
+  yield the scene-behind refraction tile.
 
 ## Coordination rules
 - Only the environment session edits `native_world_renderer.cpp` / `native_vulkan_world_renderer.cpp`
