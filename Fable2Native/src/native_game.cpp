@@ -10,6 +10,51 @@ namespace {
 constexpr std::uint32_t kSaveMagic = 0x46325356u;
 }  // namespace
 
+bool NativeGame::enable_scripting() {
+    script_vm = std::make_unique<NativeScriptVM>();
+    if (!script_vm->valid()) {
+        script_vm.reset();
+        return false;
+    }
+    script_vm->set_user_data(this);
+
+    // Core native API (register-class-method pattern). A small grounded starter set from
+    // the Lua natives catalog classes (Debug/Game/Player/World); more bind on demand.
+    script_vm->register_native("Debug", "Log", [](NativeScriptVM& vm) -> int {
+        if (auto* g = static_cast<NativeGame*>(vm.user_data())) g->script_log.emplace_back(vm.arg_string(1));
+        return 0;
+    });
+    script_vm->register_native("Game", "Elapsed", [](NativeScriptVM& vm) -> int {
+        auto* g = static_cast<NativeGame*>(vm.user_data());
+        vm.push_number(g ? g->elapsed_seconds : 0.0);
+        return 1;
+    });
+    script_vm->register_native("Player", "GetPosition", [](NativeScriptVM& vm) -> int {
+        auto* g = static_cast<NativeGame*>(vm.user_data());
+        const std::array<float, 3> p = g ? g->player.position() : std::array<float, 3>{};
+        vm.push_number(p[0]); vm.push_number(p[1]); vm.push_number(p[2]);
+        return 3;
+    });
+    script_vm->register_native("World", "NpcCount", [](NativeScriptVM& vm) -> int {
+        auto* g = static_cast<NativeGame*>(vm.user_data());
+        vm.push_number(g ? static_cast<double>(g->world.npcs.size()) : 0.0);
+        return 1;
+    });
+
+    // Wire the three managers to their Lua Update entry points, in the retail-recovered
+    // order (Quest -> General -> AI). The Lua side owns its coroutine scheduling; the
+    // native tick just resumes each manager's Update each InWorld step. call_global is a
+    // no-op (returns false) until a loaded manager script defines the function.
+    NativeScriptVM* vm = script_vm.get();
+    script_systems.quest.enabled = true;
+    script_systems.quest.update = [vm](double dt) { vm->call_global("QuestUpdate", dt); };
+    script_systems.general.enabled = true;
+    script_systems.general.update = [vm](double dt) { vm->call_global("GeneralUpdate", dt); };
+    script_systems.ai.enabled = true;
+    script_systems.ai.update = [vm](double dt) { vm->call_global("AIUpdate", dt); };
+    return true;
+}
+
 std::vector<std::uint8_t> NativeGame::save_state() {
     WorldArchive ar(ArchiveMode::Write);
     std::uint32_t magic = kSaveMagic;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(Fable2Native LANGUAGES CXX)
+project(Fable2Native LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,6 +7,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(F2NATIVE_ASSETBROWSER_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/../Fable2AssetBrowser/source/src"
     CACHE PATH "Local AssetBrowser source used by optional research cookers")
+
+# Vendored Lua 5.1.5 (unmodified upstream, sha256 2640fc56...5333) — the game's scripts
+# are LuaQ = Lua 5.1 bytecode, so the embedded VM must be 5.1. Built as a static lib from
+# the embeddable library sources (the standalone lua.c/luac.c mains are excluded).
+file(GLOB LUA51_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lua-5.1.5/*.c")
+add_library(lua51 STATIC ${LUA51_SOURCES})
+target_include_directories(lua51 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lua-5.1.5")
+if(MSVC)
+    target_compile_definitions(lua51 PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(lua51 PRIVATE /wd4996 /wd4310 /wd4334 /wd4244 /wd4267 /wd4324)
+endif()
 
 add_library(f2native_core STATIC
     src/native_scene.cpp
@@ -21,6 +32,7 @@ add_library(f2native_core STATIC
     src/native_player.cpp
     src/native_animation.cpp
     src/native_npc.cpp
+    src/native_script.cpp
     src/native_frontend.cpp
     src/native_install.cpp
     src/native_cook.cpp
@@ -37,6 +49,9 @@ add_library(f2native_core STATIC
 target_include_directories(f2native_core PUBLIC include)
 # Vendored public-domain stb_truetype for the native font atlas (ImGui-free UI text).
 target_include_directories(f2native_core PRIVATE third_party)
+# Embedded Lua 5.1 VM (native_script.cpp). PRIVATE: lua headers stay out of the public
+# API (native_script.h keeps lua_State opaque), so consumers don't need the lua include.
+target_link_libraries(f2native_core PRIVATE lua51)
 
 # Dev builds locate the offline cookers (tools/cook_*.py) at the source tree; a shipped
 # installer bundles them next to the executable (see default_tools_dir()).

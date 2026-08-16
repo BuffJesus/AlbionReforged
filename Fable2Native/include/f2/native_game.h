@@ -9,10 +9,12 @@
 #include "native_camera.h"
 #include "native_player.h"
 #include "native_save.h"
+#include "native_script.h"
 
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 
 namespace f2 {
@@ -47,6 +49,10 @@ struct NativeGame {
     // Master gameplay tick driver (Quest -> General -> AI, retail-recovered order).
     ScriptSystems script_systems;
 
+    // Embedded Lua 5.1 VM (null until enable_scripting()). When enabled, the three
+    // script managers resume their Lua-side Update each InWorld tick.
+    std::unique_ptr<NativeScriptVM> script_vm;
+
     // Live entity graph seeded from the cooked scene; pushes transforms into
     // scene.instances[] each InWorld tick.
     NativeWorld world;
@@ -60,6 +66,9 @@ struct NativeGame {
     // Persisted game-flow state (chapter header + 150-bit quest completion + hero pos).
     NativeGameState game_state;
 
+    // Lines emitted by the Debug.Log native (observable output for scripts/tests).
+    std::vector<std::string> script_log;
+
     double elapsed_seconds = 0.0;
 
     bool load_scene(const std::filesystem::path& path, std::string& error);
@@ -68,6 +77,11 @@ struct NativeGame {
     // `scene` directly to enter the world without a file.
     void prepare_world();
     void tick(double delta_seconds);
+
+    // Create the Lua VM, register the core natives, and wire the Quest/General/AI
+    // managers to their Lua Update entry points (QuestUpdate/GeneralUpdate/AIUpdate).
+    // Opt-in (the app/tools/tests call it); returns false if the VM failed to boot.
+    bool enable_scripting();
 
     // Own-format save/restore (gamestate_save_restore.txt model; see native_save.h).
     // save_state serializes the game-flow state + the live entity delta into a byte blob.

@@ -13,6 +13,7 @@
 #include "f2/native_animation.h"
 #include "f2/native_save.h"
 #include "f2/native_npc.h"
+#include "f2/native_script.h"
 #include "f2/native_install.h"
 #include "f2/native_scene.h"
 #include "f2/native_texture.h"
@@ -774,6 +775,57 @@ int main() {
         f2::NativeWorld w2; w2.spawn_from_scene(s);
         w2.update_npcs(collision, {200.0f, 0.0f, 200.0f}, 1.0f / 60.0f);
         assert(!w2.npcs[0].controller.active);
+    }
+
+    // ---- P6: embedded Lua VM (native bindings + coroutines + manager wiring) ----
+    {
+        f2::NativeScriptVM vm;
+        assert(vm.valid());
+        struct Obs { int calls = 0; std::string last; };
+        Obs obs; vm.set_user_data(&obs);
+        // register-class-method: Debug.Log records, Math.Add round-trips args<->results.
+        vm.register_native("Debug", "Log", [](f2::NativeScriptVM& v) -> int {
+            auto* o = static_cast<Obs*>(v.user_data());
+            o->last = v.arg_string(1); o->calls++;
+            return 0;
+        });
+        vm.register_native("Math", "Add", [](f2::NativeScriptVM& v) -> int {
+            v.push_number(v.arg_number(1) + v.arg_number(2)); return 1;
+        });
+        assert(vm.run_source("Debug.Log('hi'); Debug.Log('there')"));
+        assert(obs.calls == 2 && obs.last == "there");
+        assert(vm.run_source("assert(Math.Add(2, 3) == 5)"));  // native round-trip through Lua
+
+        // Coroutine driven from the native side (the manager scheduling model).
+        assert(vm.run_source(
+            "co = coroutine.create(function() Debug.Log('a'); coroutine.yield(); Debug.Log('b') end)\n"
+            "function Step(dt) coroutine.resume(co) end"));
+        obs.calls = 0;
+        assert(vm.call_global("Step", 0.0) && obs.calls == 1 && obs.last == "a");  // ran to yield
+        assert(vm.call_global("Step", 0.0) && obs.calls == 2 && obs.last == "b");  // resumed past yield
+
+        // Errors are reported, not crashed.
+        assert(!vm.run_source("this is not valid lua") && !vm.last_error().empty());
+        assert(!vm.call_global("NoSuchFunction", 0.0));
+    }
+
+    // ---- P6: script managers wired into the NativeGame tick ----
+    {
+        f2::NativeGame game;
+        assert(game.enable_scripting());
+        // A manager script: AIUpdate logs + can query the world via a native.
+        assert(game.script_vm->run_source(
+            "function AIUpdate(dt) Debug.Log('ai:' .. tostring(World.NpcCount())) end"));
+        game.mode = f2::GameMode::InWorld;
+        game.external_input = true;
+        game.input = f2::InputState{};
+        game.tick(1.0 / 60.0);  // one fixed step -> Quest/General/AI -> AIUpdate runs
+        assert(!game.script_log.empty() && game.script_log.back() == "ai:0");
+        // Frontend mode does NOT tick the managers.
+        game.mode = f2::GameMode::Frontend;
+        const std::size_t before = game.script_log.size();
+        game.tick(1.0 / 60.0);
+        assert(game.script_log.size() == before);
     }
 
     // ---- Integration: full NativeGame InWorld tick (movement+NPC+combat+save) ----
