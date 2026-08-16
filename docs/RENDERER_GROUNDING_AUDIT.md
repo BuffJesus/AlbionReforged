@@ -33,60 +33,42 @@ the *spec's decision*, not invented at the shader:
 | Shadow depth bias | `0.0015` | standard shadow-acne bias (technique, not a look value) |
 | Sun horizon gate | `-0.05` | technical threshold: disable the shadow pass as the sun sets (not a visual value) |
 
-## C. WATER — mostly data-backed; the rest are DELIBERATE coupled deviations (CORRECTED 2026-08-16)
-Re-reading `ps_water` against `water_system_re.txt §3` (the 37-param `WaterFile::params` table) shows
-the water is **far more grounded than a keyword sweep suggests**. The sweep's "authored 0.5 blend" was a
-false positive (line 734 `0.5` is a hemisphere remap `y*0.5+0.5`, not a blend weight — the real blend is
-`refl_strength = water_params[7].y` = **param[29] REFLECTION_STRENGTH=0.75, data-backed**).
+## C. WATER — now the RETAIL technique, both backends (UPDATED 2026-08-16; was "analytic deviations")
+The town/ocean water is **retail program 57 = shader-table entry 65 (`PSHADER_OCEAN_WATER`)**, whose
+binding table declares a **reflection tile (`g_ReflectionSampler` c13)** AND a **refraction tile
+(`g_RefractionSampler` c14)** — both real textures (compilers strip unused samplers; `§5 step 1`'s dual
+bump-map fetch disproves a subagent decode that claimed the tiles were dead code). The native now
+implements that technique on **both backends** (reflection RTT, linear Fresnel, refraction tile), so the
+former "analytic deviations" are largely retired:
 
 DATA-BACKED (from `water_params[]` b2, WaterFile record):
 | Term | Source | Param |
 |---|---|---|
 | Fresnel bias | `water_params[0].x` | `[0] FRESNEL_BIAS` |
 | Reflection bias | `water_params[0].y` | `[1] REFLECTION_BIAS` |
-| Bump UV scale 0/1 | `water_params[1].zw / [2].xy` | `[6-9] NM_SCALE` |
+| Reflection / refraction scale | `[6].yz / [6].w,[7].x` | `[25/26] / [27/28]` |
 | Reflection strength | `water_params[7].y` | `[29] REFLECTION_STRENGTH` |
 | Glitter power / strength | `water_params[9].x / [8].w` | `[36]/[35] GLITTER_*` |
-| Surface / deep colour | `water_params[4-5]` | surface/deep colour |
+| Surface / deep colour, opacity | `water_params[4-5] / [9].y` | surface/deep colour + WaterTheme opacity |
 
-DELIBERATE DEVIATIONS (documented in-code, mutually coupled — do NOT "ground" piecemeal):
-| Constant | Value | Why it deviates |
+SHIPPED — now the retail technique (was the "clean-parity path"; see `RENDERER_INTERFACE.md §3`):
+| Feature | Grounding | Commits |
 |---|---|---|
-| Fresnel curve | Schlick `pow(1-N·V,5)` | spec's retail linear `saturate(1-N·V+bias)` assumes the near-horizontal `Nf` (NORMAL_SCALE=0.05); the native uses a broad `Nf` instead |
-| `Nf` up-scale | `1.0` (broad) not `0.05` | the spec's near-horizontal `Nf` + high-freq PF40 normal map = white-noise sparkle; broad `Nf` fixes it (comment lines 722-725) |
-| Ripple slope damp | `0.35` | same anti-noise damping of the summed bump normals |
-| Night fade / desat | `0.05,0.45 / 0.22, (.010,.018,.050)` | matches the atmosphere sky pass's night fade so water reflects the real night sky |
-| Distance fade / shoreline | `75.0 / 256.0` | HDR-less target compensations (no retail exposure/depth-edge stage in this pass) |
-| Glitter attenuation | `*0.25` | HDR-less: retail applies exposure the native pass lacks |
+| Planar **reflection** RTT (mirror-about-plane tile) | replaces analytic sky; retail `g_ReflectionSampler` c13 | `f8e0b8e` (D3D12) `fcd8d77` (Vk) |
+| **Fresnel** = `saturate(1 - N·V + FRESNEL_BIAS)` | `§5 step 3` linear form (retired the Schlick `pow(1-N·V,5)`) | `475b5a6` |
+| **Refraction** tile (scene behind, distorted by REFRACTION_SCALE) | retail `g_RefractionSampler` c14 (was an alpha-blend stand-in) | `5c35ddb` (D3D12) `fcdc215` (Vk) |
 
-These are a **coherent anti-noise / HDR-less approximation**, not sloppy guesses. Porting the retail
-fresnel formula alone would reintroduce the sparkle noise the broad-`Nf` choice removes (they are coupled).
-The only clean-parity path is the full planar-RTT water (below), which supplies a real reflection/refraction
-signal so the near-horizontal `Nf` no longer aliases.
+REMAINING minor deviations (inherent to the native's non-HDR target — NOT ungrounded guesses):
+- **Ripple slope damp `0.35`** + **broad `Nf`**: anti-alias the high-freq PF40 normal map (the spec's
+  near-horizontal `Nf` aliased the *analytic* reflection; with real tiles this could be revisited, low value).
+- **Glitter `*0.25`** / **distance-fade `75`**: compensate for the missing retail exposure/edge stage.
+- The exact per-packet program-57 combine was NOT machine-verified (the microcode subagent was
+  unreliable); the tile *usage* + all *values* are decomp-grounded, and the combine follows `§5`'s structure.
 
-**Assessment:** tiers A+B (all the *land* lighting) are grounded or spec-sanctioned — compliant. Tier C
-is confined to the **procedural water surface** shaping.
-
-**Water technique divergence (RESOLVED by disasm 2026-08-16, `Shaders.sbk` shader 62 `PSHADER_WATERPATCH`):**
-retail water is **planar RTT reflection/refraction**, NOT analytic. Its PS:
-- samples a **reflection buffer** (`g_ReflectionSampler` c13) + **refraction buffer** (`g_RefractionSampler`
-  c14) — each needs its own scene pass (mirrored / behind-surface).
-- `[30] fresnel = saturate(g_FresnelBias(c77) - N·V_term)` — a **bias**, not a `pow(x,k)` exponent.
-- `[31] o0 = lerp(refraction, reflection, fresnel)`.
-- Data-backed material params (from the WaterFile record, seen in the bank): `m_FresnelBias`,
-  `m_ReflectionScale/Strength`, `m_RefractionScale`, `m_SpecularReflectionFactor`,
-  `m_SurfaceWaterColour`, `m_DeepWaterColour`, `m_MaxRefractDistanceFactor`, `m_ReflectionBias`.
-
-Our native water is **analytic** (sky-color reflection + procedural fresnel + sun glitter) — a deliberate
-simplification that avoids the two extra RTT passes. Consequently the tier-C constants (`pow(fresnel,5.0)`,
-ripple `0.35`, etc.) have **no retail scalar equivalent** — retail's fresnel is a bias + RTT lerp, a
-different model. So they are NOT ungrounded guesses passed off as data; they are the analytic stand-in's
-shaping, and grounding them 1:1 is not possible without switching techniques.
-
-**The data-backed path to real parity** (opt-in, a real renderer feature, NOT started): implement planar
-reflection/refraction RTT (two extra scene passes + the two buffers) and drive it from the WaterFile
-`m_*` params above via `WaterConstants` (b2). Until then the analytic water stays as the documented
-simplification. Recorded so no session mistakes tier C for grounded values OR for sloppy guessing.
+**Assessment:** tiers A+B (land lighting) grounded/spec-sanctioned; tier C (water) now implements the
+retail reflection+refraction-tile + linear-Fresnel technique on both backends, with only a couple of
+HDR-less/anti-alias compensations remaining. (Earlier notes cited shader 62 `PSHADER_WATERPATCH` as the
+retail water — that's a *different* ocean-patch shader; the town/main water is program 57 / shader 65.)
 
 **Also recorded (see `env_ambient_fog_shader_re.txt` ADDENDUM 2026-08-16):** the retail world-fog block
 in material PS `shader[515]` was decoded — it is a height/distance fog + sun-directional inscatter via

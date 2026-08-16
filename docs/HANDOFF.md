@@ -1,5 +1,32 @@
 # Handoff — resume here
 
+## ▶▶▶ START HERE (2026-08-16 latest) — WATER FIDELITY = RETAIL TECHNIQUE, BOTH BACKENDS ✅
+Branch **`agent/native-gameplay-core`**. USER DIRECTIVE: *"data-backed, no guessing."* The town/ocean
+water now implements retail **program 57 = shader-table entry 65 (`PSHADER_OCEAN_WATER`)** — reflection
+tile + linear Fresnel + refraction tile — on **both backends**, replacing the old analytic stand-in.
+All screenshot-verified (red-tint A/B decisively shows tiles sampling the mirrored / behind scene;
+`scratchpad/shots/water_{d3d12,vulkan}_*`). See `docs/RENDERER_INTERFACE.md §3` + `RENDERER_GROUNDING_AUDIT.md §C`.
+- **Key decomp fact:** program 57's binding table declares `g_ReflectionSampler` (c13) AND
+  `g_RefractionSampler` (c14) — both real tiles. (A subagent microcode decode claimed "tiles are dead
+  code"; it was WRONG — `§5 step 1`'s dual bump fetch + the impossible slot-8 result disproved it. Verify
+  tfetch decodes, don't trust them blind.) Shader 62 `PSHADER_WATERPATCH` is a DIFFERENT ocean-patch
+  shader, NOT the town water — don't conflate.
+- **Shipped (commits):** planar **reflection** RTT `f8e0b8e`(D3D12)/`fcd8d77`(Vk); **Fresnel** linear
+  `saturate(1-N·V+FRESNEL_BIAS)` `475b5a6`; **refraction** tile `5c35ddb`(D3D12)/`fcdc215`(Vk).
+- **Backend asymmetry (intentional, like the shadow/reflection ownership split):** D3D12 refraction =
+  a grab-pass (`CopyResource` of the HDR scene between opaque+water in `render()`); Vulkan **re-renders
+  opaque** into an isolated tile (`render_refraction`, reuses the reflection render pass) because Vulkan
+  can't copy a colour attachment mid-render-pass. Both yield the scene-behind refraction tile.
+- **Data-backed params:** `REFLECTION_SCALE`=param[25/26], `REFRACTION_SCALE`=param[27/28],
+  `FRESNEL_BIAS`=param[0], `REFLECTION_STRENGTH`=param[29], `water_opacity`=param[9].y — all from the
+  `.water` file / WaterTheme via `WaterConstants` (b2).
+- **Honest caveat:** the exact per-packet program-57 combine was NOT machine-verified (unreliable
+  subagent decode); tile *usage* + all *values* are decomp-grounded, combine follows `§5`'s structure.
+- **Diagnostics:** `FABLE2NATIVE_NO_REFLECT` / `FABLE2NATIVE_NO_REFRACT` force the analytic fallback (D3D12).
+  Verify tool: `scratchpad/reflect_shot.ps1` (PID-targeted `PrintWindow`, works both backends).
+- **NEXT (optional):** a manual Xenos-ISA decode of program 57's [50]-[89] combine for packet-perfect
+  fidelity; or a shallow-water-over-terrain scene + free-camera to see through-water refraction directly.
+
 ## ▶▶▶ START HERE (2026-08-16) — SHADOW PARAMS PINNED FROM GAME DATA (R2 data component CLOSED)
 Branch **`agent/native-spec-maps-and-char`** (PR #3). USER DIRECTIVE this session: *"only data-supported
 implementations; decomp/RE if needed."* The just-shipped cast shadows used **guessed** params (strength 0.7);
