@@ -283,6 +283,17 @@ float NativeCollisionWorld::raycast_walls(const std::array<float, 3>& origin,
     return nearest;
 }
 
+bool NativeCollisionWorld::line_of_sight(const std::array<float, 3>& a,
+                                         const std::array<float, 3>& b) const {
+    std::array<float, 3> d{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    const float len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (len <= 1e-4f) return true;
+    d[0] /= len; d[1] /= len; d[2] /= len;
+    // Visible iff the nearest wall hit is at/after the target (small epsilon so a wall
+    // exactly at the target doesn't self-occlude).
+    return raycast_walls(a, d, len) >= len - 0.01f;
+}
+
 std::array<float, 3> NativeCollisionWorld::slide_move(const std::array<float, 3>& pos,
                                                       const std::array<float, 3>& delta,
                                                       float radius, float height) const {

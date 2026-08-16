@@ -12,6 +12,7 @@
 #include "f2/native_player.h"
 #include "f2/native_animation.h"
 #include "f2/native_save.h"
+#include "f2/native_npc.h"
 #include "f2/native_install.h"
 #include "f2/native_scene.h"
 #include "f2/native_texture.h"
@@ -705,6 +706,60 @@ int main() {
         cc.position = {0.0f, 0.0f, 0.0f};
         for (int i = 0; i < 120; ++i) cc.move(world, {5.0f, 0.0f}, 1.0f / 60.0f);  // +x
         assert(cc.position[0] < 5.0f - 0.5f + 0.001f);  // blocked before the box interior
+    }
+
+    // ---- P4 ACT: line-of-sight + NPC perception/LOD/motor ----
+    {
+        // Ground + a wall quad in the x=5 plane (z in [-3,3], y in [0,3]).
+        f2::NativeScene s;
+        f2::NativeMesh ground;
+        auto gv = [&](float x, float y, float z) {
+            f2::NativeVertex v; v.position = {x, y, z}; ground.vertices.push_back(v);
+        };
+        gv(-30, 0, -30); gv(30, 0, -30); gv(30, 0, 30); gv(-30, 0, 30);
+        ground.indices = {0, 1, 2, 0, 2, 3};
+        s.meshes.push_back(ground);
+        f2::NativeInstance gi; gi.mesh = 0; s.instances.push_back(gi);
+        f2::NativeMesh wall;
+        auto wv = [&](float x, float y, float z) {
+            f2::NativeVertex v; v.position = {x, y, z}; wall.vertices.push_back(v);
+        };
+        wv(5, 0, -3); wv(5, 0, 3); wv(5, 3, 3); wv(5, 3, -3);
+        wall.indices = {0, 1, 2, 0, 2, 3};
+        s.meshes.push_back(wall);
+        f2::NativeInstance wi; wi.mesh = 1; s.instances.push_back(wi);
+        f2::NativeCollisionWorld world; world.build_from_scene(s);
+
+        // line_of_sight: clear across open ground; blocked through the wall.
+        assert(world.line_of_sight({0, 1, 0}, {3, 1, 0}));          // both left of wall
+        assert(!world.line_of_sight({0, 1, 0}, {10, 1, 0}));        // crosses x=5 wall
+        assert(world.line_of_sight({0, 1, 0}, {0, 1, 10}));         // parallel, no wall
+
+        // NPC perception: sees a near target with clear LOS; not one behind the wall.
+        f2::NpcController npc;
+        npc.set_position({0, 0, 0});
+        assert(npc.can_see(world, {3, 0, 0}));      // clear + in range
+        assert(!npc.can_see(world, {10, 0, 0}));    // wall blocks
+        assert(!npc.can_see(world, {0, 0, 25}));    // out of sight_range (20)
+
+        // LOD gate: active near the centre, inactive far away.
+        assert(npc.update_lod({0, 0, 0}, 10.0f));
+        npc.set_position({0, 0, 50});
+        assert(!npc.update_lod({0, 0, 0}, 10.0f));
+
+        // Stand-in brain: player near + visible -> Notice (faces the player, holds).
+        npc.set_position({0, 0, 0});
+        npc.update(world, {0, 0, 3}, {0, 0, 0}, 50.0f, 1.0f / 60.0f);
+        assert(npc.state == f2::NpcState::Notice);
+        assert(approx(npc.position()[0], 0.0f));  // did not move while noticing
+
+        // Motor: patrol to a goal on open ground; arrives within a bounded number of steps.
+        npc.set_position({-8, 0, 8});
+        npc.set_patrol_goal({-2, 0, 8});
+        bool arrived = false;
+        for (int i = 0; i < 600 && !arrived; ++i)
+            arrived = npc.move_to(world, {-2, 0, 8}, 1.0f / 60.0f);
+        assert(arrived && npc.position()[0] > -3.0f);
     }
 
     // ---- P3: WorldArchive bidirectional primitives ----

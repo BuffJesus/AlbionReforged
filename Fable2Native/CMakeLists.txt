@@ -20,6 +20,7 @@ add_library(f2native_core STATIC
     src/native_camera.cpp
     src/native_player.cpp
     src/native_animation.cpp
+    src/native_npc.cpp
     src/native_frontend.cpp
     src/native_install.cpp
     src/native_cook.cpp

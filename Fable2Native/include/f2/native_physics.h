@@ -59,6 +59,13 @@ public:
     [[nodiscard]] float raycast_walls(const std::array<float, 3>& origin,
                                       const std::array<float, 3>& dir, float max_dist) const;
 
+    // True if no wall blocks the segment from `a` to `b` (a physics ray between two
+    // points). Backs NPC sight + player targeting — retail IsLineOfSight @0x82497830 /
+    // CECPerception CanDirectlySee @0x828BE650, which cast the same physics ray
+    // (npc_ai_brain_system.txt). Endpoints assumed already at eye/target height.
+    [[nodiscard]] bool line_of_sight(const std::array<float, 3>& a,
+                                     const std::array<float, 3>& b) const;
+
     [[nodiscard]] std::size_t wall_triangle_count() const noexcept { return walls_.size(); }
 
 private:
