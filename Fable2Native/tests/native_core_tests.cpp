@@ -7,6 +7,9 @@
 #include "f2/native_entity.h"
 #include "f2/native_world.h"
 #include "f2/native_gdb_hash.h"
+#include "f2/native_physics.h"
+#include "f2/native_camera.h"
+#include "f2/native_player.h"
 #include "f2/native_install.h"
 #include "f2/native_scene.h"
 #include "f2/native_texture.h"
@@ -658,6 +661,79 @@ int main() {
         assert(approx(s.instances[0].position[0], 10.0f));
         assert(approx(s.instances[0].position[1], 20.0f));
         assert(approx(s.instances[0].position[2], 30.0f));
+    }
+
+    // ---- P2: collision heightfield ground-clamp + collide-and-slide ----
+    {
+        // A flat 20x20 terrain quad at y=0 (two triangles), plus a wall box.
+        f2::NativeScene s;
+        f2::NativeMesh ground;
+        auto add_v = [&](float x, float y, float z) {
+            f2::NativeVertex v; v.position = {x, y, z}; ground.vertices.push_back(v);
+        };
+        add_v(-10.0f, 0.0f, -10.0f); add_v(10.0f, 0.0f, -10.0f);
+        add_v(10.0f, 0.0f, 10.0f);   add_v(-10.0f, 0.0f, 10.0f);
+        ground.indices = {0, 1, 2, 0, 2, 3};
+        s.meshes.push_back(ground);
+        f2::NativeInstance gi; gi.mesh = 0; s.instances.push_back(gi);
+        // A small wall block mesh (unit cube) placed at x=5.
+        f2::NativeMesh cube;
+        for (float xx : {-0.5f, 0.5f}) for (float yy : {0.0f, 2.0f}) for (float zz : {-0.5f, 0.5f}) {
+            f2::NativeVertex v; v.position = {xx, yy, zz}; cube.vertices.push_back(v);
+        }
+        cube.indices = {0, 1, 2};  // geometry irrelevant; AABB is what matters
+        s.meshes.push_back(cube);
+        f2::NativeInstance ci; ci.mesh = 1; ci.position = {5.0f, 0.0f, 0.0f}; s.instances.push_back(ci);
+
+        f2::NativeCollisionWorld world;
+        world.build_from_scene(s);
+        assert(world.has_terrain());
+        // Ground sample over the flat quad returns ~0.
+        float gy = world.sample_ground(0.0f, 0.0f, 3.0f);
+        assert(std::isfinite(gy) && approx(gy, 0.0f));
+
+        // Controller starts above ground, falls, and clamps to the terrain.
+        f2::CharacterController cc;
+        assert(approx(cc.config.capsule_radius, 1.0f));  // GROUNDED value
+        cc.position = {0.0f, 0.5f, 0.0f};
+        for (int i = 0; i < 30; ++i) cc.move(world, {0.0f, 0.0f}, 1.0f / 60.0f);
+        assert(cc.on_ground && approx(cc.position[1], 0.0f));
+
+        // Walking east into the wall box gets stopped/slid (x cannot pass the box face).
+        cc.position = {0.0f, 0.0f, 0.0f};
+        for (int i = 0; i < 120; ++i) cc.move(world, {5.0f, 0.0f}, 1.0f / 60.0f);  // +x
+        assert(cc.position[0] < 5.0f - 0.5f + 0.001f);  // blocked before the box interior
+    }
+
+    // ---- P2: follow-camera pose matches the renderer forward convention ----
+    {
+        f2::CameraController cam;
+        cam.yaw = 0.0f; cam.pitch = 0.0f;
+        cam.config.distance = 4.0f; cam.config.height = 1.6f;
+        std::array<float, 3> hero{0.0f, 0.0f, 0.0f};
+        cam.update(hero, {0.0f, 0.0f}, /*mouse*/ false, 1.0f / 60.0f);
+        // yaw=pitch=0 -> forward = (0,0,1); camera pulls back along -z from target.
+        assert(approx(cam.target[1], 1.6f));
+        assert(approx(cam.position[2], -4.0f));
+        assert(approx(cam.position[1], 1.6f));
+        assert(approx(cam.fov_y(), 1.22171938f));  // GROUNDED 70deg
+        // Right-stick yaw integrates over time.
+        float y0 = cam.yaw;
+        cam.update(hero, {1.0f, 0.0f}, false, 0.1f);
+        assert(cam.yaw > y0);
+    }
+
+    // ---- P2: player camera-relative desired velocity ----
+    {
+        // Facing yaw=0 (forward = +z). Pushing forward (move.y=1) -> +z velocity.
+        auto v = f2::NativePlayer::desired_velocity({0.0f, 1.0f}, 0.0f, 2.5f);
+        assert(approx(v[0], 0.0f) && approx(v[1], 2.5f));
+        // Strafe right (move.x=1) at yaw=0 -> +x velocity.
+        v = f2::NativePlayer::desired_velocity({1.0f, 0.0f}, 0.0f, 2.5f);
+        assert(approx(v[0], 2.5f) && approx(v[1], 0.0f));
+        // Yaw 90deg rotates "forward" to +x.
+        v = f2::NativePlayer::desired_velocity({0.0f, 1.0f}, 3.14159265f / 2.0f, 2.0f);
+        assert(approx(v[0], 2.0f) && std::abs(v[1]) < 1e-4f);
     }
 
     std::filesystem::remove(path);

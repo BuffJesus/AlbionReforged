@@ -1,6 +1,7 @@
 #include "f2/native_game.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace f2 {
 
@@ -15,6 +16,20 @@ bool NativeGame::load_scene(const std::filesystem::path& path, std::string& erro
     // Seed the live entity graph from the cooked baseline (one entity per instance,
     // Transform + GraphicAppearanceStaticMesh). Sim only advances it when InWorld.
     world.spawn_from_scene(scene);
+
+    // Build static collision (AABBs + terrain heightfield) and place the hero at the
+    // RE'd PlayerStart (SimpleTransformComponent). Camera starts behind the hero's yaw.
+    collision.build_from_scene(scene);
+    std::array<float, 3> start = scene.has_hero_start ? scene.hero_start
+                                                      : std::array<float, 3>{0.0f, 0.0f, 0.0f};
+    if (scene.has_hero_start) {
+        const float gy = collision.sample_ground(start[0], start[2], start[1] + 2.0f);
+        if (std::isfinite(gy)) start[1] = gy;
+    }
+    player = NativePlayer{};
+    player.set_position(start);
+    camera_controller.yaw = scene.hero_yaw;
+    camera_controller.pitch = -0.3f;
     return true;
 }
 
@@ -37,7 +52,22 @@ void NativeGame::tick(double delta_seconds) {
         frontend.tick(simulation_step);
         if (mode == GameMode::InWorld) {
             script_systems.tick(simulation_step);
-            // P2: entity/brain -> movement -> collision -> camera here.
+
+            // Movement: camera-relative input -> desired velocity -> collide-and-slide.
+            player.update(collision, input, camera_controller.yaw,
+                          static_cast<float>(simulation_step));
+
+            // Camera follows the moved hero (look from right-stick or mouse).
+            if (camera_controller.mode == CameraMode::Follow) {
+                const bool look_is_mouse = input.last_active_device == InputDevice::KeyboardMouse;
+                camera_controller.update(player.position(), input.look, look_is_mouse,
+                                         static_cast<float>(simulation_step));
+                // Feed the follow pose into NativeCamera (the renderer reads pos/yaw/pitch).
+                camera.position = camera_controller.position;
+                camera.yaw = camera_controller.yaw;
+                camera.pitch = camera_controller.pitch;
+            }
+
             // Final step: push live entity transforms into the render scene.
             world.sync_to_scene(scene);
         }

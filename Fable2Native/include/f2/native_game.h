@@ -5,6 +5,9 @@
 #include "native_input_state.h"
 #include "native_script_systems.h"
 #include "native_world.h"
+#include "native_physics.h"
+#include "native_camera.h"
+#include "native_player.h"
 
 #include <array>
 #include <cstdint>
@@ -43,6 +46,12 @@ struct NativeGame {
     // Live entity graph seeded from the cooked scene; pushes transforms into
     // scene.instances[] each InWorld tick.
     NativeWorld world;
+
+    // P2 gameplay: static collision built from the scene, the controllable hero, and
+    // the follow camera. Active only InWorld (CameraMode::Free restores the free-fly cam).
+    NativeCollisionWorld collision;
+    NativePlayer player;
+    CameraController camera_controller;
 
     double elapsed_seconds = 0.0;
 
