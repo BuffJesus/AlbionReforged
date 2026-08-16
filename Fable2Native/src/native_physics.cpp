@@ -34,6 +34,7 @@ void NativeCollisionWorld::build_from_scene(const NativeScene& scene) {
     boxes_.clear();
     grid_.clear();
     grid_dim_ = 0;
+    terrain_box_ = -1;
 
     // 1) Per-instance world AABBs (walls) from transformed mesh vertex bounds.
     // 2) Pick the largest-footprint mesh instance as the terrain for the heightfield.
@@ -63,7 +64,11 @@ void NativeCollisionWorld::build_from_scene(const NativeScene& scene) {
         boxes_.push_back(Aabb{bmin, bmax});
 
         const float area = (bmax[0] - bmin[0]) * (bmax[2] - bmin[2]);
-        if (area > terrain_area) { terrain_area = area; terrain_instance = i; }
+        if (area > terrain_area) {
+            terrain_area = area;
+            terrain_instance = i;
+            terrain_box_ = static_cast<int>(boxes_.size()) - 1;  // box index != instance index
+        }
     }
 
     // Build a heightfield grid from the terrain instance's triangles (max Y per cell).
@@ -72,10 +77,10 @@ void NativeCollisionWorld::build_from_scene(const NativeScene& scene) {
     const NativeMesh& tmesh = scene.meshes[tinst.mesh];
     if (tmesh.indices.size() < 3) return;
 
-    const float minx = boxes_[terrain_instance].min[0];
-    const float minz = boxes_[terrain_instance].min[2];
-    const float extx = boxes_[terrain_instance].max[0] - minx;
-    const float extz = boxes_[terrain_instance].max[2] - minz;
+    const float minx = boxes_[terrain_box_].min[0];
+    const float minz = boxes_[terrain_box_].min[2];
+    const float extx = boxes_[terrain_box_].max[0] - minx;
+    const float extz = boxes_[terrain_box_].max[2] - minz;
     const float ext = std::max(extx, extz);
     if (ext <= 0.0f) return;
 
@@ -158,7 +163,9 @@ std::array<float, 3> NativeCollisionWorld::slide_move(const std::array<float, 3>
     std::array<float, 3> np{pos[0] + delta[0], pos[1] + delta[1], pos[2] + delta[2]};
     // Axis-aligned pushout against any box the capsule (radius, full height) penetrates
     // horizontally. Single pass = collide-and-slide (movement along the box face survives).
-    for (const Aabb& box : boxes_) {
+    for (std::size_t bi = 0; bi < boxes_.size(); ++bi) {
+        if (static_cast<int>(bi) == terrain_box_) continue;  // ground = heightfield, not a wall
+        const Aabb& box = boxes_[bi];
         // Vertical overlap gate: only boxes near the capsule's height band collide.
         if (np[1] + 2.0f < box.min[1] || np[1] - 0.1f > box.max[1]) continue;
         float minx = box.min[0] - radius, maxx = box.max[0] + radius;

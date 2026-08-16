@@ -58,6 +58,9 @@ public:
 
 private:
     std::vector<Aabb> boxes_;
+    // The terrain instance's box index (ground, resolved by the heightfield) — excluded
+    // from wall collision so a spawn on the terrain isn't ejected by its huge AABB.
+    int terrain_box_ = -1;
 
     // Uniform heightfield grid over the terrain XZ bounds (max terrain Y per cell).
     std::vector<float> grid_;   // grid_dim_ * grid_dim_, NaN = empty
