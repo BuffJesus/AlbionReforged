@@ -55,6 +55,17 @@ public:
                        std::uint32_t width,
                        std::uint32_t height,
                        double elapsed_seconds);
+    // Planar reflection pass (retail g_ReflectionSampler, PSHADER_WATERPATCH): replay opaque
+    // geometry MIRRORED about the water plane into a renderer-owned colour RT (own render pass, like
+    // the shadow pass), then the water frag samples it. Call BEFORE the world render pass. No-op if
+    // the scene has no water. D3D12 parity (there the target is frontend-owned; here renderer-owned,
+    // matching the shadow-pass ownership asymmetry).
+    void render_reflection(VkCommandBuffer command_buffer,
+                           std::uint32_t width,
+                           std::uint32_t height,
+                           double elapsed_seconds);
+    [[nodiscard]] bool has_water() const noexcept { return has_water_; }
+    [[nodiscard]] float water_plane_y() const noexcept { return water_plane_y_; }
     // Sun ortho view-projection used for the shadow map (fits a box around the scene along the sun
     // travel dir, standard Z in [0,1]). Public so the shadow pass and frag term share it. Mirrors
     // the D3D12 renderer's compute_light_view_projection.
@@ -103,6 +114,8 @@ public:
 
     // Square sun shadow-map resolution (retail Render ShadowBuffers). Matches the D3D12 kShadowSize.
     static constexpr std::uint32_t kShadowSize = 2048;
+    // Square planar reflection RT resolution. Matches the D3D12 kReflectionSize.
+    static constexpr std::uint32_t kReflectionSize = 1024;
 
 private:
     VkDevice device_ = VK_NULL_HANDLE;
@@ -118,6 +131,25 @@ private:
     VkFramebuffer shadow_framebuffer_ = VK_NULL_HANDLE;
     VkPipeline shadow_pipeline_ = VK_NULL_HANDLE;  // depth-only
     bool shadow_ready_ = false;
+    // Planar reflection RT (renderer-owned, like the shadow map): a colour image + its own depth,
+    // an own render pass/framebuffer, a linear sampler, and a pipeline (world shaders, single-sample).
+    VkImage reflection_image_ = VK_NULL_HANDLE;
+    VkDeviceMemory reflection_memory_ = VK_NULL_HANDLE;
+    VkImageView reflection_view_ = VK_NULL_HANDLE;
+    VkSampler reflection_sampler_ = VK_NULL_HANDLE;
+    VkImage reflection_depth_image_ = VK_NULL_HANDLE;
+    VkDeviceMemory reflection_depth_memory_ = VK_NULL_HANDLE;
+    VkImageView reflection_depth_view_ = VK_NULL_HANDLE;
+    VkRenderPass reflection_render_pass_ = VK_NULL_HANDLE;
+    VkFramebuffer reflection_framebuffer_ = VK_NULL_HANDLE;
+    VkPipeline reflection_pipeline_ = VK_NULL_HANDLE;
+    bool reflection_ready_ = false;
+    // Derived single water plane (render Y) = radius-weighted mean of the water draw ranges (phase 1;
+    // multi-height canals collapse here). Second UBO slice carries the reflected VP (dynamic offset).
+    bool has_water_ = false;
+    float water_plane_y_ = 0.0f;
+    VkDeviceSize reflection_ubo_offset_ = 0;  // dynamic offset of the reflection Camera UBO slice
+    void* mapped_reflection_constants_ = nullptr;
     VkBuffer vertex_buffer_ = VK_NULL_HANDLE;
     VkDeviceMemory vertex_memory_ = VK_NULL_HANDLE;
     VkBuffer index_buffer_ = VK_NULL_HANDLE;

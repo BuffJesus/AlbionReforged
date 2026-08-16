@@ -34,6 +34,7 @@ layout(set = 0, binding = 5) uniform Water {
 } water_params;
 layout(set = 0, binding = 6) uniform sampler2D sceneDepth;
 layout(set = 0, binding = 7) uniform sampler2DShadow shadowMap;  // sun shadow depth (t4-equivalent)
+layout(set = 0, binding = 8) uniform sampler2D reflectionTex;    // planar reflection RT (g_ReflectionSampler)
 
 // Sun shadow factor at a world position: 1 = lit, 0 = fully shadowed. Projects world_pos into the
 // light's ortho clip space, then 3x3 PCF against the shadow depth. Mirrors the D3D12 sun_shadow():
@@ -56,9 +57,10 @@ layout(push_constant) uniform Push {
     uint is_water;
     uint has_scene_depth;
     uint is_character;
-    uint _padding;
+    uint reflection_enabled;   // water pass: sample reflectionTex instead of the analytic sky
     vec4 character_offset;
     vec4 character_motion;
+    vec4 clip_plane;           // reflection pass: xyz=plane normal, w=-planeY (0 => no discard)
 } pc;
 layout(location = 0) out vec4 out_color;
 
@@ -100,9 +102,20 @@ vec4 water() {
     // rendered night sky (camera.sun_direction = light-travel dir; sun below horizon -> night).
     float wnight = clamp((camera.sun_direction.y + 0.05) / 0.45, 0.0, 1.0);
     sky = mix(sky, sky * 0.22 + vec3(0.010, 0.018, 0.050), wnight);
+    // Planar reflection (retail PSHADER_WATERPATCH g_ReflectionSampler): when a reflection RT is
+    // bound (reflection_enabled) sample the MIRRORED opaque scene by screen-space uv, perturbed by
+    // the bump normal (data-backed REFLECTION_SCALE param[25/26] = params[6].yz; the 0.02 screen
+    // conversion is authored — retail perturbs a reflection tile). Needs sceneDepth for the screen
+    // dims; otherwise falls back to the analytic sky. Mirrors the D3D12 ps_water reflection sample.
+    vec3 reflection = sky;
+    if (pc.reflection_enabled != 0u && pc.has_scene_depth != 0u) {
+        vec2 refl_uv = clamp(gl_FragCoord.xy / vec2(textureSize(sceneDepth, 0)) +
+                             nxy * water_params.params[6].yz * 0.02, vec2(0.0), vec2(1.0));
+        reflection = texture(reflectionTex, refl_uv).rgb;
+    }
     float refl_strength = clamp(water_params.params[7].y, 0.0, 1.0);
     float refl = refl_strength * mix(fres_reflect, 1.0, distf);
-    vec3 col = watercol * (1.0 - refl_strength) + sky * refl;
+    vec3 col = watercol * (1.0 - refl_strength) + reflection * refl;
     vec3 L = normalize(camera.sun_direction.xyz);
     vec3 Ng = Nf;
     // The authored PF40 normal map supplies the water ripple detail and glitter response.
@@ -136,6 +149,9 @@ vec4 water() {
 }
 
 void main() {
+    // Reflection pass clip plane: drop geometry on the far side of the water plane (submerged) so it
+    // doesn't leak into the mirror. clip_plane is 0 in every other pass (0 < 0 is false → no discard).
+    if (dot(world_pos, pc.clip_plane.xyz) + pc.clip_plane.w < 0.0) discard;
     if (pc.is_water != 0u) { out_color = water(); return; }
     vec4 base = color * texture(albedo, uv);
     if (base.a < 0.5) discard;  // foliage alpha cutout

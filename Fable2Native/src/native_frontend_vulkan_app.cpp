@@ -2070,6 +2070,12 @@ private:
         if (game_.frontend.state() == f2::FrontendState::World) {
             world_renderer_.render_shadow(command_buffers_[image_index], extent_.width,
                                           extent_.height, game_.elapsed_seconds);
+            // Planar reflection pass (retail g_ReflectionSampler): replay opaque geometry mirrored
+            // about the water plane into the renderer-owned reflection RT, in its OWN render pass (like
+            // the shadow pass), leaving it SHADER_READ_ONLY for the water frag (binding 8). No-op when
+            // the scene has no water. Mirrors the D3D12 frontend wiring.
+            world_renderer_.render_reflection(command_buffers_[image_index], extent_.width,
+                                              extent_.height, game_.elapsed_seconds);
         }
         VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         pass.renderPass = use_hdr ? hdr_render_pass_ : render_pass_;
