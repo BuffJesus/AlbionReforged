@@ -17,6 +17,8 @@
 
 namespace f2 {
 
+class WorldArchive;  // native_save.h
+
 struct NativeWorld {
     EntityManager entities;
     NativeEntity* hero = nullptr;
@@ -30,6 +32,14 @@ struct NativeWorld {
     // tick's final "sync entity transforms -> renderer" step). Cheap; only touches
     // instances an entity is bound to.
     void sync_to_scene(NativeScene& scene) const;
+
+    // Bidirectional entity-graph delta (retail provider vtbl+0x10; gamestate_save_restore
+    // §A.3/§B.1). WRITE: walk live entities, emit per-entity {uid, per-component
+    // length-framed blob}. READ: reconstruct the baseline first (spawn_from_scene), then
+    // overlay each record onto the entity matched by UID; unknown entities/components are
+    // skipped via the length frame. Assumes the SAME cooked baseline on load (the delta
+    // premise, §D).
+    void serialize(WorldArchive& ar);
 
     void clear();
 };

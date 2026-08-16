@@ -1,5 +1,7 @@
 #include "f2/native_world.h"
 
+#include "f2/native_save.h"
+
 #include <cstddef>
 
 namespace f2 {
@@ -58,6 +60,62 @@ void NativeWorld::sync_to_scene(NativeScene& scene) const {
         scene.instances[si].position = transform->position;
         scene.instances[si].rotation = transform->rotation;
         scene.instances[si].scale = transform->scale;
+    }
+}
+
+void NativeWorld::serialize(WorldArchive& ar) {
+    // Per-entity records keyed by UID, each carrying length-framed per-component blobs.
+    // The direction lives in the archive; the graph iteration itself branches on it (as
+    // the retail provider vtbl+0x10 does internally).
+    if (!ar.reading()) {
+        // WRITE: walk the live entities (dense UID 1..count).
+        const std::size_t count = entities.entity_count();
+        std::uint32_t record_count = static_cast<std::uint32_t>(count);
+        ar.visit(record_count);
+        for (std::uint64_t uid = 1; uid <= count; ++uid) {
+            const NativeEntity* e = entities.find(uid);
+            if (!e) continue;
+            std::uint64_t key = e->uid;
+            ar.visit(key);
+            std::uint32_t comp_count = static_cast<std::uint32_t>(e->component_count());
+            ar.visit(comp_count);
+            e->for_each_component([&](std::uint8_t type_id, NativeComponent* comp) {
+                std::uint8_t tid = type_id;
+                ar.visit(tid);
+                // Serialize the component into its own blob, then length-frame it so a
+                // reader with a different baseline can skip an unknown component.
+                WorldArchive sub(ArchiveMode::Write);
+                comp->serialize(sub);
+                std::vector<std::uint8_t> blob = sub.take();
+                std::uint32_t len = static_cast<std::uint32_t>(blob.size());
+                ar.visit(len);
+                ar.write_bytes(blob);
+            });
+        }
+    } else {
+        // READ: overlay each record onto the already-rebuilt baseline entity (by UID).
+        std::uint32_t record_count = 0;
+        ar.visit(record_count);
+        for (std::uint32_t r = 0; r < record_count && ar.ok(); ++r) {
+            std::uint64_t key = 0;
+            ar.visit(key);
+            std::uint32_t comp_count = 0;
+            ar.visit(comp_count);
+            NativeEntity* e = entities.find(key);
+            for (std::uint32_t c = 0; c < comp_count && ar.ok(); ++c) {
+                std::uint8_t tid = 0;
+                ar.visit(tid);
+                std::uint32_t len = 0;
+                ar.visit(len);
+                std::vector<std::uint8_t> blob = ar.read_bytes(len);
+                NativeComponent* comp = e ? e->component_by_typeid(tid) : nullptr;
+                if (comp) {
+                    WorldArchive sub(std::move(blob));
+                    comp->serialize(sub);  // overlay onto the baseline component
+                }
+                // else: unknown entity/component -> blob already consumed, skip.
+            }
+        }
     }
 }
 

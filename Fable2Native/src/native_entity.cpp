@@ -1,8 +1,26 @@
 #include "f2/native_entity.h"
 
+#include "f2/native_save.h"
+
 #include <algorithm>
 
 namespace f2 {
+
+// ---------------- Component serialization (save/load delta) ----------------
+
+void TransformComponent::serialize(WorldArchive& ar) {
+    ar.visit(position);
+    ar.visit(rotation);
+    ar.visit(scale);
+}
+
+void VillagerComponent::serialize(WorldArchive& ar) {
+    ar.visit_i32(age);
+    ar.visit_i32(gender);
+    ar.visit_i32(job);
+    ar.visit(rich);
+    ar.visit(job_tag);
+}
 
 // ---------------- ComponentRegistry ----------------
 

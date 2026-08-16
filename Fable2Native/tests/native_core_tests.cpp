@@ -11,6 +11,7 @@
 #include "f2/native_camera.h"
 #include "f2/native_player.h"
 #include "f2/native_animation.h"
+#include "f2/native_save.h"
 #include "f2/native_install.h"
 #include "f2/native_scene.h"
 #include "f2/native_texture.h"
@@ -704,6 +705,86 @@ int main() {
         cc.position = {0.0f, 0.0f, 0.0f};
         for (int i = 0; i < 120; ++i) cc.move(world, {5.0f, 0.0f}, 1.0f / 60.0f);  // +x
         assert(cc.position[0] < 5.0f - 0.5f + 0.001f);  // blocked before the box interior
+    }
+
+    // ---- P3: WorldArchive bidirectional primitives ----
+    {
+        f2::WorldArchive w(f2::ArchiveMode::Write);
+        std::uint32_t u = 0xDEADBEEFu;
+        float f = 3.5f;
+        std::array<float, 3> v{1.0f, 2.0f, 3.0f};
+        std::string s = "childhood";
+        std::bitset<150> bits;
+        bits.set(3); bits.set(77); bits.set(149);
+        bool flag = true;
+        int enumv = 7;
+        w.visit(u); w.visit(f); w.visit(v); w.visit(s); w.visit(bits); w.visit(flag); w.visit_i32(enumv);
+        auto blob = w.take();
+
+        f2::WorldArchive r(blob);
+        std::uint32_t u2 = 0; float f2v = 0; std::array<float, 3> v2{}; std::string s2;
+        std::bitset<150> bits2; bool flag2 = false; int enumv2 = 0;
+        r.visit(u2); r.visit(f2v); r.visit(v2); r.visit(s2); r.visit(bits2); r.visit(flag2); r.visit_i32(enumv2);
+        assert(r.ok());
+        assert(u2 == 0xDEADBEEFu && approx(f2v, 3.5f));
+        assert(approx(v2[0], 1.0f) && approx(v2[2], 3.0f) && s2 == "childhood");
+        assert(bits2.test(3) && bits2.test(77) && bits2.test(149) && !bits2.test(0));
+        assert(flag2 && enumv2 == 7);
+        // Reading past the end sets ok()=false (graceful truncation).
+        std::uint32_t overrun = 0; r.visit(overrun); assert(!r.ok());
+    }
+
+    // ---- P3: game save/restore round-trip (delta over the baseline) ----
+    {
+        f2::NativeScene s;
+        f2::NativeMesh hero_mesh; hero_mesh.name = "hero0"; s.meshes.push_back(hero_mesh);
+        f2::NativeMesh npc_mesh;  npc_mesh.name = "npc0_0"; s.meshes.push_back(npc_mesh);
+        f2::NativeInstance hi; hi.mesh = 0; hi.position = {5.0f, 0.0f, 5.0f}; s.instances.push_back(hi);
+        f2::NativeInstance ni; ni.mesh = 1; ni.position = {0.0f, 0.0f, 0.0f}; s.instances.push_back(ni);
+
+        f2::NativeGame game;
+        game.scene = s;
+        game.world.spawn_from_scene(game.scene);      // baseline
+        game.player.set_position({5.0f, 0.0f, 5.0f});
+
+        // Mutate: move player + a villager's job + set quest bits + chapter.
+        game.player.set_position({42.0f, 1.0f, -7.0f});
+        game.game_state.header.chapter = 2;
+        game.game_state.quest_completion.set(10);
+        game.game_state.quest_completion.set(120);
+        auto* npc = game.world.entities.find(2);
+        assert(npc != nullptr);
+        auto* v = npc->get<f2::VillagerComponent>(f2::kTypeIdVillager);
+        assert(v != nullptr);
+        v->job = 4; v->age = 2; v->job_tag = "BLACKSMITH";
+        auto* npc_tf = npc->get<f2::TransformComponent>(f2::kTypeIdTransform);
+        npc_tf->position = {9.0f, 0.0f, 9.0f};
+
+        auto blob = game.save_state();
+        assert(!blob.empty());
+
+        // Fresh game, same baseline, then load the delta.
+        f2::NativeGame game2;
+        game2.scene = s;
+        game2.world.spawn_from_scene(game2.scene);
+        assert(game2.player.position()[0] == 5.0f);  // baseline before load
+        assert(game2.load_state(blob));
+
+        // Restored: player, chapter, quest bits, villager fields, moved transform.
+        assert(approx(game2.player.position()[0], 42.0f) && approx(game2.player.position()[2], -7.0f));
+        assert(game2.game_state.header.chapter == 2);
+        assert(game2.game_state.quest_completion.test(10) && game2.game_state.quest_completion.test(120));
+        assert(!game2.game_state.quest_completion.test(11));
+        auto* npc2 = game2.world.entities.find(2);
+        auto* v2b = npc2->get<f2::VillagerComponent>(f2::kTypeIdVillager);
+        assert(v2b->job == 4 && v2b->age == 2 && v2b->job_tag == "BLACKSMITH");
+        auto* tf2 = npc2->get<f2::TransformComponent>(f2::kTypeIdTransform);
+        assert(approx(tf2->position[0], 9.0f) && approx(tf2->position[2], 9.0f));
+
+        // A corrupt/short blob is rejected, not crashed.
+        std::vector<std::uint8_t> bad{1, 2, 3};
+        f2::NativeGame game3; game3.scene = s; game3.world.spawn_from_scene(game3.scene);
+        assert(!game3.load_state(bad));
     }
 
     // ---- P5: runtime animation player (skin math + playback + interpolation) ----

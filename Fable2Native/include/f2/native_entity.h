@@ -33,6 +33,7 @@
 namespace f2 {
 
 class NativeEntity;
+class WorldArchive;  // native_save.h — the bidirectional save/load visitor
 
 // Component typeIds (from gdb_component_registry.txt, decomp-verified).
 enum ComponentTypeId : std::uint8_t {
@@ -60,6 +61,11 @@ public:
     // Read GDB fields into the live object (P2+ once records are cooked). Inert now.
     virtual void init_from_gdb() {}
     virtual void on_post_create(NativeEntity& /*entity*/) {}
+    // Bidirectional save/load of this component's PERSISTENT delta over the GDB baseline
+    // (retail LoadFromStream vtbl+0x24 + its save twin, unified into one visitor —
+    // gamestate_save_restore.txt §C.1/§E.1). Default no-op = a transient component that
+    // carries no save state. Only fields that CHANGE from the baseline are visited.
+    virtual void serialize(WorldArchive& /*ar*/) {}
 };
 
 // TransformComponent — the entity's world transform (position sourced from the
@@ -70,6 +76,7 @@ public:
     std::array<float, 3> rotation{0.0f, 0.0f, 0.0f};  // euler (matches NativeInstance.rotation)
     float scale = 1.0f;
     [[nodiscard]] std::uint8_t type_id() const noexcept override { return kTypeIdTransform; }
+    void serialize(WorldArchive& ar) override;  // position/rotation/scale delta
 };
 
 // GraphicAppearanceStaticMeshComponent — binds the entity to a drawn NativeScene
@@ -95,6 +102,7 @@ public:
     bool rich = false;       // Rich bool (0x026A39B3)
     std::string job_tag;     // JobTag string (0x7FA702D2), e.g. TEXT_CHARACTER_OCCUPATION_*
     [[nodiscard]] std::uint8_t type_id() const noexcept override { return kTypeIdVillager; }
+    void serialize(WorldArchive& ar) override;  // age/gender/job/rich/job_tag
 };
 
 // InertComponent — a registered-but-unimplemented component that carries its retail
@@ -153,6 +161,13 @@ public:
     template <class T>
     [[nodiscard]] T* get(std::uint8_t type_id) const noexcept {
         return static_cast<T*>(component_by_typeid(type_id));
+    }
+
+    // Visit each component in typeId order: f(typeId, NativeComponent*). Used by the
+    // save walk to emit per-component records.
+    template <class F>
+    void for_each_component(F&& f) const {
+        for (const auto& entry : components_) f(entry.first, entry.second.get());
     }
 
     [[nodiscard]] std::size_t component_count() const noexcept { return components_.size(); }

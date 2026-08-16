@@ -5,6 +5,33 @@
 
 namespace f2 {
 
+namespace {
+// Own-format save magic + version gate ("F2SV"). Bumped when the format changes.
+constexpr std::uint32_t kSaveMagic = 0x46325356u;
+}  // namespace
+
+std::vector<std::uint8_t> NativeGame::save_state() {
+    WorldArchive ar(ArchiveMode::Write);
+    std::uint32_t magic = kSaveMagic;
+    ar.visit(magic);
+    game_state.hero_position = player.position();
+    game_state.serialize(ar);   // header + quest bitfield + hero position
+    world.serialize(ar);        // live entity delta
+    return ar.take();
+}
+
+bool NativeGame::load_state(const std::vector<std::uint8_t>& data) {
+    WorldArchive ar(data);
+    std::uint32_t magic = 0;
+    ar.visit(magic);
+    if (magic != kSaveMagic) return false;
+    game_state.serialize(ar);
+    if (game_state.header.version != 1) return false;  // future-version gate
+    player.set_position(game_state.hero_position);
+    world.serialize(ar);  // overlay the delta onto the current (rebuilt) baseline
+    return ar.ok();
+}
+
 bool NativeGame::load_scene(const std::filesystem::path& path, std::string& error) {
     elapsed_seconds = 0.0;
     simulation_accumulator_ = 0.0;
