@@ -50,8 +50,12 @@ bool NativeGame::enable_scripting() {
 int NativeGame::boot_game_scripts(const std::filesystem::path& data_root) {
     if (!script_vm) return -1;
     script_bnk = std::make_unique<BnkReader>();
+    // Prefer the cooked native script package (tools/cook_scripts.py output) when present — the
+    // port-plan "consume the native package" path (docs/NATIVE_PORT_PLAN.md): decompressed once
+    // at install, so boot skips per-entry zlib. Fall back to decompressing the raw user BNK.
+    const auto cooked_dir = data_root / "cooked" / "scripts";
     const auto bnk_path = data_root / "data" / "gamescripts_r.bnk";
-    if (!script_bnk->open(bnk_path.string())) {
+    if (!script_bnk->open_cooked(cooked_dir.string()) && !script_bnk->open(bnk_path.string())) {
         script_bnk.reset();
         return -1;
     }

@@ -28,9 +28,21 @@ class BnkReader {
 public:
     // Read + parse the BNK at `path`. Returns false + sets error() on any failure.
     bool open(const std::string& path);
-    [[nodiscard]] bool is_open() const noexcept { return !file_.empty() && !entries_.empty(); }
+
+    // Open a COOKED script package produced by tools/cook_scripts.py: a directory of already-
+    // decompressed entry files (named by their normalized "scripts\...\*.lua" path). extract()
+    // then just reads a file — no zlib. This is the port-plan "consume the native package"
+    // path; open() (raw BNK) remains the fallback. Returns false + sets error() if the dir has
+    // no script files. Grounded in cook_scripts' layout (docs/NATIVE_PORT_PLAN.md).
+    bool open_cooked(const std::string& dir);
+
+    [[nodiscard]] bool is_open() const noexcept {
+        return cooked_ ? !cooked_paths_.empty() : (!file_.empty() && !entries_.empty());
+    }
     [[nodiscard]] const std::string& error() const noexcept { return error_; }
-    [[nodiscard]] std::size_t entry_count() const noexcept { return entries_.size(); }
+    [[nodiscard]] std::size_t entry_count() const noexcept {
+        return cooked_ ? cooked_paths_.size() : entries_.size();
+    }
 
     // The normalized (backslash-lowercase, "scripts\"-prefixed) names of all entries.
     [[nodiscard]] std::vector<std::string> names() const;
@@ -57,6 +69,9 @@ private:
     std::uint32_t base_offset_ = 0;
     std::unordered_map<std::string, Entry> entries_;  // normalized name -> entry
     std::string error_;
+
+    bool cooked_ = false;                             // true after open_cooked()
+    std::unordered_map<std::string, std::string> cooked_paths_;  // normalized name -> file path
 };
 
 }  // namespace f2

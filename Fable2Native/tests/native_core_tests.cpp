@@ -227,6 +227,67 @@ static void test_gameflow_starts_childhood() {
     F2_CHECK(vm.last_error().empty());
 }
 
+// Verifies the offline script cooker + runtime consumption: cook every entry into a package
+// (cook_scripts.py's layout) and prove BnkReader::open_cooked reads it byte-identically to the
+// raw BNK, and that the full runtime boots + reaches the childhood gameflow from the cooked
+// package with NO raw .bnk present. (docs/NATIVE_PORT_PLAN.md "consume the native package".)
+static void test_cook_scripts_package() {
+    const std::filesystem::path bnk_path =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    if (!std::filesystem::exists(bnk_path)) return;
+
+    // 1. Cook: open the raw BNK and write each decompressed entry to <pkg>/<name>. Since
+    //    BnkReader::extract mirrors cook_scripts.py's decompression, this C++ cook is
+    //    byte-identical to the shipped tool's output.
+    f2::BnkReader raw;
+    F2_CHECK(raw.open(bnk_path.string()));
+    const auto temp = std::filesystem::temp_directory_path() / "f2native_cook_test";
+    std::error_code ec;
+    std::filesystem::remove_all(temp, ec);
+    const auto pkg = temp / "cooked";  // boot_game_scripts reads <data_root>/cooked/scripts
+    std::size_t lua_count = 0;
+    for (const auto& name : raw.names()) {
+        if (name.size() < 4 || name.compare(name.size() - 4, 4, ".lua") != 0) continue;  // .lua only
+        ++lua_count;
+        std::vector<std::uint8_t> data = raw.extract(name);
+        F2_CHECK(!data.empty());
+        std::string rel = name;  // "scripts\..." normalized
+        std::replace(rel.begin(), rel.end(), '\\', '/');
+        const auto out = pkg / rel;
+        std::filesystem::create_directories(out.parent_path(), ec);
+        std::ofstream f(out, std::ios::binary);
+        f.write(reinterpret_cast<const char*>(data.data()),
+                static_cast<std::streamsize>(data.size()));
+    }
+
+    // 2. open_cooked indexes the package and extracts byte-identically to the raw BNK.
+    f2::BnkReader cooked;
+    F2_CHECK(cooked.open_cooked((pkg / "scripts").string()));
+    F2_CHECK(cooked.entry_count() == lua_count);
+    for (const char* probe : {"quests/qc010_childhood.lua",
+                              "miscellaneous/generalsetupscript.lua", "quests/questmanager.lua"}) {
+        const std::vector<std::uint8_t> a = raw.extract(probe);
+        const std::vector<std::uint8_t> b = cooked.extract(probe);
+        F2_CHECK(!b.empty() && a == b);  // cooked package == raw decompression
+    }
+
+    // 3. The full runtime consumes the cooked package (no raw .bnk under <temp>/data): boot the
+    //    game scripts + drive the gameflow to the childhood quest, all from the cooked files.
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    F2_CHECK(game.boot_game_scripts(temp) > 0);
+    F2_CHECK(game.load_quest_scripts() > 0);
+    game.start_new_game(/*female=*/false);
+    game.script_log.clear();
+    for (int i = 0; i < 8; ++i) game.script_vm->run_source("QuestManager.Update()");
+    bool started = false;
+    for (const auto& line : game.script_log)
+        if (line.find("QC010_Childhood Starting") != std::string::npos) started = true;
+    F2_CHECK(started);  // gameflow reached childhood entirely from the cooked package
+
+    std::filesystem::remove_all(temp, ec);
+}
+
 int main() {
     const std::array<std::uint8_t, 136> dxt1 = [] {
         std::array<std::uint8_t, 136> bytes{};
@@ -1134,6 +1195,7 @@ int main() {
 
     // ---- P8: New Game -> gameflow reaches the childhood chapter (real BNK; skipped if absent) ----
     test_gameflow_starts_childhood();
+    test_cook_scripts_package();
 
     // ---- P6: mods folder loader + Quest natives (150-bit bitset) ----
     {

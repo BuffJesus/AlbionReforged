@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <system_error>
 
 namespace f2 {
 
@@ -82,6 +84,8 @@ bool BnkReader::open(const std::string& path) {
     error_.clear();
     entries_.clear();
     file_.clear();
+    cooked_ = false;          // leave any prior open_cooked mode (e.g. a failed cooked probe)
+    cooked_paths_.clear();
     std::ifstream f(path, std::ios::binary);
     if (!f) {
         error_ = "cannot open '" + path + "'";
@@ -155,20 +159,72 @@ bool BnkReader::open(const std::string& path) {
     return !entries_.empty();
 }
 
+bool BnkReader::open_cooked(const std::string& dir) {
+    error_.clear();
+    entries_.clear();
+    file_.clear();
+    cooked_ = true;
+    cooked_paths_.clear();
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) {
+        error_ = "cooked dir not found: " + dir;
+        return false;
+    }
+    // Index every regular file by its normalized path relative to the package root. The cooker
+    // writes files as "<dir>/scripts/...", so the relative path already carries the "scripts\"
+    // prefix and .lua extension that normalize() expects (idempotent for those keys).
+    const std::filesystem::path root(dir);
+    for (auto it = std::filesystem::recursive_directory_iterator(root, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        const std::filesystem::path rel = std::filesystem::relative(it->path(), root, ec);
+        if (ec) continue;
+        std::string key = rel.generic_string();  // forward-slashes
+        if (key.size() < 4 || key.compare(key.size() - 4, 4, ".lua") != 0) continue;  // scripts only
+        cooked_paths_.emplace(normalize(key), it->path().string());
+    }
+    if (cooked_paths_.empty()) {
+        error_ = "no cooked scripts under: " + dir;
+        return false;
+    }
+    return true;
+}
+
 std::vector<std::string> BnkReader::names() const {
     std::vector<std::string> out;
-    out.reserve(entries_.size());
-    for (const auto& kv : entries_) out.push_back(kv.first);
+    if (cooked_) {
+        out.reserve(cooked_paths_.size());
+        for (const auto& kv : cooked_paths_) out.push_back(kv.first);
+    } else {
+        out.reserve(entries_.size());
+        for (const auto& kv : entries_) out.push_back(kv.first);
+    }
     std::sort(out.begin(), out.end());
     return out;
 }
 
 bool BnkReader::has(const std::string& name) const {
-    return entries_.find(normalize(name)) != entries_.end();
+    const std::string key = normalize(name);
+    return cooked_ ? cooked_paths_.find(key) != cooked_paths_.end()
+                   : entries_.find(key) != entries_.end();
 }
 
 std::vector<std::uint8_t> BnkReader::extract(const std::string& name) {
     const std::string key = normalize(name);
+    if (cooked_) {
+        auto it = cooked_paths_.find(key);
+        if (it == cooked_paths_.end()) {
+            error_ = "no cooked script '" + key + "'";
+            return {};
+        }
+        std::ifstream f(it->second, std::ios::binary);
+        if (!f) {
+            error_ = "cannot read cooked script '" + it->second + "'";
+            return {};
+        }
+        return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(f),
+                                         std::istreambuf_iterator<char>());
+    }
     auto it = entries_.find(key);
     if (it == entries_.end()) {
         error_ = "no BNK entry '" + key + "'";
