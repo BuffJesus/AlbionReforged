@@ -1,0 +1,100 @@
+site_name: Albion Reforged — Lua Scripting
+site_description: >-
+  How Fable II's Lua scripting works, how it was reverse-engineered, and how it
+  runs on the Albion Reforged native runtime — quests, managers, message events,
+  the embedded Lua 5.1 VM, the BNK/LuaQ formats, and the tooling.
+site_author: BuffJesus
+repo_url: https://github.com/BuffJesus/AlbionReforged
+repo_name: BuffJesus/AlbionReforged
+edit_uri: edit/main/lua-docs/docs/
+copyright: >-
+  Albion Reforged is a fan project. Fable II is © Lionhead Studios / Microsoft.
+  No game assets are shipped; the runtime reads a user-supplied copy of the game.
+
+theme:
+  name: material
+  language: en
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.keys
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+
+nav:
+  - Home:
+      - index.md
+      - status.md
+  - Getting started:
+      - getting-started/index.md
+      - getting-started/read-the-scripts.md
+      - getting-started/run-the-scripts.md
+  - Concepts:
+      - concepts/index.md
+      - concepts/bnk-format.md
+      - concepts/luaq-bytecode.md
+      - concepts/the-vm.md
+      - concepts/managers.md
+      - concepts/quests.md
+      - concepts/message-events.md
+      - concepts/entities.md
+      - concepts/auto-stub.md
+  - Reference:
+      - reference/native-api.md
+      - reference/source-map.md
+      - reference/tooling.md
+  - Contributing: contributing.md

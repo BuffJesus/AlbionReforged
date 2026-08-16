@@ -137,3 +137,7 @@ Fable2Native/tools/decode_large_ring.exe
 # Native render screenshots and local cook scratch (large/derived — never commit)
 /native_shots/
 /scratchpad/
+
+# Generated decompiled-Lua reference tree (derived from a user-supplied game copy;
+# regenerate with tools/lua_mod/decompile_all.py). Not committed by default.
+/lua-decompiled/
