@@ -23,7 +23,24 @@ pass (runs before `render()`) culls consistently (a culled instance casts no sha
 Verified both backends: aggressive `dist=1` culls the whole town except huge-radius backdrop;
 default renders the full town.
 
-## 2. Dynamic-mesh path for hero skinning — ⏳ DESIGN, blocked on anim-sampler RE
+## 2. Dynamic-mesh path for hero skinning — ⏳ READY TO BUILD (anim math shipped: P5 b188043)
+
+**UPDATE 2026-08-16:** the gameplay session shipped the skinning MATH (`native_animation.h/.cpp`,
+`AnimationPlayer` + LBS, grounded in `anim_runtime_sampler_re.txt`/`anim_pose_re.txt`). It's a
+STANDALONE module — it does NOT touch the world renderer. `AnimationPlayer::skin(base, out_positions)`
+outputs **CPU-skinned MODEL-space positions** per frame. So the A/B below is settled: **Option A
+(CPU-skinned positions)**. The renderer-display integration is the only remaining piece, and it's mine.
+
+**Agreed interface (proposed):** world renderer method
+`set_character_pose(const std::vector<std::array<float,3>>& model_positions)` — gameplay calls
+`AnimationPlayer::skin(...)` each frame and passes the result; the renderer applies the character
+instance's transform (rotation/scale/translation) → world and updates the character range's vertices
+in a **dynamic (upload-heap) vertex buffer** (kept separate from the static world buffer; the
+character range draws from it). Both backends, parity. I'll build this against the `SkinnedVertex`/
+`AnimClip` contract in `native_animation.h`; ping me to wire it (or I'll build it proactively next).
+
+--- (original design, now resolved) ---
+### (was) blocked on anim-sampler RE
 
 Runtime hero animation needs the character mesh's vertices to change per frame. The cook already
 bakes a **static idle pose**; per-frame playback needs the skinned vertices each frame. The renderer
