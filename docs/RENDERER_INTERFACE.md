@@ -80,7 +80,7 @@ or bone-matrix upload + the setter, wired into the existing character range. **B
 (1) the anim-sampler RE (bone matrices — the gameplay session's research agent, `anim_havok §F.2`),
 and (2) the A/B choice above. Ping me with the choice + the data shape and I'll land it.
 
-## 3. Planar reflection RTT water — ✅ BOTH BACKENDS SHIPPED (D3D12 f8e0b8e, Vulkan fcd8d77)
+## 3. Planar reflection RTT water + Fresnel grounding — ✅ BOTH BACKENDS (reflection f8e0b8e/fcd8d77, Fresnel 475b5a6)
 
 Retail water (`Shaders.sbk` shader 62 `PSHADER_WATERPATCH`) is planar reflection/refraction, not
 analytic (see `docs/RENDERER_GROUNDING_AUDIT.md`). **Phase 1 (D3D12, done + verified):** the frontend
@@ -99,7 +99,23 @@ aligned slice = reflection) so the per-material sets aren't duplicated; the clip
 discard** (pushed `clip_plane` — avoids the `gl_ClipDistance` device feature, same result); water frag
 samples binding 8 gated by a pushed `reflection_enabled` (Vulkan UBO has no `viewport_size`). Red-tint
 A/B is pixel-consistent with D3D12. **Both backends now at parity.**
-**Phase 3 (optional, NOT started) = refraction RT + full `saturate(fresnel_bias - N·V)` grounding.**
+**Phase 3a (Fresnel grounding, DONE + verified — 475b5a6):** the water Fresnel is now the grounded
+retail linear form `saturate(1 - dot(V,Nf) + FRESNEL_BIAS)` (`water_system_re.txt §3 step 3`,
+`FRESNEL_BIAS = water_params[0].x`), replacing the Schlick `pow(1-N·V,5)` stand-in — the real reflection
+RT (phase 1/2) removed the analytic-sky sparkle that forced the approximation. Both backends, clean.
+
+**Phase 3b (refraction grab-pass) — INVESTIGATED, deliberately NOT shipped (would require guessing):**
+the town water is the `.water`-file shader = **retail program 57** (`water_system_re.txt §3`), which
+§3 step 9 shows **alpha-blended** (`ONE/SRC_ALPHA`) — the current native water already matches this
+(the alpha-blend IS the refraction: the framebuffer behind shows through). A distorted grab-pass
+(scene-colour copy sampled with `REFRACTION_SCALE`, output OPAQUE) is **shader 62 (WATERPATCH)'s**
+technique — a DIFFERENT water shader (ocean patches), not the town's. Imposing it on the town water
+would (a) apply the wrong shader's method and (b) require choosing an opaque-vs-alpha-blend output
+composite for program 57 that **the decomp does not determine** — i.e. a guess. Under the
+"data-backed, no guessing" rule that is disqualifying, so the refraction stays as program 57's grounded
+alpha-blend. (A half-built D3D12 grab-pass was written, then reverted once this was understood.)
+Net: **the town water refraction is already grounded; phase 3's real data-backed change was the Fresnel
+(3a, shipped).** If a WATERPATCH/ocean level is ever cooked, the grab-pass is the right technique THERE.
 
 ## Coordination rules
 - Only the environment session edits `native_world_renderer.cpp` / `native_vulkan_world_renderer.cpp`
