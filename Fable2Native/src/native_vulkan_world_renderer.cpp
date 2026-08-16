@@ -36,6 +36,12 @@ struct Constants {
     // w=strength (how dark the shadowed sun term goes). Mirrors the D3D12 Constants layout.
     std::array<float, 16> light_view_projection{};
     std::array<float, 4> shadow_params{0.0f, 0.0f, 0.0f, 1.0f};
+    // Authored ambient model (theme Lighting sub-record; fable2-theme-ambient-lighting). Mirrors the
+    // D3D12 layout: ambient_flat rgb = flat AmbientColour, w = has_ambient (1/0); sky_bounce_top/
+    // bottom rgb = the hemisphere sky-bounce gradient. Defaults mirror the hardcoded hemisphere.
+    std::array<float, 4> ambient_flat{0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<float, 4> sky_bounce_top{0.55f, 0.58f, 0.62f, 0.0f};
+    std::array<float, 4> sky_bounce_bottom{0.18f, 0.20f, 0.24f, 0.0f};
 };
 
 // b1-equivalent point-light UBO (level_lights_effects_re.txt §3.1); mirrors the D3D12 layout.
@@ -467,6 +473,10 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     scene_fog_max_ = scene.fog_max;
     scene_sky_zenith_ = scene.sky_color;
     scene_sky_horizon_ = scene.sky_horizon_color;
+    scene_has_ambient_ = scene.has_ambient;
+    scene_ambient_flat_ = scene.ambient_flat;
+    scene_sky_bounce_top_ = scene.sky_bounce_top;
+    scene_sky_bounce_bottom_ = scene.sky_bounce_bottom;
     // Bounds -> auto-frame the orbit camera (mirror native_world_renderer.cpp) so the whole
     // town is in view instead of the old fixed radius-7 demo orbit. A cooked `focus` (town
     // bounds excluding horizon backdrop props) wins so the ~1000wu spire vista doesn't blow
@@ -1259,6 +1269,14 @@ void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
         // inherits it). shadow = sampled*0.8 + 0.2 (scale/bias form, scale+bias=1 per water PS
         // c139 {0.95,0.05}) → shadowed sun term floors at 0.2. D3D12 parity. (Was a guessed 0.7.)
         0.8f};                                                       // ShadowScaleBias (globals.gdb)
+    // Authored ambient model (fable2-theme-ambient-lighting): flat AmbientColour + hemisphere
+    // sky-bounce. w = has_ambient gate (0 -> frag keeps the hardcoded hemisphere). D3D12 parity.
+    constants.ambient_flat = {scene_ambient_flat_[0], scene_ambient_flat_[1], scene_ambient_flat_[2],
+                              scene_has_ambient_ ? 1.0f : 0.0f};
+    constants.sky_bounce_top = {scene_sky_bounce_top_[0], scene_sky_bounce_top_[1],
+                                scene_sky_bounce_top_[2], 0.0f};
+    constants.sky_bounce_bottom = {scene_sky_bounce_bottom_[0], scene_sky_bounce_bottom_[1],
+                                   scene_sky_bounce_bottom_[2], 0.0f};
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width),

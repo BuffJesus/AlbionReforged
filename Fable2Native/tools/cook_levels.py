@@ -1196,6 +1196,20 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
     if main is None:
         main = [1.0, 0.902, 0.4353]  # theme-neutral warm fallback
 
+    # Authored AMBIENT model (Lighting sub-record) — replaces native's hardcoded hemisphere.
+    # AmbientColour = flat ambient (RGB/255 * Factor); SkyColourFinalBounceTop/Bottom = the
+    # hemisphere sky-bounce gradient (up/down, RGB/255, no factor). fable2-theme-ambient-lighting.
+    AR, AG, AB, AF = 0x727639A0, 0xF27F72A0, 0x27DDDA4B, 0xB5453B7E
+    BTR, BTG, BTB = 0x6947924E, 0xDB65EC1E, 0xD465A1E5     # SkyColourFinalBounceTop R/G/B
+    BBR, BBG, BBB = 0xEC904B16, 0xC4A8D3D6, 0xAD0FBA0D     # SkyColourFinalBounceBottom R/G/B
+    # AmbientColour lives in the Lighting sub-record; SkyColourFinalBounceTop/Bottom live in the
+    # theme's LightingPreprocessor sub-record (byte-verified on 0x72d66d23).
+    kLightingPreproc = 0x43217304
+    ambient_flat = read_flat(lighting, AR, AG, AB, AF) if lighting is not None else None
+    preproc = resolve_ref(best_theme, kLightingPreproc)
+    sky_bounce_top = read_colour(preproc, BTR, BTG, BTB) if preproc is not None else None  # /255, clamp01
+    sky_bounce_bot = read_colour(preproc, BBR, BBG, BBB) if preproc is not None else None
+
     # horizon (complementary) + sunset tints — raw HDR (Factor can push >1); the emit
     # step display-maps them. horizon = the gradient's bottom; sunset = warm sun-halo.
     horizon = read_colour_subrec(sky_rec, kCompl) or read_flat(sky_rec, CR, CG, CB, CF)
@@ -1351,7 +1365,9 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
             "horizon": horizon, "sunset": sunset, "compl_bias": compl_bias,
             "fog_color": fog_color, "fog_start": fog_start,
             "fog_end": fog_end, "fog_max": fog_max,
-            "rayleigh": rayleigh, "mie": mie}
+            "rayleigh": rayleigh, "mie": mie,
+            "ambient_flat": ambient_flat, "sky_bounce_top": sky_bounce_top,
+            "sky_bounce_bot": sky_bounce_bot}
 
 
 def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Path,
@@ -1965,6 +1981,17 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                 fc = [min(max(c, 0.0), 1.0) for c in fc]
                 out.write(f"fog_color {fc[0]:.5g} {fc[1]:.5g} {fc[2]:.5g}\n")
                 out.write(f"fog_range {fs:.6g} {fe:.6g} {min(max(fm, 0.0), 1.0):.5g}\n")
+            # Authored AMBIENT model (Lighting sub-record: AmbientColour flat +
+            # SkyColourFinalBounceTop/Bottom hemisphere bounce). Replaces the renderer's
+            # hardcoded cool-blue hemisphere with the theme's real ambient. Emitted only when the
+            # theme authors the full set (all three present) so scenes without it are byte-identical
+            # (renderer keeps its hemisphere fallback). fable2-theme-ambient-lighting.
+            af = env_theme.get("ambient_flat")
+            bt = env_theme.get("sky_bounce_top"); bb = env_theme.get("sky_bounce_bot")
+            if af is not None and bt is not None and bb is not None:
+                out.write(f"ambient {af[0]:.5g} {af[1]:.5g} {af[2]:.5g}\n")
+                out.write(f"sky_bounce {bt[0]:.5g} {bt[1]:.5g} {bt[2]:.5g} "
+                          f"{bb[0]:.5g} {bb[1]:.5g} {bb[2]:.5g}\n")
             # Cloud layers (SkyboxRenderer.cpp cloud pass). Each theme Layer carries a density-map
             # texture GUID + scroll/shape/lighting params; we resolve the GUID -> exact .tex name,
             # cook it to DDS alongside the other textures, and emit one `cloud_layer` per layer plus
