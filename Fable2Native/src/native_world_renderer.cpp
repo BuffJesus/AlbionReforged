@@ -775,8 +775,10 @@ float4 ps_water(PSInput input) : SV_TARGET {
     // Keep reflection and glitter on a broad upward normal; the high-frequency normal map
     // produces white noise when applied directly to this term.
     float3 Nf = normalize(float3(nxy.x, 1.0, nxy.y));
-    float fres = fresnel_bias +
-                 (1.0 - fresnel_bias) * pow(1.0 - saturate(dot(V, Nf)), 5.0);
+    // Grounded retail Fresnel (water_system_re.txt §3 step 3): linear saturate(1 - N·V + FRESNEL_BIAS),
+    // replacing the Schlick pow-5 approximation. Now that a real reflection RT feeds the water (phase
+    // 1/2), the analytic-sky sparkle that once forced the pow-5/broad-Nf approximation is gone.
+    float fres = saturate(1.0 - saturate(dot(V, Nf)) + fresnel_bias);
     float3 SURFACE = float3(water_params[4].z, water_params[4].w, water_params[5].x);
     float3 DEEP = water_params[5].yzw;
     float3 watercol = lerp(DEEP, SURFACE, fres);

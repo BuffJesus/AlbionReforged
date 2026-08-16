@@ -83,9 +83,9 @@ vec4 water() {
     // Keep reflection and glitter on a broad upward normal; the high-frequency normal map
     // produces white noise when applied directly to this term.
     vec3 Nf = normalize(vec3(nxy.x, 1.0, nxy.y));
-    float fres = water_params.params[0].x +
-                 (1.0 - water_params.params[0].x) *
-                     pow(1.0 - clamp(dot(V, Nf), 0.0, 1.0), 5.0);
+    // Grounded retail Fresnel (water_system_re.txt §3 step 3): linear saturate(1 - N·V + FRESNEL_BIAS),
+    // replacing the Schlick pow-5 approximation (D3D12 parity). FRESNEL_BIAS = params[0].x.
+    float fres = clamp(1.0 - clamp(dot(V, Nf), 0.0, 1.0) + water_params.params[0].x, 0.0, 1.0);
     vec3 surface = vec3(water_params.params[4].z, water_params.params[4].w,
                         water_params.params[5].x);
     vec3 deep = water_params.params[5].yzw;
