@@ -80,7 +80,7 @@ or bone-matrix upload + the setter, wired into the existing character range. **B
 (1) the anim-sampler RE (bone matrices — the gameplay session's research agent, `anim_havok §F.2`),
 and (2) the A/B choice above. Ping me with the choice + the data shape and I'll land it.
 
-## 3. Planar reflection RTT water — 🚧 D3D12 SHIPPED (f8e0b8e); Vulkan parity in flight
+## 3. Planar reflection RTT water — ✅ BOTH BACKENDS SHIPPED (D3D12 f8e0b8e, Vulkan fcd8d77)
 
 Retail water (`Shaders.sbk` shader 62 `PSHADER_WATERPATCH`) is planar reflection/refraction, not
 analytic (see `docs/RENDERER_GROUNDING_AUDIT.md`). **Phase 1 (D3D12, done + verified):** the frontend
@@ -92,9 +92,14 @@ samples it by screen-space uv perturbed by the bump normal (data-backed `REFLECT
 param[25/26]). A second cbuffer slice carries the reflected VP/eye/clip-plane (avoids the single-buffer
 race). Analytic-sky fallback when no target/water; `FABLE2NATIVE_NO_REFLECT` forces it.
 Verified with a red-tint A/B (town reflects only on water pixels where the mirror ray hits it).
-**Phase 2 = Vulkan parity** (renderer-owned reflection image/render-pass/framebuffer, mirroring the
-Vulkan shadow pass; `gl_ClipDistance` in a `native_world_reflect.vert`; identical UBO byte layout).
-**Phase 3 (optional) = refraction RT + full `saturate(fresnel_bias - N·V)` grounding.**
+**Phase 2 (Vulkan, done + verified):** renderer-owned reflection image/render-pass/framebuffer +
+single-sample pipeline (mirrors the Vulkan shadow pass); the reflected VP is `multiply(vp, R_col)`
+(column-major); Camera UBO binding 0 is a **dynamic** uniform buffer with two slices (offset 0 = main,
+aligned slice = reflection) so the per-material sets aren't duplicated; the clip plane is a **fragment
+discard** (pushed `clip_plane` — avoids the `gl_ClipDistance` device feature, same result); water frag
+samples binding 8 gated by a pushed `reflection_enabled` (Vulkan UBO has no `viewport_size`). Red-tint
+A/B is pixel-consistent with D3D12. **Both backends now at parity.**
+**Phase 3 (optional, NOT started) = refraction RT + full `saturate(fresnel_bias - N·V)` grounding.**
 
 ## Coordination rules
 - Only the environment session edits `native_world_renderer.cpp` / `native_vulkan_world_renderer.cpp`
