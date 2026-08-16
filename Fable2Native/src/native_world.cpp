@@ -42,6 +42,9 @@ void NativeWorld::spawn_from_scene(const NativeScene& scene) {
             if (!hero) hero = &e;
         } else if (mesh_name.rfind("npc", 0) == 0) {
             entities.create_component_by_hash(e, gdb::kCompVillager);
+            // NPCs carry hit points (the GDB schema has 198 HealthComponent instances;
+            // villagers/creatures are health-bearing). Persisted via the save delta.
+            entities.create_component_by_hash(e, gdb::kCompHealth);
             // A live ACT-layer agent for this villager, at its placed transform. One
             // agent per npc-tagged geom; a multi-part villager (npcP_0..npcP_N) yields
             // several agents at the same spot — harmless, they move together.

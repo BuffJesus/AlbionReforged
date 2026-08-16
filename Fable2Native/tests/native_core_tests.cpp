@@ -755,6 +755,11 @@ int main() {
         w.spawn_from_scene(s);
         assert(w.npcs.size() == 1);                    // one agent for the villager geom
         assert(w.npcs[0].entity_uid == 2);
+        // The villager entity carries Villager + Health (+ Transform + GraphicAppearance).
+        auto* npc_ent = w.entities.find(2);
+        assert(npc_ent->get<f2::VillagerComponent>(f2::kTypeIdVillager) != nullptr);
+        auto* npc_hp = npc_ent->get<f2::HealthComponent>(f2::kTypeIdHealth);
+        assert(npc_hp != nullptr && !npc_hp->is_dead());
         assert(approx(w.npcs[0].controller.position()[0], 2.0f));  // placed at its instance
 
         // Player standing next to the NPC with clear LOS -> the agent notices.
