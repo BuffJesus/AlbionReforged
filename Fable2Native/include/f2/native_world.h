@@ -54,6 +54,11 @@ struct NativeWorld {
     void update_npcs(const NativeCollisionWorld& collision,
                      const std::array<float, 3>& target, float dt);
 
+    // Re-seed each NPC agent's controller position from its entity's (possibly restored)
+    // TransformComponent. Called after a save is loaded so agents resume at their saved
+    // spot instead of snapping back to the spawn transform.
+    void resync_npcs_from_entities();
+
     // Bidirectional entity-graph delta (retail provider vtbl+0x10; gamestate_save_restore
     // §A.3/§B.1). WRITE: walk live entities, emit per-entity {uid, per-component
     // length-framed blob}. READ: reconstruct the baseline first (spawn_from_scene), then

@@ -870,6 +870,10 @@ int main() {
         assert(v2b->job == 4 && v2b->age == 2 && v2b->job_tag == "BLACKSMITH");
         auto* tf2 = npc2->get<f2::TransformComponent>(f2::kTypeIdTransform);
         assert(approx(tf2->position[0], 9.0f) && approx(tf2->position[2], 9.0f));
+        // The NPC agent controller resynced to the restored transform (not the spawn pos).
+        assert(game2.world.npcs.size() == 1);
+        assert(approx(game2.world.npcs[0].controller.position()[0], 9.0f));
+        assert(approx(game2.world.npcs[0].controller.position()[2], 9.0f));
 
         // A corrupt/short blob is rejected, not crashed.
         std::vector<std::uint8_t> bad{1, 2, 3};

@@ -86,6 +86,15 @@ void NativeWorld::sync_to_scene(NativeScene& scene) const {
     }
 }
 
+void NativeWorld::resync_npcs_from_entities() {
+    for (NpcAgent& agent : npcs) {
+        const NativeEntity* e = entities.find(agent.entity_uid);
+        if (!e) continue;
+        const auto* transform = e->get<TransformComponent>(kTypeIdTransform);
+        if (transform) agent.controller.set_position(transform->position);
+    }
+}
+
 void NativeWorld::serialize(WorldArchive& ar) {
     // Per-entity records keyed by UID, each carrying length-framed per-component blobs.
     // The direction lives in the archive; the graph iteration itself branches on it (as

@@ -29,6 +29,7 @@ bool NativeGame::load_state(const std::vector<std::uint8_t>& data) {
     if (game_state.header.version != 1) return false;  // future-version gate
     player.set_position(game_state.hero_position);
     world.serialize(ar);  // overlay the delta onto the current (rebuilt) baseline
+    world.resync_npcs_from_entities();  // agents resume at their restored transforms
     return ar.ok();
 }
 
