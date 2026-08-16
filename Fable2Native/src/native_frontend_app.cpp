@@ -323,6 +323,8 @@ public:
         }
         world_renderer_.set_scene_depth_copy(depth_target_.Get(), depth_copy_.Get(),
                                              depth_gpu_handle_);
+        world_renderer_.set_scene_color_copy(hdr_scene_.Get(), refraction_color_copy_.Get(),
+                                             refraction_color_gpu_handle_);
         if (shadow_map_) {
             world_renderer_.set_shadow_map(shadow_dsv_, shadow_srv_gpu_, kShadowSize);
         }
@@ -570,7 +572,7 @@ private:
         }
         D3D12_DESCRIPTOR_HEAP_DESC srv_desc{};
         srv_desc.NumDescriptors =
-            f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 6;
+            f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 7;
         srv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         srv_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device_->CreateDescriptorHeap(&srv_desc, IID_PPV_ARGS(&descriptor_heap_)))) return false;
@@ -582,6 +584,7 @@ private:
         hdr_descriptor_index_ = depth_descriptor_index_ + 1;
         shadow_descriptor_index_ = hdr_descriptor_index_ + 1;
         reflection_descriptor_index_ = shadow_descriptor_index_ + 1;  // above material SRVs (no collision)
+        refraction_color_descriptor_index_ = reflection_descriptor_index_ + 1;  // refraction grab-pass SRV
 
         rtv_stride_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         auto handle = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
@@ -633,6 +636,8 @@ private:
         }
         world_renderer_.set_scene_depth_copy(depth_target_.Get(), depth_copy_.Get(),
                                              depth_gpu_handle_);
+        world_renderer_.set_scene_color_copy(hdr_scene_.Get(), refraction_color_copy_.Get(),
+                                             refraction_color_gpu_handle_);
     }
 
     // Real backend owner for the Options "Resolution" setting: when the user changes it, resize the
@@ -905,6 +910,25 @@ private:
         device_->CreateShaderResourceView(hdr_scene_.Get(), &srv, cpu);
         hdr_gpu_handle_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
         hdr_gpu_handle_.ptr += static_cast<std::size_t>(hdr_descriptor_index_) * descriptor_stride_;
+
+        // Refraction grab-pass copy: a shader-readable copy of the HDR scene colour (the scene behind
+        // the water). The renderer copies hdr_scene_ into it between opaque and water, and the water
+        // PS samples it as the refraction tile (t6). Window-sized, recreated with the HDR target.
+        refraction_color_copy_.Reset();
+        D3D12_RESOURCE_DESC copy_desc = description;
+        copy_desc.Flags = D3D12_RESOURCE_FLAG_NONE;  // copy dest + SRV, no RTV
+        if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &copy_desc,
+                                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
+                                                    IID_PPV_ARGS(&refraction_color_copy_)))) {
+            refraction_color_copy_.Reset();
+            return;
+        }
+        auto rcpu = descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
+        rcpu.ptr += static_cast<std::size_t>(refraction_color_descriptor_index_) * descriptor_stride_;
+        device_->CreateShaderResourceView(refraction_color_copy_.Get(), &srv, rcpu);
+        refraction_color_gpu_handle_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
+        refraction_color_gpu_handle_.ptr +=
+            static_cast<std::size_t>(refraction_color_descriptor_index_) * descriptor_stride_;
     }
 
     // (Re)create the multisampled resolve target at the current size + sample count. Released at 1x.
@@ -2025,6 +2049,9 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE reflection_dsv_{};
     D3D12_GPU_DESCRIPTOR_HANDLE reflection_srv_gpu_{};
     UINT reflection_descriptor_index_ = 0;
+    ComPtr<ID3D12Resource> refraction_color_copy_;  // HDR scene-colour copy (refraction tile, t6)
+    D3D12_GPU_DESCRIPTOR_HANDLE refraction_color_gpu_handle_{};
+    UINT refraction_color_descriptor_index_ = 0;
     float hdr_exposure_ = 1.0f;  // compositor exposure (1.0 == the old direct-to-LDR clamp)
     float hdr_bloom_threshold_ = 0.62f;  // HDR level above which bloom is extracted
     float hdr_bloom_intensity_ = 0.90f;  // bloom add strength (0 == no bloom = byte-identical)

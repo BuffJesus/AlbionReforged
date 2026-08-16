@@ -623,7 +623,8 @@ Texture2D normalTex : register(t1);
 Texture2D specTex : register(t2);
 Texture2D<float> scene_depth : register(t3);
 Texture2D<float> shadow_map : register(t4);
-Texture2D reflection_tex : register(t5);  // planar reflection RT (retail g_ReflectionSampler)
+Texture2D reflection_tex : register(t5);  // planar reflection RT (retail g_ReflectionSampler c13)
+Texture2D refraction_tex : register(t6);  // scene grab-pass behind water (retail g_RefractionSampler c14)
 SamplerState albedo_sampler : register(s0);
 SamplerComparisonState shadow_sampler : register(s1);
 
@@ -810,7 +811,20 @@ float4 ps_water(PSInput input) : SV_TARGET {
     float distf = saturate(length(eye_time.xyz - wp) / 75.0);
     float refl_strength = saturate(water_params[7].y);
     float refl = refl_strength * lerp(fres_reflect, 1.0, distf);
-    float3 col = watercol * (1.0 - refl_strength) + reflection * refl;
+    // Refraction tile (retail program 57 g_RefractionSampler c14): the scene BEHIND the water,
+    // sampled by screen-space uv distorted by REFRACTION_SCALE (param[27/28] = water_params[6].w/
+    // [7].x). When the grab-pass is bound (viewport_size.w>0.5) the water is translucent over it,
+    // tinted by the water body colour by water_opacity (water_params[9].y). Grounded: the refraction
+    // sampler IS declared+used by program 57 (water_system_re.txt §5 step 6); the old alpha-blend was
+    // a port stand-in. Exact per-packet combine not machine-verified — uses §5's structure + params.
+    float3 base_col = watercol;
+    if (viewport_size.w > 0.5) {
+        float2 refr_uv = saturate(input.position.xy / viewport_size.xy +
+                                  nxy * float2(water_params[6].w, water_params[7].x) * 0.02);
+        float3 refraction = refraction_tex.Sample(albedo_sampler, refr_uv).rgb;
+        base_col = lerp(refraction, watercol, saturate(water_params[9].y));
+    }
+    float3 col = base_col * (1.0 - refl_strength) + reflection * refl;
     float3 L = normalize(sun_direction.xyz);             // authored light-travel direction
     float3 Ng = Nf;
     float glit = pow(saturate(dot(V, reflect(L, Ng))), water_params[9].x) *
@@ -838,6 +852,11 @@ float4 ps_water(PSInput input) : SV_TARGET {
         float ff = saturate((ffd - fog_range.x) / max(fog_range.y - fog_range.x, 1.0)) * fog_color.w;
         col = lerp(col, fog_color.rgb, ff);
     }
+    // With the explicit refraction tile the composite is opaque: alpha 0 + ONE/SRC_ALPHA suppresses
+    // the framebuffer term (final = col), so the refraction comes from the tile in `col`, not the
+    // hardware blend (retail program 57 outputs a near-opaque alpha; §5 step 9). A tiny shoreline
+    // edge term softens the very edge. Without the tile, keep the alpha-blend refraction stand-in.
+    if (viewport_size.w > 0.5) return float4(col, (1.0 - shoreline) * 0.5);
     return float4(col, saturate(refr_k));
 }
 )";
@@ -854,7 +873,7 @@ float4 ps_water(PSInput input) : SV_TARGET {
         return false;
     }
 
-    D3D12_ROOT_PARAMETER root_parameters[8]{};
+    D3D12_ROOT_PARAMETER root_parameters[9]{};
     root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     root_parameters[0].Descriptor.ShaderRegister = 0;
     root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // PS reads sun_direction too
@@ -904,6 +923,15 @@ float4 ps_water(PSInput input) : SV_TARGET {
     root_parameters[7].DescriptorTable.NumDescriptorRanges = 1;
     root_parameters[7].DescriptorTable.pDescriptorRanges = &reflection_range;
     root_parameters[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    // t6 = refraction grab-pass (scene colour behind the water, retail g_RefractionSampler c14).
+    D3D12_DESCRIPTOR_RANGE refraction_range{};
+    refraction_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    refraction_range.NumDescriptors = 1;
+    refraction_range.BaseShaderRegister = 6;
+    root_parameters[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    root_parameters[8].DescriptorTable.NumDescriptorRanges = 1;
+    root_parameters[8].DescriptorTable.pDescriptorRanges = &refraction_range;
+    root_parameters[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_STATIC_SAMPLER_DESC samplers[2]{};
     samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -922,7 +950,7 @@ float4 ps_water(PSInput input) : SV_TARGET {
     samplers[1].ShaderRegister = 1;
     samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_ROOT_SIGNATURE_DESC root_description{};
-    root_description.NumParameters = 8;
+    root_description.NumParameters = 9;
     root_description.pParameters = root_parameters;
     root_description.NumStaticSamplers = 2;
     root_description.pStaticSamplers = samplers;
@@ -1369,6 +1397,11 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     // forces the analytic-sky fallback for an A/B against the planar reflection.
     static const bool no_reflect = std::getenv("FABLE2NATIVE_NO_REFLECT") != nullptr;
     constants.viewport_size[2] = (!no_reflect && reflection_size_ > 0 && has_water_) ? 1.0f : 0.0f;
+    // w>0.5 => a refraction grab-pass tile is bound (water PS samples the scene behind as the
+    // refraction tile instead of the alpha-blend framebuffer). Diagnostic gate mirrors reflection.
+    static const bool no_refract = std::getenv("FABLE2NATIVE_NO_REFRACT") != nullptr;
+    constants.viewport_size[3] =
+        (!no_refract && scene_color_source_ && scene_color_copy_) ? 1.0f : 0.0f;
     constants.eye_time[0] = eye[0];
     constants.eye_time[1] = eye[1];
     constants.eye_time[2] = eye[2];
@@ -1469,6 +1502,31 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
         barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
         barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         command_list->ResourceBarrier(2, barriers);
+    }
+    // Refraction grab-pass: copy the opaque HDR scene colour (the scene BEHIND the water) into the
+    // refraction tile the water PS samples (retail program 57 g_RefractionSampler c14). Same
+    // bound-resource copy pattern as the depth copy above.
+    const bool color_copy_ready = scene_color_source_ && scene_color_copy_;
+    if (color_copy_ready) {
+        D3D12_RESOURCE_BARRIER cb[2]{};
+        cb[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        cb[0].Transition.pResource = scene_color_source_;
+        cb[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        cb[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        cb[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        cb[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        cb[1].Transition.pResource = scene_color_copy_;
+        cb[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        cb[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        cb[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        command_list->ResourceBarrier(2, cb);
+        command_list->CopyResource(scene_color_copy_, scene_color_source_);
+        cb[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        cb[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        cb[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        cb[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        command_list->ResourceBarrier(2, cb);
+        command_list->SetGraphicsRootDescriptorTable(8, scene_color_gpu_handle_);  // t6 refraction
     }
     // The water shader samples the copied depth unconditionally. If depth resources could not
     // be created (for example during a transient device/resize failure), keep the opaque scene

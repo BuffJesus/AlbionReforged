@@ -78,6 +78,16 @@ public:
         scene_depth_copy_ = copy;
         scene_depth_gpu_handle_ = gpu_handle;
     }
+    // Refraction grab-pass (retail program 57 / shader 65 g_RefractionSampler c14): the frontend
+    // supplies a shader-readable copy of the HDR scene colour, copied AFTER opaque geometry (before
+    // the water pass) — the scene BEHIND the water, which the water PS samples as the refraction tile
+    // (distorted by REFRACTION_SCALE). Retail samples this tile; the old alpha-blend was a port stand-in.
+    void set_scene_color_copy(ID3D12Resource* source, ID3D12Resource* copy,
+                              D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle) {
+        scene_color_source_ = source;
+        scene_color_copy_ = copy;
+        scene_color_gpu_handle_ = gpu_handle;
+    }
 
     // The orbit camera render() flies each frame, exposed so a companion pass (the sky)
     // can build rays from the EXACT same basis. Uses the same fit-to-scene framing.
@@ -139,6 +149,9 @@ private:
     ID3D12Resource* scene_depth_source_ = nullptr;
     ID3D12Resource* scene_depth_copy_ = nullptr;
     D3D12_GPU_DESCRIPTOR_HANDLE scene_depth_gpu_handle_{};
+    ID3D12Resource* scene_color_source_ = nullptr;   // HDR scene RT (refraction grab-pass source)
+    ID3D12Resource* scene_color_copy_ = nullptr;     // its copy, sampled by the water PS (t6)
+    D3D12_GPU_DESCRIPTOR_HANDLE scene_color_gpu_handle_{};
     Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_state_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> water_pipeline_;  // translucent animated water
