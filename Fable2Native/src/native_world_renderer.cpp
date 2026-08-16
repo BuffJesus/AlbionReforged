@@ -49,6 +49,11 @@ struct Constants {
     float ambient_flat[4]{0.0f, 0.0f, 0.0f, 0.0f};
     float sky_bounce_top[4]{0.55f, 0.58f, 0.62f, 0.0f};
     float sky_bounce_bottom[4]{0.18f, 0.20f, 0.24f, 0.0f};
+    // Grounded fog (ModelPreview.cpp apply_env_fog). fog_curve = start, inv_span2, power, amp
+    // (amp>0 -> exponential distance fog instead of the linear fog_range). fog_mist = strength,
+    // depth_scale, mist_top_y (render-space), falloff (strength>0 -> height mist added).
+    float fog_curve[4]{0.0f, 1.0f, 1.0f, 0.0f};
+    float fog_mist[4]{0.0f, 25.0f, 0.0f, 4.0f};
 };
 
 // b1 point-light cbuffer (level_lights_effects_re.txt §3.1). Mirrors the HLSL layout:
@@ -399,6 +404,21 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
         for (int a = 0; a < 3; ++a) r = std::max(r, 0.5f * (hi[a] - lo[a]));
         scene_radius_ = std::max(r, 1.0f);
     }
+    // Ground-mist floor = the lowest vertex Y (render space) of the TOWN. When a `focus` region
+    // is cooked, restrict to vertices within it so the distant low sea-vista/spire base doesn't
+    // drag the mist plane below the elevated town (matches the AB's "terrain mesh floor").
+    scene_min_y_ = scene_center_[1];
+    bool any_floor = false;
+    const float fr2 = scene.has_focus ? scene_radius_ * scene_radius_ : 0.0f;
+    for (const auto& v : geometry.vertices) {
+        if (scene.has_focus) {
+            const float dx = v.position[0] - scene_center_[0];
+            const float dz = v.position[2] - scene_center_[2];
+            if (dx * dx + dz * dz > fr2) continue;
+        }
+        scene_min_y_ = any_floor ? std::min(scene_min_y_, v.position[1]) : v.position[1];
+        any_floor = true;
+    }
     if (!create_upload_buffer(device, geometry.vertices.data(),
                               geometry.vertices.size() * sizeof(Vertex), vertex_buffer_, error) ||
         !create_upload_buffer(device, geometry.indices.data(),
@@ -532,6 +552,8 @@ cbuffer Camera : register(b0) {
     float4 ambient_flat;        // rgb = flat AmbientColour, w = has_ambient (1/0)
     float4 sky_bounce_top;      // rgb = hemisphere sky-bounce (up)
     float4 sky_bounce_bottom;   // rgb = hemisphere sky-bounce (down)
+    float4 fog_curve;           // start, inv_span2, power, amp (amp>0 = exponential fog)
+    float4 fog_mist;            // strength, depth_scale, mist_top_y, falloff
 };
 // Local point lights (level_lights_effects_re.txt §3.1): lamp posts, lanterns, braziers.
 cbuffer Lights : register(b1) {
@@ -654,8 +676,26 @@ float4 ps_main(PSInput input) : SV_TARGET {
     // world geometry to the horizon/backdrop. Matches the Vulkan world PS.
     if (fog_color.w > 0.0) {
         float fd = length(eye_time.xyz - input.world_pos);
-        float f = saturate((fd - fog_range.x) / max(fog_range.y - fog_range.x, 1.0)) * fog_color.w;
-        lit = lerp(lit, fog_color.rgb, f);
+        float f;
+        if (fog_curve.w > 0.0) {
+            // Grounded exponential distance fog (apply_env_fog): amp*pow(min((d-start)*inv_span2,
+            // 1.25), power), then 1-exp(-od). Replaces the crude linear ramp.
+            float dn = max(fd - fog_curve.x, 0.0) * fog_curve.y;
+            float od = fog_curve.w * pow(min(dn, 1.25), fog_curve.z);
+            f = 1.0 - exp(-od);
+        } else {
+            f = saturate((fd - fog_range.x) / max(fog_range.y - fog_range.x, 1.0)) * fog_color.w;
+        }
+        // Ground mist (apply_env_fog height term): strong near the ground (below mist_top),
+        // ramping up with distance. Added on top of the distance fog.
+        if (fog_mist.x > 0.0) {
+            float below = saturate((fog_mist.z - input.world_pos.y) / max(fog_mist.w, 0.5));
+            f = saturate(f + fog_mist.x * below * saturate(fd / max(fog_mist.y, 1.0)));
+        }
+        // Grounded fog/mist tint toward the HORIZON colour (apply_env_fog uses sky_bottom), so the
+        // world fades into the sky it meets. The linear path keeps the theme fog_color.
+        float3 fog_tint = (fog_curve.w > 0.0) ? sky_horizon.rgb : fog_color.rgb;
+        lit = lerp(lit, fog_tint, f);
     }
     float3 color = lit;
     return float4(color, base.a);
@@ -1125,6 +1165,21 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     constants.fog_color[3] = scene.fog_max;
     constants.fog_range[0] = scene.fog_start;
     constants.fog_range[1] = scene.fog_end;
+    // Grounded exponential fog + ground mist (apply_env_fog). fog_curve.w>0 switches the PS to
+    // the exponential model; mist_top = scene ground (min Y) + authored offset.
+    if (scene.has_fog_curve) {
+        for (int i = 0; i < 4; ++i) constants.fog_curve[i] = scene.fog_curve[i];
+    } else {
+        constants.fog_curve[3] = 0.0f;  // amp 0 -> PS keeps the linear fog_range ramp
+    }
+    if (scene.has_ground_mist) {
+        constants.fog_mist[0] = scene.mist_strength;
+        constants.fog_mist[1] = scene.mist_depth_scale;
+        constants.fog_mist[2] = scene_min_y_ + scene.mist_height_offset;
+        constants.fog_mist[3] = scene.mist_falloff;
+    } else {
+        constants.fog_mist[0] = 0.0f;
+    }
     for (int i = 0; i < 3; ++i) {
         constants.sky_zenith[i] = scene.sky_color[i];
         constants.sky_horizon[i] = scene.sky_horizon_color[i];

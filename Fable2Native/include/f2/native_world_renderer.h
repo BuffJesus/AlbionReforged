@@ -125,6 +125,7 @@ private:
     // level (spanning hundreds of units) instead of the origin-orbit test default.
     std::array<float, 3> scene_center_{0.0f, 0.7f, 0.0f};
     float scene_radius_ = 4.0f;
+    float scene_min_y_ = 0.0f;  // lowest vertex Y (render space) = ground floor for mist
     // Free-fly camera override state (see set_free_camera).
     bool free_camera_ = false;
     std::array<float, 3> free_eye_{0.0f, 0.0f, 0.0f};

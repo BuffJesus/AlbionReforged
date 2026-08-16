@@ -235,6 +235,22 @@ bool load_native_scene(const std::filesystem::path& path,
                 !read_value(line, parsed.fog_max)) {
                 return fail(&error, "invalid fog_range at line " + std::to_string(line_number));
             }
+        } else if (opcode == "fog_curve") {
+            // fog_curve <start> <inv_span2> <power> <amp> — grounded exponential distance fog.
+            if (!read_value(line, parsed.fog_curve[0]) || !read_value(line, parsed.fog_curve[1]) ||
+                !read_value(line, parsed.fog_curve[2]) || !read_value(line, parsed.fog_curve[3])) {
+                return fail(&error, "invalid fog_curve at line " + std::to_string(line_number));
+            }
+            parsed.has_fog_curve = true;
+        } else if (opcode == "ground_mist") {
+            // ground_mist <strength> <depth_scale> <height_offset> <falloff> — height-based mist.
+            if (!read_value(line, parsed.mist_strength) ||
+                !read_value(line, parsed.mist_depth_scale) ||
+                !read_value(line, parsed.mist_height_offset) ||
+                !read_value(line, parsed.mist_falloff)) {
+                return fail(&error, "invalid ground_mist at line " + std::to_string(line_number));
+            }
+            parsed.has_ground_mist = true;
         } else if (opcode == "ambient") {
             // ambient <r> <g> <b> — flat AmbientColour (theme Lighting sub-record). Optional; paired
             // with `sky_bounce`. Sets has_ambient so the world PS uses the theme ambient model

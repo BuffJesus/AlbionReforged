@@ -135,6 +135,12 @@ private:
     std::array<float, 3> scene_ambient_flat_{0.0f, 0.0f, 0.0f};
     std::array<float, 3> scene_sky_bounce_top_{0.55f, 0.58f, 0.62f};
     std::array<float, 3> scene_sky_bounce_bottom_{0.18f, 0.20f, 0.24f};
+    // Grounded fog + ground mist (apply_env_fog).
+    bool scene_has_fog_curve_ = false;
+    std::array<float, 4> scene_fog_curve_{0.0f, 1.0f, 1.0f, 0.0f};
+    bool scene_has_ground_mist_ = false;
+    std::array<float, 4> scene_mist_{0.0f, 25.0f, 4.0f, 4.0f};
+    float scene_min_y_ = 0.0f;
     std::array<float, 3> scene_center_{0.0f, 0.0f, 0.0f};    // geometry bounds -> auto-frame camera
     float scene_radius_ = 1.0f;
     bool free_camera_ = false;

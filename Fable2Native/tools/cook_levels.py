@@ -1222,12 +1222,19 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
     # near/far fog control points. Distance fog on world geometry ties it to the horizon.
     fog_rec = resolve_ref(best_theme, kFogging)
     fog_color = fog_start = fog_end = fog_max = None
+    fog_near_dist = fog_near_dens = None
     if fog_rec is not None:
         fog_color = read_colour_subrec(fog_rec, kFogColour) or read_flat(fog_rec, FR, FG, FB, FF)
         _fs = read_float(fog_rec, kFogStart)
-        fog_start = _fs if _fs is not None else read_float(fog_rec, kNearDist)
+        fog_near_dist = read_float(fog_rec, kNearDist)
+        fog_start = _fs if _fs is not None else fog_near_dist
+        fog_near_dens = read_float(fog_rec, 0x91F00AC5)  # NearDensity
         fog_end = read_float(fog_rec, kFarDist)
-        fog_max = read_float(fog_rec, kFarDens)
+        fog_max = read_float(fog_rec, kFarDens)          # FarDensity
+    # Ground mist (theme GroundMist sub-record 0x65AA790F -> Strength 0x6CC36A2E). The retail
+    # apply_env_fog adds a height-based mist near the ground (ModelPreview.cpp apply_env_fog).
+    mist_rec = resolve_ref(best_theme, 0x65AA790F)
+    mist_strength = read_float(mist_rec, 0x6CC36A2E) if mist_rec is not None else None
 
     # sun_axis -> Y-up sun_toward (sky_system_re.txt §3), tod=want, time_factor=1.0
     theta = (want - 0.5) * 2.0 * _m.pi
@@ -1365,6 +1372,8 @@ def _resolve_genv_theme_impl(genv_path: Path, env_gdb_path: Path,
             "horizon": horizon, "sunset": sunset, "compl_bias": compl_bias,
             "fog_color": fog_color, "fog_start": fog_start,
             "fog_end": fog_end, "fog_max": fog_max,
+            "fog_near_dist": fog_near_dist, "fog_near_dens": fog_near_dens,
+            "mist_strength": mist_strength,
             "rayleigh": rayleigh, "mie": mie,
             "ambient_flat": ambient_flat, "sky_bounce_top": sky_bounce_top,
             "sky_bounce_bot": sky_bounce_bot}
@@ -1981,6 +1990,34 @@ def cook_level(engine_level: Path, header_bnk: Path, body_bnk: Path, f2tool: Pat
                 fc = [min(max(c, 0.0), 1.0) for c in fc]
                 out.write(f"fog_color {fc[0]:.5g} {fc[1]:.5g} {fc[2]:.5g}\n")
                 out.write(f"fog_range {fs:.6g} {fe:.6g} {min(max(fm, 0.0), 1.0):.5g}\n")
+                # Grounded exponential fog: 1:1 port of ModelPreview.cpp apply_env_fog constant
+                # derivation (§ FogCBData ~L3230-3266). Fits the theme's TWO-point density curve
+                # (near dist/density, far dist/density) into an exponential power fog so the falloff
+                # matches retail instead of our crude linear ramp. Emits `fog_curve start inv_span2
+                # power amp`; the world PS uses 1-exp(-amp*pow(min((d-start)*inv_span2,1.25),power)).
+                nd = env_theme.get("fog_near_dist"); ndn = env_theme.get("fog_near_dens")
+                if nd is not None and ndn is not None:
+                    import math as _mm
+                    span1 = max(nd - fs, 1.0)
+                    span2 = max(fe - fs, span1 + 9.0)
+                    d1 = max(min(max(ndn, 0.0), 1.0), 0.01)
+                    d2 = max(min(max(fm, 0.0), 1.0), 0.01)
+                    od_far = d2 * span2 + (d1 - d2) * span1
+                    fog_e = 1.0
+                    if od_far > 1e-4:
+                        num = _mm.log10(d1 * span1 / od_far); den = _mm.log10(span1 / span2)
+                        if _mm.isfinite(num) and _mm.isfinite(den) and abs(den) > 1e-4:
+                            fog_e = min(max(num / den, 0.05), 8.0)
+                    fog_k = -_mm.log(max(1.0 - d2, 0.02)) / max(od_far, 1e-4)
+                    fog_amp = od_far * fog_k
+                    out.write(f"fog_curve {fs:.6g} {1.0 / span2:.6g} {fog_e:.5g} {fog_amp:.6g}\n")
+                # Ground mist (theme GroundMist.Strength). apply_env_fog: mist = strength*0.75 *
+                # heightBelow(mist_top) * saturate(depth/depth_scale). depth_scale=25, top=ground+4,
+                # falloff=4 (fixed in the retail preview constants). The renderer supplies the ground
+                # Y (scene AABB min) so mist hugs the town floor. Absent/0 strength -> no mist.
+                ms = env_theme.get("mist_strength")
+                if ms is not None and ms > 0.0:
+                    out.write(f"ground_mist {min(max(ms, 0.0), 1.0) * 0.75:.5g} 25 4 4\n")
             # Authored AMBIENT model (Lighting sub-record: AmbientColour flat +
             # SkyColourFinalBounceTop/Bottom hemisphere bounce). Replaces the renderer's
             # hardcoded cool-blue hemisphere with the theme's real ambient. Emitted only when the
