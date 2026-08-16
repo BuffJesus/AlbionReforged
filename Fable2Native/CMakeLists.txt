@@ -13,6 +13,8 @@ add_library(f2native_core STATIC
     src/native_texture.cpp
     src/native_game.cpp
     src/native_input_state.cpp
+    src/native_entity.cpp
+    src/native_world.cpp
     src/native_frontend.cpp
     src/native_install.cpp
     src/native_cook.cpp

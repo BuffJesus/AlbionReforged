@@ -4,6 +4,9 @@
 #include "f2/native_game.h"
 #include "f2/native_input_state.h"
 #include "f2/native_script_systems.h"
+#include "f2/native_entity.h"
+#include "f2/native_world.h"
+#include "f2/native_gdb_hash.h"
 #include "f2/native_install.h"
 #include "f2/native_scene.h"
 #include "f2/native_texture.h"
@@ -16,6 +19,9 @@
 
 #include <cassert>
 #include <cmath>
+#include <algorithm>
+#include <memory>
+#include <vector>
 #include <array>
 #include <cstring>
 #include <cstdint>
@@ -561,6 +567,97 @@ int main() {
         // Default active device + a Frontend-mode game does not tick script systems.
         f2::NativeGame g;
         assert(g.mode == f2::GameMode::Frontend);
+    }
+
+    // ---- P1: FNV-1 hasher matches byte-verified GDB hashes ----
+    {
+        assert(f2::gdb::fnv1("RemoveComponent") == 0x9B41D00Au);
+        assert(f2::gdb::fnv1("Position") == 0xBD7C27D4u);
+        assert(f2::gdb::fnv1("GraphicAppearanceStaticMeshComponent") == 0x29CF50D1u);
+        assert(f2::gdb::fnv1("") == f2::gdb::kFnvBasis);
+    }
+
+    // ---- P1: component registry lookup (sorted bsearch) ----
+    {
+        f2::ComponentRegistry reg;
+        reg.seed_defaults();
+        const auto* d = reg.lookup(f2::gdb::kCompGraphicAppearanceStaticMesh);
+        assert(d != nullptr);
+        assert(d->type_id == f2::kTypeIdGraphicAppearanceStaticMesh);
+        assert(reg.lookup(0xDEADBEEFu) == nullptr);  // unregistered -> null
+    }
+
+    // ---- P1: entity factory dup-gate + sorted-by-typeId insert ----
+    {
+        f2::EntityManager em;
+        f2::NativeEntity& e = em.create_entity(0x1234);
+        assert(e.uid == 1);
+        auto* c1 = em.create_component_by_hash(e, f2::gdb::kCompGraphicAppearanceStaticMesh);
+        assert(c1 != nullptr && e.component_count() == 1);
+        // Second create of the same typeId is gated (entity+0x24 dup mask): no dup.
+        auto* c2 = em.create_component_by_hash(e, f2::gdb::kCompGraphicAppearanceStaticMesh);
+        assert(c2 == c1 && e.component_count() == 1);
+        // A second, distinct entity gets the next UID.
+        assert(em.create_entity().uid == 2);
+        // Direct add of Transform (engine-special) coexists, sorted by typeId.
+        e.add_component(std::make_unique<f2::TransformComponent>());
+        assert(e.component_count() == 2);
+        assert(e.component_by_typeid(f2::kTypeIdTransform) != nullptr);
+        assert(e.component_by_typeid(f2::kTypeIdGraphicAppearanceStaticMesh) != nullptr);
+    }
+
+    // ---- P1: collect_component_hashes (parent-first union minus RemoveComponent) ----
+    {
+        // Synthetic 3-level chain: grandparent -> parent -> child.
+        // grandparent declares {A, B}; parent adds {C}; child removes {B}, adds {D}.
+        struct FakeSource : f2::GdbRecordSource {
+            bool parent_of(std::uint32_t guid, std::uint32_t& out) const override {
+                if (guid == 3) { out = 2; return true; }  // child -> parent
+                if (guid == 2) { out = 1; return true; }  // parent -> grandparent
+                return false;                              // grandparent -> none
+            }
+            std::vector<std::uint32_t> component_fields(std::uint32_t guid) const override {
+                if (guid == 1) return {0xA, 0xB};
+                if (guid == 2) return {0xC};
+                if (guid == 3) return {0xD};
+                return {};
+            }
+            std::vector<std::uint32_t> removed_components(std::uint32_t guid) const override {
+                if (guid == 3) return {0xB};  // child prunes inherited B
+                return {};
+            }
+        } src;
+        auto set = f2::collect_component_hashes(3, src);
+        // Expect A, C, D (B pruned); ancestors first.
+        assert(set.size() == 3);
+        assert(std::find(set.begin(), set.end(), 0xAu) != set.end());
+        assert(std::find(set.begin(), set.end(), 0xCu) != set.end());
+        assert(std::find(set.begin(), set.end(), 0xDu) != set.end());
+        assert(std::find(set.begin(), set.end(), 0xBu) == set.end());
+    }
+
+    // ---- P1: entity -> scene.instances transform bridge ----
+    {
+        f2::NativeScene s;
+        f2::NativeInstance inst;
+        inst.position = {1.0f, 2.0f, 3.0f};
+        s.instances.push_back(inst);
+
+        f2::NativeWorld w;
+        w.spawn_from_scene(s);
+        assert(w.entities.entity_count() == 1);
+
+        // Move the entity's transform, sync, and confirm the drawn instance moved.
+        f2::NativeEntity* e = w.entities.find(1);
+        assert(e != nullptr);
+        auto* t = e->get<f2::TransformComponent>(f2::kTypeIdTransform);
+        assert(t != nullptr);
+        assert(approx(t->position[0], 1.0f));  // seeded from the instance
+        t->position = {10.0f, 20.0f, 30.0f};
+        w.sync_to_scene(s);
+        assert(approx(s.instances[0].position[0], 10.0f));
+        assert(approx(s.instances[0].position[1], 20.0f));
+        assert(approx(s.instances[0].position[2], 30.0f));
     }
 
     std::filesystem::remove(path);

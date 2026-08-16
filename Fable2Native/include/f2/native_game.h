@@ -4,6 +4,7 @@
 #include "native_frontend.h"
 #include "native_input_state.h"
 #include "native_script_systems.h"
+#include "native_world.h"
 
 #include <array>
 #include <cstdint>
@@ -38,6 +39,10 @@ struct NativeGame {
 
     // Master gameplay tick driver (Quest -> General -> AI, retail-recovered order).
     ScriptSystems script_systems;
+
+    // Live entity graph seeded from the cooked scene; pushes transforms into
+    // scene.instances[] each InWorld tick.
+    NativeWorld world;
 
     double elapsed_seconds = 0.0;
 

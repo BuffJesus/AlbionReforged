@@ -9,7 +9,13 @@ bool NativeGame::load_scene(const std::filesystem::path& path, std::string& erro
     simulation_accumulator_ = 0.0;
     camera = NativeCamera{};
     frontend.reset();
-    return load_native_scene(path, scene, error);
+    if (!load_native_scene(path, scene, error)) {
+        return false;
+    }
+    // Seed the live entity graph from the cooked baseline (one entity per instance,
+    // Transform + GraphicAppearanceStaticMesh). Sim only advances it when InWorld.
+    world.spawn_from_scene(scene);
+    return true;
 }
 
 void NativeGame::tick(double delta_seconds) {
@@ -31,7 +37,9 @@ void NativeGame::tick(double delta_seconds) {
         frontend.tick(simulation_step);
         if (mode == GameMode::InWorld) {
             script_systems.tick(simulation_step);
-            // P2: entity/brain -> movement -> collision -> camera -> sync here.
+            // P2: entity/brain -> movement -> collision -> camera here.
+            // Final step: push live entity transforms into the render scene.
+            world.sync_to_scene(scene);
         }
     }
 }
