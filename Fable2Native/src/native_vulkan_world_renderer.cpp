@@ -1255,7 +1255,10 @@ void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
         shadows_on ? 1.0f / static_cast<float>(kShadowSize) : 0.0f,  // texel size (1/res)
         0.0015f,                                                     // NDC-z depth bias
         shadows_on ? 1.0f : 0.0f,                                    // enabled
-        0.7f};                                                       // strength
+        // strength = retail ShadowScaleBias (globals.gdb rec 01b5fc17 = 0.8; town theme 0x72d66d23
+        // inherits it). shadow = sampled*0.8 + 0.2 (scale/bias form, scale+bias=1 per water PS
+        // c139 {0.95,0.05}) → shadowed sun term floors at 0.2. D3D12 parity. (Was a guessed 0.7.)
+        0.8f};                                                       // ShadowScaleBias (globals.gdb)
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width),

@@ -1122,7 +1122,12 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     constants.shadow_params[0] = shadows_on ? 1.0f / static_cast<float>(shadow_size_) : 0.0f;
     constants.shadow_params[1] = 0.0015f;                 // NDC-z depth bias
     constants.shadow_params[2] = shadows_on ? 1.0f : 0.0f;  // enabled
-    constants.shadow_params[3] = 0.7f;                    // strength (how dark the sun term goes)
+    // strength = retail ShadowScaleBias (globals.gdb rec 01b5fc17 = 0.8; chapter2slums' theme
+    // 0x72d66d23 sets no local override so it inherits this global default). The shader applies
+    // shadow = lerp(1, sampled, strength) = sampled*0.8 + 0.2, matching the retail scale/bias form
+    // (proven by the water PS c139 ShadowScaleBias {0.95,0.05}, scale+bias=1): shadowed sun term
+    // floors at 0.2. (Was a guessed 0.7 → 0.3 floor.)
+    constants.shadow_params[3] = 0.8f;                    // ShadowScaleBias (globals.gdb)
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     // The world render must set its OWN viewport/scissor — nothing else does before it,

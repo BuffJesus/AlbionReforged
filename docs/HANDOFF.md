@@ -1,5 +1,33 @@
 # Handoff — resume here
 
+## ▶▶▶ START HERE (2026-08-16) — SHADOW PARAMS PINNED FROM GAME DATA (R2 data component CLOSED)
+Branch **`agent/native-spec-maps-and-char`** (PR #3). USER DIRECTIVE this session: *"only data-supported
+implementations; decomp/RE if needed."* The just-shipped cast shadows used **guessed** params (strength 0.7);
+this session replaced the guess with the **authored retail value from the game's own GDB** and confirmed the
+whole feature is retail-faithful for the town. **Both backends built + screenshot-verified in parity**
+(`scratchpad/shots/world2_shadow08_{d3d12,vulkan}.png`); tests pass.
+- **RE method (reusable):** shadow config = FNV-1-hashed field names in `environmentthemes.gdb` (per-theme) +
+  `Globals/globals.gdb` (global defaults). GDB debug name table stores each field's **FNV-1 hash as a BE u32
+  immediately BEFORE its null-terminated name** (basis 0x811c9dc5, prime 0x01000193). Reuse the GDB reader in
+  `cook_levels.py _resolve_genv_theme_impl`. Exe string sweep: `ghidra_out/shadow_re_dump.txt` (headless
+  `analyzeHeadless.bat ... -process default_tu1.xex -noanalysis -readOnly -postScript ShadowRE.java`). Scratch:
+  `scratchpad/dump_shadow_fields.py`, `theme_shadow_query.py`, `ghidra_scripts/ShadowRE.java`.
+- **Values (globals.gdb defaults; town theme 0x72d66d23 sets NO local shadow override → inherits them):**
+  `ShadowScaleBias`=**0.8** (world shadow term = `sampled*0.8 + 0.2`, floor **0.2**; scale+bias=1 proven by
+  the water PS c139 `{0.95,0.05}`); `MainLightShadowed`=**1** for town (but OFF in 44/45 themes → most bake —
+  ⚠ check a new level's theme before enabling cast shadows); `ShadowDepthBias`=0, `ShadowSlopeScaledDepthBias`=0,
+  `ShadowNearPlaneDistance`=0.01, `DistantShadowFactor`=0.5. Architecture = a **single screen-space shadowmap**
+  (`UseScreenSpaceShadowmap`; material/water PS sample it at `tf8`), **NOT cascaded**.
+- **Applied:** `native_world_renderer.cpp` + `native_vulkan_world_renderer.cpp` `shadow_params[3]` 0.7 → **0.8**
+  (cited). Memory: `fable2-shadow-params-gdb`.
+- ⚠ Correction: memory `fable2-blackworld-compositor-exposure`'s "dominant material PS 98B4F32B/D613E8F33B9FB891"
+  is actually the **water** main-view PS (fresnel/refl/refr/glitter) — the opaque-building shadow term is still
+  un-dumped. **RESIDUAL (not data-pinned):** shadow-map RESOLUTION (native uses 2048², an engine constant not in
+  GDB) + the opaque-material shadow-buffer term (would need shader-bank disasm or the Render ShadowBuffers pass
+  decomp). Depth bias kept small (retail's 0 suits its screen-space resolve, not our projected map).
+- **★ NEXT:** same-old retail-fidelity list — sun disc/beams/glare (needs a level that authors them; chapter2slums
+  authors none), HDR-range lighting, sunlight balance. GhidraMCP is live on port 8089 (GUI launched this session).
+
 > **CROSS-TRACK (2026-08-16): decomp/native → recomp leverage is consolidated in
 > [DECOMP_TO_RECOMP.md](DECOMP_TO_RECOMP.md).** Highest-leverage recomp action = the BLACK-WORLD
 > force-predicate-true A/B (`REXGPU_NATIVE_FORCE_PREDICATE_TRUE=0` vs `1`, `--gpu_plugin native`,
