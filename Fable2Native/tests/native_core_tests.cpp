@@ -888,6 +888,15 @@ int main() {
         assert(game.game_state.header.chapter == 5);
         auto* mnpc = game.world.entities.find(game.world.npcs[0].entity_uid);
         assert(approx(mnpc->get<f2::HealthComponent>(f2::kTypeIdHealth)->health, 40.0f));
+        // Expanded natives (native_bindings module): NPC health query + Camera + quest count.
+        assert(game.script_vm->run_source(
+            "assert(World.GetNpcHealth(0) == 40)\n"
+            "Quest.SetComplete(5); Quest.SetComplete(9)\n"
+            "assert(Quest.CountComplete() == 2)\n"
+            "assert(Game.GetChapter() == 5)\n"
+            "local cx, cy, cz = Camera.GetPosition()\n"
+            "assert(type(cx) == 'number')\n"
+            "assert(Debug.GetRandomNumber(3, 3) == 3)"));
         std::filesystem::remove(mod_path);
 
         // Missing file is reported, not crashed.

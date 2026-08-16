@@ -1,5 +1,7 @@
 #include "f2/native_game.h"
 
+#include "f2/native_bindings.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -18,84 +20,9 @@ bool NativeGame::enable_scripting() {
     }
     script_vm->set_user_data(this);
 
-    // Core native API (register-class-method pattern). A small grounded starter set from
-    // the Lua natives catalog classes (Debug/Game/Player/World); more bind on demand.
-    script_vm->register_native("Debug", "Log", [](NativeScriptVM& vm) -> int {
-        if (auto* g = static_cast<NativeGame*>(vm.user_data())) g->script_log.emplace_back(vm.arg_string(1));
-        return 0;
-    });
-    script_vm->register_native("Game", "Elapsed", [](NativeScriptVM& vm) -> int {
-        auto* g = static_cast<NativeGame*>(vm.user_data());
-        vm.push_number(g ? g->elapsed_seconds : 0.0);
-        return 1;
-    });
-    script_vm->register_native("Player", "GetPosition", [](NativeScriptVM& vm) -> int {
-        auto* g = static_cast<NativeGame*>(vm.user_data());
-        const std::array<float, 3> p = g ? g->player.position() : std::array<float, 3>{};
-        vm.push_number(p[0]); vm.push_number(p[1]); vm.push_number(p[2]);
-        return 3;
-    });
-    script_vm->register_native("World", "NpcCount", [](NativeScriptVM& vm) -> int {
-        auto* g = static_cast<NativeGame*>(vm.user_data());
-        vm.push_number(g ? static_cast<double>(g->world.npcs.size()) : 0.0);
-        return 1;
-    });
-    // --- action natives (drive the gameplay systems from script) ---
-    script_vm->register_native("Player", "SetPosition", [](NativeScriptVM& vm) -> int {
-        if (auto* g = static_cast<NativeGame*>(vm.user_data())) {
-            g->player.set_position({static_cast<float>(vm.arg_number(1)),
-                                    static_cast<float>(vm.arg_number(2)),
-                                    static_cast<float>(vm.arg_number(3))});
-        }
-        return 0;
-    });
-    script_vm->register_native("Game", "SetChapter", [](NativeScriptVM& vm) -> int {
-        if (auto* g = static_cast<NativeGame*>(vm.user_data()))
-            g->game_state.header.chapter = static_cast<std::uint32_t>(vm.arg_number(1));
-        return 0;
-    });
-    // Quest completion (the 150-bit summary, Save_BuildProgressMeta). SetComplete(i[,v]).
-    script_vm->register_native("Quest", "SetComplete", [](NativeScriptVM& vm) -> int {
-        auto* g = static_cast<NativeGame*>(vm.user_data());
-        const int i = static_cast<int>(vm.arg_number(1));
-        const bool v = vm.arg_count() >= 2 ? vm.arg_bool(2) : true;
-        if (g && i >= 0 && i < 150) g->game_state.quest_completion.set(static_cast<std::size_t>(i), v);
-        return 0;
-    });
-    script_vm->register_native("Quest", "IsComplete", [](NativeScriptVM& vm) -> int {
-        auto* g = static_cast<NativeGame*>(vm.user_data());
-        const int i = static_cast<int>(vm.arg_number(1));
-        vm.push_bool(g && i >= 0 && i < 150 &&
-                     g->game_state.quest_completion.test(static_cast<std::size_t>(i)));
-        return 1;
-    });
-    // World.NpcPosition(index) -> x, y, z (0,0,0 for a bad index).
-    script_vm->register_native("World", "NpcPosition", [](NativeScriptVM& vm) -> int {
-        auto* g = static_cast<NativeGame*>(vm.user_data());
-        const int i = static_cast<int>(vm.arg_number(1));
-        std::array<float, 3> p{0.0f, 0.0f, 0.0f};
-        if (g && i >= 0 && i < static_cast<int>(g->world.npcs.size()))
-            p = g->world.npcs[static_cast<std::size_t>(i)].controller.position();
-        vm.push_number(p[0]); vm.push_number(p[1]); vm.push_number(p[2]);
-        return 3;
-    });
-    // World.DamageNpc(index, amount) -> killed? (applies the Health.Modify verb)
-    script_vm->register_native("World", "DamageNpc", [](NativeScriptVM& vm) -> int {
-        auto* g = static_cast<NativeGame*>(vm.user_data());
-        const int i = static_cast<int>(vm.arg_number(1));
-        const float amount = static_cast<float>(vm.arg_number(2));
-        bool killed = false;
-        if (g && i >= 0 && i < static_cast<int>(g->world.npcs.size())) {
-            NativeEntity* e = g->world.entities.find(g->world.npcs[static_cast<std::size_t>(i)].entity_uid);
-            auto* h = e ? e->get<HealthComponent>(kTypeIdHealth) : nullptr;
-            if (h) {
-                killed = h->modify(-amount);
-                if (killed) g->world.npcs[static_cast<std::size_t>(i)].controller.alive = false;
-            }
-        }
-        vm.push_bool(killed);
-        return 1;
-    });
+    // The gameplay native API (Debug/Game/Player/World/Quest/Camera/Health...). Everything
+    // the game's scripts call beyond this falls through to the auto-stub (boot path).
+    register_native_api(*script_vm, *this);
 
     // Wire the three managers to their Lua Update entry points, in the retail-recovered
     // order (Quest -> General -> AI). The Lua side owns its coroutine scheduling; the
