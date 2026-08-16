@@ -80,7 +80,7 @@ or bone-matrix upload + the setter, wired into the existing character range. **B
 (1) the anim-sampler RE (bone matrices — the gameplay session's research agent, `anim_havok §F.2`),
 and (2) the A/B choice above. Ping me with the choice + the data shape and I'll land it.
 
-## 3. Planar reflection RTT water + Fresnel grounding — ✅ BOTH BACKENDS (reflection f8e0b8e/fcd8d77, Fresnel 475b5a6)
+## 3. Water fidelity — reflection RTT ✅ both backends · Fresnel ✅ both backends · refraction grab-pass ✅ D3D12 / 🚧 Vulkan
 
 Retail water (`Shaders.sbk` shader 62 `PSHADER_WATERPATCH`) is planar reflection/refraction, not
 analytic (see `docs/RENDERER_GROUNDING_AUDIT.md`). **Phase 1 (D3D12, done + verified):** the frontend
@@ -104,18 +104,28 @@ retail linear form `saturate(1 - dot(V,Nf) + FRESNEL_BIAS)` (`water_system_re.tx
 `FRESNEL_BIAS = water_params[0].x`), replacing the Schlick `pow(1-N·V,5)` stand-in — the real reflection
 RT (phase 1/2) removed the analytic-sky sparkle that forced the approximation. Both backends, clean.
 
-**Phase 3b (refraction grab-pass) — INVESTIGATED, deliberately NOT shipped (would require guessing):**
-the town water is the `.water`-file shader = **retail program 57** (`water_system_re.txt §3`), which
-§3 step 9 shows **alpha-blended** (`ONE/SRC_ALPHA`) — the current native water already matches this
-(the alpha-blend IS the refraction: the framebuffer behind shows through). A distorted grab-pass
-(scene-colour copy sampled with `REFRACTION_SCALE`, output OPAQUE) is **shader 62 (WATERPATCH)'s**
-technique — a DIFFERENT water shader (ocean patches), not the town's. Imposing it on the town water
-would (a) apply the wrong shader's method and (b) require choosing an opaque-vs-alpha-blend output
-composite for program 57 that **the decomp does not determine** — i.e. a guess. Under the
-"data-backed, no guessing" rule that is disqualifying, so the refraction stays as program 57's grounded
-alpha-blend. (A half-built D3D12 grab-pass was written, then reverted once this was understood.)
-Net: **the town water refraction is already grounded; phase 3's real data-backed change was the Fresnel
-(3a, shipped).** If a WATERPATCH/ocean level is ever cooked, the grab-pass is the right technique THERE.
+**Phase 3b (refraction grab-pass) — D3D12 SHIPPED + verified (5c35ddb); Vulkan parity in flight.**
+CORRECTION of an earlier wrong reversal: the town/ocean water IS **retail program 57 = shader-table
+entry 65 (`PSHADER_OCEAN_WATER`)**, and its binding table declares **`g_RefractionSampler` (c14)** AND
+`g_ReflectionSampler` (c13) — both real texture tiles (compilers strip unused samplers; and §5 step 1's
+dual bump-map fetch proves the subagent tfetch decode that claimed "tiles are dead code" was wrong). So
+retail samples an explicit refraction TILE; the native alpha-blend was a documented port *stand-in*
+(`§5 step 6`), NOT ground truth. The grab-pass is therefore GROUNDED (I was wrong to decline it), and
+program 57 IS the ocean water — no separate WATERPATCH(62) level needed; the existing `out_realwater*`
+scenes are program 57.
+- **D3D12 impl:** frontend owns a window-sized HDR-colour copy + SRV; `render()` copies the opaque HDR
+  scene (scene BEHIND the water) into it between the opaque and water passes (same bound-resource copy
+  as the depth copy); water PS samples it as the refraction tile (t6) by screen-space uv distorted by
+  `REFRACTION_SCALE` (param[27/28] = `water_params[6].w`/`[7].x`), tinted by `water_opacity`
+  (`params[9].y`), output opaque (alpha suppresses the `ONE/SRC_ALPHA` framebuffer). `FABLE2NATIVE_NO_REFRACT`
+  A/B. **Verified:** pure-refraction red-tint shows the `.water` body sampling the scene-behind (island
+  edge through it); grounded combine renders clean. Exact per-packet combine NOT machine-verified
+  (subagent decode unreliable) — uses §5 structure + data-backed params.
+- **Vulkan parity — scoped, needs a render-pass split:** Vulkan draws opaque+water in ONE render pass
+  (subpasses under MSAA); you can't `vkCmdCopyImage` a colour attachment mid-pass, and subpass input
+  attachments can't do the distorted (offset) sample. So the world render pass must split into
+  opaque(+sky) → copy HDR colour → water (a frontend-orchestration refactor). Until then Vulkan keeps
+  §5's grounded alpha-blend refraction stand-in (a fidelity gap, not a correctness gap).
 
 ## Coordination rules
 - Only the environment session edits `native_world_renderer.cpp` / `native_vulkan_world_renderer.cpp`
