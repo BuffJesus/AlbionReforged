@@ -1,16 +1,25 @@
 #pragma once
 
-// Third-person follow-camera controller.
+// Third-person DEFAULT FOLLOW camera (directly behind the hero, centred).
 //
 // Retail read contract (camera_system.txt): the camera exposes world pos @+0 and
 // forward @+32; a follow-vs-cutscene selector (sub_82265F90) picks the active camera;
-// GetCameraValues @0x82967988 supplies per-region tuning. The follow MATH (spring/lag,
-// stick->yaw/pitch curve, pitch clamps) was NOT statically isolated (resolver §7a-d),
-// AND the CameraValues data is a CAGE/TRACK model (FocalOffset/TrackAmount/SlotWidth),
-// not orbit distance/height. So this ORBIT follow cam is an ENGINEERING MODEL; only the
-// vertical FOV (70deg, 0x82100efc) is decomp-grounded.
+// GetCameraValues @0x82967988 supplies per-region tuning.
 //
-// It outputs position + yaw + pitch matching the world renderer's forward convention
+// The default follow is CENTRED BEHIND the hero (no lateral offset). This is the
+// non-guessing choice: the follow-camera CONTROLLER math (spring/lag, distance,
+// height, any offset) lives in camera->[+4]->[+60] and was NOT statically isolated
+// (camera_system.txt §7a — the "HIGHEST-VALUE gap"), so no shoulder offset is asserted.
+// OVER-THE-SHOULDER is a SEPARATE mode in retail: the AIM/TARGET camera (§6,
+// SetInTargetingCamera @0x82967560) that engages on lock-on/aim and shifts framing
+// toward the target (FilterFoesForCombatCamera / CameraInterest). That belongs with
+// the combat/targeting phase — it is deliberately NOT part of this base follow.
+//
+// Grounded here: vertical FOV (70deg, 0x82100efc). ENGINEERING (no retail source):
+// distance/height/pitch-clamps/sensitivities/smoothing — the CameraValues data is a
+// cage/track model (FocalOffset/TrackAmount/SlotWidth), not orbit dist/height.
+//
+// Outputs position + yaw + pitch matching the renderer's forward convention
 // (fwd = {cos(pitch)sin(yaw), sin(pitch), cos(pitch)cos(yaw)}, pos = target - fwd*dist),
 // so writing them into NativeGame.camera frames the hero with no renderer change.
 
