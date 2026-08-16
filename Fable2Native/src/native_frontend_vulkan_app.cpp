@@ -271,6 +271,12 @@ public:
                     OutputDebugStringA(("Fable2Native: loaded " + std::to_string(mods_loaded) +
                                         " Lua mod(s)\n").c_str());
                 }
+                // --game-scripts: boot the game's own LuaQ scripts (D3D12 parity).
+                if (command_line_flag(L"--game-scripts") && source_) {
+                    const int n = game_.boot_game_scripts(source_->data_root);
+                    OutputDebugStringA(("Fable2Native: boot_game_scripts loaded " +
+                                        std::to_string(n) + " game script(s)\n").c_str());
+                }
             }
         }
         if (command_line_flag(L"--start-world")) {

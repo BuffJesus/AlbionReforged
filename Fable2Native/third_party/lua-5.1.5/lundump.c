@@ -73,10 +73,22 @@ static lua_Number LoadNumber(LoadState* S)
  return x;
 }
 
+/* FABLE2NATIVE PATCH: the game's LuaQ was compiled for the 32-bit Xbox 360, so on-disk
+** size_t values (string lengths) are 4 bytes. Our host VM is x64 (sizeof(size_t)==8), so
+** the stock LoadVar(S,size) would consume 8 bytes and desync the stream. Read exactly a
+** 4-byte little-endian size instead (the header's endianness byte is 1 == little, matching
+** our x64 host, so no byte-swap is needed). Paired with the sizeof(size_t)=4 the header
+** below advertises. `unsigned int` is 4 bytes on every platform this VM targets. */
+static size_t LoadSize(LoadState* S)
+{
+ unsigned int x;
+ LoadVar(S,x);
+ return (size_t)x;
+}
+
 static TString* LoadString(LoadState* S)
 {
- size_t size;
- LoadVar(S,size);
+ size_t size=LoadSize(S);
  if (size==0)
   return NULL;
  else
@@ -220,7 +232,7 @@ void luaU_header (char* h)
  *h++=(char)LUAC_FORMAT;
  *h++=(char)*(char*)&x;				/* endianness */
  *h++=(char)sizeof(int);
- *h++=(char)sizeof(size_t);
+ *h++=(char)4;			/* FABLE2NATIVE: game bytecode uses 32-bit size_t (see LoadSize) */
  *h++=(char)sizeof(Instruction);
  *h++=(char)sizeof(lua_Number);
  *h++=(char)(((lua_Number)0.5)==0);		/* is lua_Number integral? */

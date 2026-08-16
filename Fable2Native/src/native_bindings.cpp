@@ -1,11 +1,13 @@
 #include "f2/native_bindings.h"
 
+#include "f2/native_bnk.h"
 #include "f2/native_game.h"
 #include "f2/native_script.h"
 
 #include <array>
 #include <cstdint>
 #include <random>
+#include <string>
 
 namespace f2 {
 
@@ -147,6 +149,29 @@ void register_native_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         auto* g = game_of(v);
         v.push_number(g ? static_cast<double>(g->game_state.quest_completion.count()) : 0.0);
         return 1;
+    });
+}
+
+void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
+    // RunScript(name): pull the named LuaQ chunk from the game's script BNK and run it.
+    // De-duplicated (a script only loads once) with a hard cap as a runaway backstop.
+    // This is the retail lhRunStartupScripts -> generalsetupscript -> RunScript chain.
+    vm.register_global("RunScript", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (!g || !g->script_bnk) return 0;
+        const char* name = v.arg_string(1);
+        if (!name || !*name) return 0;
+        const std::string key = BnkReader::normalize(name);
+        for (const auto& s : g->loaded_scripts) {
+            if (s == key) return 0;  // already loaded
+        }
+        if (g->loaded_scripts.size() >= 600) return 0;  // runaway backstop
+        g->loaded_scripts.push_back(key);
+        std::vector<std::uint8_t> bytes = g->script_bnk->extract(name);
+        if (!bytes.empty()) {
+            v.run_bytecode(bytes.data(), bytes.size(), ("=" + key).c_str());
+        }
+        return 0;
     });
 }
 

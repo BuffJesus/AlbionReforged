@@ -48,6 +48,9 @@ public:
     // closure as `method`). The retail register-class-method pattern.
     void register_native(const char* class_name, const char* method, ScriptNativeFn fn);
 
+    // Bind fn as a bare GLOBAL function (e.g. RunScript) rather than Class.Method.
+    void register_global(const char* name, ScriptNativeFn fn);
+
     // Load + run a chunk. run_source takes Lua text; run_bytecode takes compiled LuaQ
     // (the game's scripts). Both return false + set last_error() on a load/runtime error.
     bool run_source(const char* source, const char* chunk_name = "=chunk");

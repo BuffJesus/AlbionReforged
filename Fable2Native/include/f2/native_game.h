@@ -10,12 +10,14 @@
 #include "native_player.h"
 #include "native_save.h"
 #include "native_script.h"
+#include "native_bnk.h"
 
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace f2 {
 
@@ -52,6 +54,9 @@ struct NativeGame {
     // Embedded Lua 5.1 VM (null until enable_scripting()). When enabled, the three
     // script managers resume their Lua-side Update each InWorld tick.
     std::unique_ptr<NativeScriptVM> script_vm;
+    // The game's script BNK (null until boot_game_scripts). RunScript pulls chunks from it.
+    std::unique_ptr<BnkReader> script_bnk;
+    std::vector<std::string> loaded_scripts;  // normalized names RunScript has loaded
 
     // Live entity graph seeded from the cooked scene; pushes transforms into
     // scene.instances[] each InWorld tick.
@@ -88,6 +93,14 @@ struct NativeGame {
     // last_error), not fatal. Returns the number successfully loaded. No-op if scripting
     // isn't enabled or the dir is missing.
     int load_mods(const std::filesystem::path& dir);
+
+    // Boot the game's OWN Lua scripts: open the script BNK under `data_root`, install a
+    // manager boot shim + the auto-stub, then load generalsetupscript, whose RunScript
+    // list pulls the ~160 gameplay scripts from the BNK. Requires enable_scripting() first.
+    // Returns the number of scripts loaded, or -1 if the BNK could not be opened. Honest
+    // scope: scripts LOAD and their boot coroutines are created; full gameplay needs the
+    // backing systems the stubbed natives stand in for.
+    int boot_game_scripts(const std::filesystem::path& data_root);
 
     // Own-format save/restore (gamestate_save_restore.txt model; see native_save.h).
     // save_state serializes the game-flow state + the live entity delta into a byte blob.

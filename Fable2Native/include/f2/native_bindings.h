@@ -17,4 +17,8 @@ struct NativeGame;
 // Bind the gameplay natives onto `vm` (user_data must already point at `game`).
 void register_native_api(NativeScriptVM& vm, NativeGame& game);
 
+// Bind the boot natives (RunScript, which pulls a named LuaQ chunk from the game's
+// script BNK via game.script_bnk and runs it). Used by NativeGame::boot_game_scripts.
+void register_boot_api(NativeScriptVM& vm, NativeGame& game);
+
 }  // namespace f2

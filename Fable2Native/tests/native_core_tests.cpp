@@ -35,6 +35,70 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <iostream>
+#include <string>
+#include <cstdio>
+#include <cstdlib>
+
+// NDEBUG-independent check for the boot test below. The project builds RelWithDebInfo,
+// which defines NDEBUG and strips assert() — so the boot test can't rely on assert to
+// actually verify anything. F2_CHECK aborts with a message on failure in every config.
+// (NOTE for maintainers: the same NDEBUG stripping means the assert()s elsewhere in this
+// file are no-ops under RelWithDebInfo — the suite currently only proves "doesn't crash".
+// Making the whole suite live-assert is a worthwhile follow-up but touches many blocks'
+// stale expectations, so it's deliberately left out of this scripting change.)
+#define F2_CHECK(cond)                                                                 \
+    do {                                                                               \
+        if (!(cond)) {                                                                 \
+            std::fprintf(stderr, "F2_CHECK failed: %s (%s:%d)\n", #cond, __FILE__, __LINE__); \
+            std::abort();                                                              \
+        }                                                                              \
+    } while (0)
+
+// The full retail boot chain through the LIVE VM: generalsetupscript RUNS, its RunScript
+// calls pull the gameplay scripts from the BNK and run each. Proves the whole path holds
+// together — BNK inflate + float LuaQ undump + auto-stub catching every missing native —
+// without a crash. (This RUNS bytecode, unlike the load_only proof.) Skipped if game data
+// is absent. In its own function so the large NativeGame local stays out of main()'s frame.
+static void test_boot_game_scripts() {
+    const std::filesystem::path bnk_path =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    // boot_game_scripts opens <data_root>/data/gamescripts_r.bnk, so data_root is the
+    // parent of the "data" folder.
+    const std::filesystem::path data_root = bnk_path.parent_path().parent_path();
+    if (!std::filesystem::exists(bnk_path)) return;
+
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    // generalsetupscript RUNS and its RunScript list pulls the gameplay scripts from the BNK.
+    // Getting here at all proves the whole chain: BNK inflate + the 32-bit/float LuaQ undump
+    // patches (lundump.c LoadSize + luaconf LUA_NUMBER=float) + the auto-stub swallowing every
+    // native the port doesn't implement yet.
+    const int loaded = game.boot_game_scripts(data_root);
+    F2_CHECK(loaded > 0);  // generalsetupscript's RunScript list pulled real scripts
+    F2_CHECK(game.loaded_scripts.size() == static_cast<std::size_t>(loaded));
+    // The managers resume the deferred boot coroutines for a few Update ticks. This is where
+    // scripts actually CALL natives, so it exercises the auto-stub — and must not crash.
+    for (int i = 0; i < 3; ++i) game.script_systems.tick(1.0 / 60.0);
+
+    // Ranked missing-native worklist — the tangible STEP 4 artifact (what the port still owes
+    // the game's scripts). Informational (may be empty if coroutines yield before calling an
+    // unmet native), printed once so a maintainer can see the surface at a glance.
+    std::map<std::string, int> freq;
+    for (const auto& m : game.script_vm->stub_misses()) ++freq[m];
+    std::vector<std::pair<std::string, int>> ranked(freq.begin(), freq.end());
+    std::sort(ranked.begin(), ranked.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    std::cout << "[boot] scripts loaded = " << loaded
+              << "  unique missing natives = " << ranked.size() << "\n";
+    int shown = 0;
+    for (const auto& [name, count] : ranked) {
+        std::cout << "  " << count << "x  " << name << "\n";
+        if (++shown >= 40) break;
+    }
+    std::cout << std::flush;
+}
 
 int main() {
     const std::array<std::uint8_t, 136> dxt1 = [] {
@@ -929,6 +993,11 @@ int main() {
             }
         }
     }
+
+    // ---- P6: boot_game_scripts end-to-end (real BNK; skipped if game data absent) ----
+    // Runs in its own function (test_boot_game_scripts, above main) so the large NativeGame
+    // local doesn't add to main()'s already-deep stack frame.
+    test_boot_game_scripts();
 
     // ---- P6: mods folder loader + Quest natives (150-bit bitset) ----
     {

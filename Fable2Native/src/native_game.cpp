@@ -47,6 +47,66 @@ bool NativeGame::enable_scripting() {
     return true;
 }
 
+namespace {
+// The manager boot shim: QuestManager/GeneralScriptManager/AIManager with the retail
+// AddScript=coroutine model + a per-frame Update that resumes each live thread. Threads
+// are created but NOT resumed during boot (deferred to the first Update) — a safe
+// deviation from retail's resume-on-add so loading the ~160 scripts can't hang on a
+// top-level coroutine loop. AddScript is also a bare global (scripts call it at top level).
+constexpr const char* kBootShim = R"LUA(
+    local function make_manager()
+      local m = { threads = {} }
+      function m:AddScript(fn)
+        if type(fn) ~= "function" then return end
+        local co = coroutine.create(fn)
+        self.threads[#self.threads + 1] = co
+        return co
+      end
+      m.NewQuestThread = m.AddScript
+      m.NewEntityThread = m.AddScript
+      function m:Update(dt)
+        local live = {}
+        for i = 1, #self.threads do
+          local co = self.threads[i]
+          if coroutine.status(co) ~= "dead" then
+            local ok = coroutine.resume(co, dt)
+            if ok and coroutine.status(co) ~= "dead" then live[#live + 1] = co end
+          end
+        end
+        self.threads = live
+      end
+      return m
+    end
+    QuestManager = make_manager()
+    GeneralScriptManager = make_manager()
+    AIManager = make_manager()
+    function AddScript(fn) return GeneralScriptManager:AddScript(fn) end
+)LUA";
+}  // namespace
+
+int NativeGame::boot_game_scripts(const std::filesystem::path& data_root) {
+    if (!script_vm) return -1;
+    script_bnk = std::make_unique<BnkReader>();
+    const auto bnk_path = data_root / "data" / "gamescripts_r.bnk";
+    if (!script_bnk->open(bnk_path.string())) {
+        script_bnk.reset();
+        return -1;
+    }
+    loaded_scripts.clear();
+    // Boot natives (RunScript) + the manager shim BEFORE the auto-stub (so the real tables
+    // exist), then the auto-stub catches every other native the scripts call.
+    register_boot_api(*script_vm, *this);
+    script_vm->run_source(kBootShim, "=bootshim");
+    script_vm->install_autostub();
+    // Load the boot script; its RunScript list pulls the ~160 gameplay scripts from the BNK.
+    std::vector<std::uint8_t> boot =
+        script_bnk->extract("miscellaneous/generalsetupscript.lua");
+    if (!boot.empty()) {
+        script_vm->run_bytecode(boot.data(), boot.size(), "=generalsetupscript");
+    }
+    return static_cast<int>(loaded_scripts.size());
+}
+
 int NativeGame::load_mods(const std::filesystem::path& dir) {
     if (!script_vm) return 0;
     std::error_code ec;

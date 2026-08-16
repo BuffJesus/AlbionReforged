@@ -64,6 +64,17 @@ void NativeScriptVM::register_native(const char* class_name, const char* method,
     lua_pop(s, 1);  // pop the class table
 }
 
+void NativeScriptVM::register_global(const char* name, ScriptNativeFn fn) {
+    if (!state_) return;
+    lua_State* s = L(state_);
+    const int idx = static_cast<int>(natives_.size());
+    natives_.push_back(fn);
+    lua_pushlightuserdata(s, this);
+    lua_pushinteger(s, idx);
+    lua_pushcclosure(s, &native_trampoline, 2);
+    lua_setglobal(s, name);
+}
+
 bool NativeScriptVM::load_and_run_(const void* data, std::size_t size, const char* name) {
     if (!state_) {
         last_error_ = "VM not initialised";
