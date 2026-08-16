@@ -33,19 +33,36 @@ the *spec's decision*, not invented at the shader:
 | Shadow depth bias | `0.0015` | standard shadow-acne bias (technique, not a look value) |
 | Sun horizon gate | `-0.05` | technical threshold: disable the shadow pass as the sun sets (not a visual value) |
 
-## C. AUTHORED — no retail ground truth captured yet (honest gap)
-These are the analytic **water** look. Per-material water DOES carry data-backed params via
-`WaterConstants` (b2, from the WaterFile record); the constants below are the *procedural surface*
-shaping that isn't yet traced to a retail water-shader constant:
-| Constant | Value | Controls | Groundable from |
-|---|---|---|---|
-| Ripple slope damp | `0.35` | authored bump slope | retail water PS disasm (`water_system_re.txt §5`) |
-| Fresnel exponent | `5.0` | deep↔surface blend | retail water PS disasm |
-| Sky-reflection blend | `0.5` | reflection mix | retail water PS disasm |
-| Night fade gate/scale | `0.05, 0.45` | sun-set water darkening | theme WaterTheme / day-cycle |
-| Night sky desat + color | `0.22`, `0.010,0.018,0.050` | night water sky tint | theme night sky |
-| Water distance fade | `75.0` | fog fade scale | theme fog near/far (could reuse Fogging record) |
-| Shoreline depth fade | `256.0` | shore transparency | WaterFile depth-fade field (if present) |
+## C. WATER — mostly data-backed; the rest are DELIBERATE coupled deviations (CORRECTED 2026-08-16)
+Re-reading `ps_water` against `water_system_re.txt §3` (the 37-param `WaterFile::params` table) shows
+the water is **far more grounded than a keyword sweep suggests**. The sweep's "authored 0.5 blend" was a
+false positive (line 734 `0.5` is a hemisphere remap `y*0.5+0.5`, not a blend weight — the real blend is
+`refl_strength = water_params[7].y` = **param[29] REFLECTION_STRENGTH=0.75, data-backed**).
+
+DATA-BACKED (from `water_params[]` b2, WaterFile record):
+| Term | Source | Param |
+|---|---|---|
+| Fresnel bias | `water_params[0].x` | `[0] FRESNEL_BIAS` |
+| Reflection bias | `water_params[0].y` | `[1] REFLECTION_BIAS` |
+| Bump UV scale 0/1 | `water_params[1].zw / [2].xy` | `[6-9] NM_SCALE` |
+| Reflection strength | `water_params[7].y` | `[29] REFLECTION_STRENGTH` |
+| Glitter power / strength | `water_params[9].x / [8].w` | `[36]/[35] GLITTER_*` |
+| Surface / deep colour | `water_params[4-5]` | surface/deep colour |
+
+DELIBERATE DEVIATIONS (documented in-code, mutually coupled — do NOT "ground" piecemeal):
+| Constant | Value | Why it deviates |
+|---|---|---|
+| Fresnel curve | Schlick `pow(1-N·V,5)` | spec's retail linear `saturate(1-N·V+bias)` assumes the near-horizontal `Nf` (NORMAL_SCALE=0.05); the native uses a broad `Nf` instead |
+| `Nf` up-scale | `1.0` (broad) not `0.05` | the spec's near-horizontal `Nf` + high-freq PF40 normal map = white-noise sparkle; broad `Nf` fixes it (comment lines 722-725) |
+| Ripple slope damp | `0.35` | same anti-noise damping of the summed bump normals |
+| Night fade / desat | `0.05,0.45 / 0.22, (.010,.018,.050)` | matches the atmosphere sky pass's night fade so water reflects the real night sky |
+| Distance fade / shoreline | `75.0 / 256.0` | HDR-less target compensations (no retail exposure/depth-edge stage in this pass) |
+| Glitter attenuation | `*0.25` | HDR-less: retail applies exposure the native pass lacks |
+
+These are a **coherent anti-noise / HDR-less approximation**, not sloppy guesses. Porting the retail
+fresnel formula alone would reintroduce the sparkle noise the broad-`Nf` choice removes (they are coupled).
+The only clean-parity path is the full planar-RTT water (below), which supplies a real reflection/refraction
+signal so the near-horizontal `Nf` no longer aliases.
 
 **Assessment:** tiers A+B (all the *land* lighting) are grounded or spec-sanctioned — compliant. Tier C
 is confined to the **procedural water surface** shaping.
