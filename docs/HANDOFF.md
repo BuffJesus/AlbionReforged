@@ -1,5 +1,15 @@
 # Handoff — resume here
 
+> **CROSS-TRACK (2026-08-16): decomp/native → recomp leverage is consolidated in
+> [DECOMP_TO_RECOMP.md](DECOMP_TO_RECOMP.md).** Highest-leverage recomp action = the BLACK-WORLD
+> force-predicate-true A/B (`REXGPU_NATIVE_FORCE_PREDICATE_TRUE=0` vs `1`, `--gpu_plugin native`,
+> screenshot; confirm log `d3d12_pm4_backend.cpp:1917`) using Fable2Native chapter2slums as the
+> qualitative non-black oracle. All knobs are env-gated — **zero source edits**. Verified this pass:
+> the Xenos→DXBC translator is *structurally correct* (real `OpIf`/`OpEndIf` on `p0`), so the frontier
+> is WHY `p0` is false at runtime, not a broken if-block. The `r8=0` predicate suspect is WORLD-only
+> and **orthogonal** to the guest black-SKIN composite bug. Heap/VA world-load FATAL was already
+> decomp-SOLVED (guest-CRT `vsnprintf` pointer-as-count, `WorldLoadAllocTrace.cpp`), not exhaustion.
+
 ## ▶▶▶ START HERE (2026-08-15) — CAST SHADOW MAPPING ✅ DONE (BOTH BACKENDS)
 Branch **`agent/native-spec-maps-and-char`** (PR #3), commits `0bc0a22` (D3D12), `31fa3a0` (Vulkan parity). USER CHOSE **cast
 shadow mapping** (the faithful, high-fidelity path) after a measure-first pass: the AssetBrowser oracle renders the

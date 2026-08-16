@@ -8,6 +8,14 @@
 > plugin fork) and the API-choice reasoning (D3D12-first, thin RHI for Vulkan) still stand and are
 > folded into that plan.
 
+> **DECOMP-AS-ORACLE for the current native-backend black-world bug (2026-08-16).** The recomp
+> Xenos→DXBC translator is *structurally correct* — real `OpIf`/`OpEndIf` on
+> `p0 = system_temp_ps_pc_p0_a0_.z`, lane-consistent `setp` (`dxbc_translator.cpp` / `_alu.cpp` /
+> `_om.cpp`). The color temps zero-init and are written only in predicated blocks, so the frontier is
+> **why `p0` is false at runtime**, not a broken translation. Localize with the shipped, env-gated
+> `force_predicate_true` / `force_pixel_color_nonzero` / `DUMP_PS_KEY` knobs against the Fable2Native
+> non-black oracle. Full per-frontier map: [DECOMP_TO_RECOMP.md](DECOMP_TO_RECOMP.md) §Frontier 1.
+
 User directive (2026-07-19): "figure out how to get our own graphics pipeline integrated. Vulkan,
 etc." This is the graphics rung of the recomp → decomp → **own** ladder in
 [RUNTIME_OWNERSHIP.md](RUNTIME_OWNERSHIP.md). Three phases, each shippable on its own.

@@ -37,6 +37,12 @@ Turn the machine translation into *understanding* — the prerequisite for deep 
      community's "custom xex with known output" as a regression oracle.
   4. Use auto-re-agent / GhidraMCP to scale up function labeling where useful.
 - This is incremental: the recomp keeps running while we decompile subsystem-by-subsystem.
+- **Decomp/native as behavioral ORACLE for recomp bugs.** Fable2Native renders chapter2slums
+  non-black from evidence-locked specs, so it is a qualitative ground-truth that turns recomp
+  black-world / black-skin from eyeball-guessing into MEASURE tests (`force_predicate_true`,
+  RT-dump byte-order compare). Consolidated leverage map (per-frontier, with `file:line` cites):
+  [DECOMP_TO_RECOMP.md](DECOMP_TO_RECOMP.md). Caveat: the oracle is *qualitative* — a numeric
+  per-draw diff needs the `DUMP_PS_KEY` path extended to dump bound texels + `base_color` (not wired).
 
 ## Track C — Modding toolchain (toward a Creation Kit)  ·  ACTIVE
 Author custom content — models, textures, armours, quests, and eventually **landscapes/terrain**.
