@@ -18,6 +18,8 @@
 
 namespace f2 {
 
+class NativeCollisionWorld;  // optional: camera terrain clamp
+
 enum class CameraMode {
     Follow,  // orbit the hero
     Free,    // free-fly debug (today's behaviour), --freefly
@@ -25,14 +27,16 @@ enum class CameraMode {
 
 struct FollowCameraConfig {
     float fov_y_radians = 1.22171938f;  // GROUNDED: 70deg default (0x82100efc)
-    float distance = 4.0f;              // ENGINEERING (retail = cage/track, not orbit)
+    float distance = 4.5f;              // ENGINEERING (retail = cage/track, not orbit)
     float height = 1.6f;                // ENGINEERING: look-target height above hero feet
-    float min_pitch = -1.2f;            // ENGINEERING clamps (radians)
-    float max_pitch = 0.45f;
-    float stick_yaw_speed = 2.5f;       // rad/s at full right-stick (ENGINEERING)
-    float stick_pitch_speed = 1.5f;
-    float mouse_yaw_sensitivity = 0.004f;   // rad/pixel (ENGINEERING)
-    float mouse_pitch_sensitivity = 0.004f;
+    float min_pitch = -0.9f;            // ENGINEERING clamps (radians): look slightly down..up a bit
+    float max_pitch = 0.55f;
+    float stick_yaw_speed = 2.6f;       // rad/s at full right-stick (ENGINEERING)
+    float stick_pitch_speed = 1.8f;
+    float mouse_yaw_sensitivity = 0.0025f;   // rad/pixel (ENGINEERING)
+    float mouse_pitch_sensitivity = 0.0025f;
+    float follow_smoothing = 12.0f;     // position lerp rate (1/s); higher = snappier
+    float ground_margin = 0.4f;         // keep the camera this far above terrain
 };
 
 class CameraController {
@@ -41,16 +45,20 @@ public:
     FollowCameraConfig config;
 
     float yaw = 0.0f;      // orbit yaw (radians)
-    float pitch = -0.3f;   // orbit pitch (radians)
-    std::array<float, 3> position{0.0f, 0.0f, 0.0f};  // computed camera position
+    float pitch = -0.25f;  // orbit pitch (radians)
+    std::array<float, 3> position{0.0f, 0.0f, 0.0f};  // smoothed camera position (renderer reads this)
     std::array<float, 3> target{0.0f, 0.0f, 0.0f};    // look target (hero + height)
 
-    // Advance the orbit from look input and reposition around the hero.
-    // `look` = unified look delta (right-stick units, or mouse pixels if look_is_mouse).
-    void update(const std::array<float, 3>& hero_position,
-                const std::array<float, 2>& look, bool look_is_mouse, float dt);
+    // Advance the orbit from look input and reposition around the hero. `look` = unified
+    // look delta (right-stick units, or mouse pixels if look_is_mouse). If `world` is
+    // given, the camera is kept above the terrain (no clipping through the ground).
+    void update(const std::array<float, 3>& hero_position, const std::array<float, 2>& look,
+                bool look_is_mouse, float dt, const NativeCollisionWorld* world = nullptr);
 
     [[nodiscard]] float fov_y() const noexcept { return config.fov_y_radians; }
+
+private:
+    bool initialised_ = false;  // snap (no smoothing) on the first frame
 };
 
 }  // namespace f2

@@ -108,6 +108,17 @@ public:
     // including edge-detect against the previous frame and last_active_device.
     void tick(InputState& out, int pad_index = 0);
 
+    // Enable "captured" mouse-look: each frame the cursor is recentered to
+    // (center_x, center_y) in SCREEN coordinates and mouse_look is read as the delta
+    // from that centre, so look is relative/unbounded (no screen-edge stall). The app
+    // supplies the window's client centre. Disable to restore absolute-delta reads.
+    void set_mouse_capture(bool on, long center_x, long center_y) noexcept {
+        mouse_captured_ = on;
+        capture_center_x_ = center_x;
+        capture_center_y_ = center_y;
+    }
+    [[nodiscard]] bool mouse_captured() const noexcept { return mouse_captured_; }
+
     // Apply the retail radial deadzone/extent remap to a raw normalized stick
     // vector. Static so it can be unit-tested without device state.
     static std::array<float, 2> apply_stick_curve(std::array<float, 2> raw,
@@ -118,6 +129,9 @@ private:
     bool have_prev_cursor_ = false;
     long prev_cursor_x_ = 0;
     long prev_cursor_y_ = 0;
+    bool mouse_captured_ = false;
+    long capture_center_x_ = 0;
+    long capture_center_y_ = 0;
 };
 
 }  // namespace f2

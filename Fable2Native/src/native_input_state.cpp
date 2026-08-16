@@ -70,13 +70,21 @@ void InputSampler::tick(InputState& out, int pad_index) {
     std::array<float, 2> mouse{0.0f, 0.0f};
     POINT cursor{};
     if (GetCursorPos(&cursor)) {
-        if (have_prev_cursor_) {
-            mouse[0] = static_cast<float>(cursor.x - prev_cursor_x_);
-            mouse[1] = static_cast<float>(cursor.y - prev_cursor_y_);
+        if (mouse_captured_) {
+            // Delta from the fixed centre, then recenter so look never hits a screen edge.
+            mouse[0] = static_cast<float>(cursor.x - capture_center_x_);
+            mouse[1] = static_cast<float>(cursor.y - capture_center_y_);
+            SetCursorPos(capture_center_x_, capture_center_y_);
+            have_prev_cursor_ = false;  // rebaseline when capture is released
+        } else {
+            if (have_prev_cursor_) {
+                mouse[0] = static_cast<float>(cursor.x - prev_cursor_x_);
+                mouse[1] = static_cast<float>(cursor.y - prev_cursor_y_);
+            }
+            prev_cursor_x_ = cursor.x;
+            prev_cursor_y_ = cursor.y;
+            have_prev_cursor_ = true;
         }
-        prev_cursor_x_ = cursor.x;
-        prev_cursor_y_ = cursor.y;
-        have_prev_cursor_ = true;
     }
     out.mouse_look = mouse;
 

@@ -61,7 +61,7 @@ void NativeGame::tick(double delta_seconds) {
             if (camera_controller.mode == CameraMode::Follow) {
                 const bool look_is_mouse = input.last_active_device == InputDevice::KeyboardMouse;
                 camera_controller.update(player.position(), input.look, look_is_mouse,
-                                         static_cast<float>(simulation_step));
+                                         static_cast<float>(simulation_step), &collision);
                 // Feed the follow pose into NativeCamera (the renderer reads pos/yaw/pitch).
                 camera.position = camera_controller.position;
                 camera.yaw = camera_controller.yaw;

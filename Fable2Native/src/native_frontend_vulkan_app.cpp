@@ -340,6 +340,24 @@ public:
             game_.mode = (gameplay_mode_ && game_.frontend.state() == f2::FrontendState::World)
                              ? f2::GameMode::InWorld
                              : f2::GameMode::Frontend;
+            // Capture the mouse for gameplay look: recenter each frame (relative look)
+            // and hide the cursor. Released when gameplay is off.
+            {
+                const bool focused = GetForegroundWindow() == window_;
+                const bool want_capture = game_.mode == f2::GameMode::InWorld && focused;
+                if (want_capture) {
+                    RECT rc{}; GetClientRect(window_, &rc);
+                    POINT ctr{(rc.right - rc.left) / 2, (rc.bottom - rc.top) / 2};
+                    ClientToScreen(window_, &ctr);
+                    game_.input_sampler.set_mouse_capture(true, ctr.x, ctr.y);
+                } else {
+                    game_.input_sampler.set_mouse_capture(false, 0, 0);
+                }
+                if (want_capture != mouse_captured_now_) {
+                    ShowCursor(!want_capture ? TRUE : FALSE);
+                    mouse_captured_now_ = want_capture;
+                }
+            }
             game_.tick(delta);
             update_video();
             input_.poll();
@@ -2306,6 +2324,7 @@ private:
     // instead of the free-fly inspection cam. Default OFF preserves inspection behaviour.
     bool gameplay_mode_ = false;
     bool gameplay_toggle_held_ = false;
+    bool mouse_captured_now_ = false;
     std::array<float, 3> character_offset_{0.0f, 0.0f, 0.0f};
     float character_motion_phase_ = 0.0f;
     float character_motion_strength_ = 0.0f;
