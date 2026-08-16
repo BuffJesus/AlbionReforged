@@ -42,10 +42,6 @@ struct Constants {
     std::array<float, 4> ambient_flat{0.0f, 0.0f, 0.0f, 0.0f};
     std::array<float, 4> sky_bounce_top{0.55f, 0.58f, 0.62f, 0.0f};
     std::array<float, 4> sky_bounce_bottom{0.18f, 0.20f, 0.24f, 0.0f};
-    // Grounded fog (apply_env_fog). fog_curve = start, inv_span2, power, amp (amp>0 -> exponential);
-    // fog_mist = strength, depth_scale, mist_top_y, falloff. Mirrors the D3D12 Constants layout.
-    std::array<float, 4> fog_curve{0.0f, 1.0f, 1.0f, 0.0f};
-    std::array<float, 4> fog_mist{0.0f, 25.0f, 0.0f, 4.0f};
 };
 
 // b1-equivalent point-light UBO (level_lights_effects_re.txt §3.1); mirrors the D3D12 layout.
@@ -481,11 +477,6 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     scene_ambient_flat_ = scene.ambient_flat;
     scene_sky_bounce_top_ = scene.sky_bounce_top;
     scene_sky_bounce_bottom_ = scene.sky_bounce_bottom;
-    scene_has_fog_curve_ = scene.has_fog_curve;
-    scene_fog_curve_ = scene.fog_curve;
-    scene_has_ground_mist_ = scene.has_ground_mist;
-    scene_mist_ = {scene.mist_strength, scene.mist_depth_scale, scene.mist_height_offset,
-                   scene.mist_falloff};
     // Bounds -> auto-frame the orbit camera (mirror native_world_renderer.cpp) so the whole
     // town is in view instead of the old fixed radius-7 demo orbit. A cooked `focus` (town
     // bounds excluding horizon backdrop props) wins so the ~1000wu spire vista doesn't blow
@@ -506,20 +497,6 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         float r = 0.0f;
         for (int a = 0; a < 3; ++a) r = std::max(r, 0.5f * (hi[a] - lo[a]));
         scene_radius_ = std::max(r, 1.0f);
-    }
-    // Ground-mist floor = lowest vertex Y of the TOWN (focus region when cooked), so the distant
-    // low sea-vista/spire base doesn't drag the mist plane below the elevated town. D3D12 parity.
-    scene_min_y_ = scene_center_[1];
-    bool any_floor = false;
-    const float fr2 = scene.has_focus ? scene_radius_ * scene_radius_ : 0.0f;
-    for (const auto& v : geometry.vertices) {
-        if (scene.has_focus) {
-            const float dx = v.position[0] - scene_center_[0];
-            const float dz = v.position[2] - scene_center_[2];
-            if (dx * dx + dz * dz > fr2) continue;
-        }
-        scene_min_y_ = any_floor ? std::min(scene_min_y_, v.position[1]) : v.position[1];
-        any_floor = true;
     }
     if (!upload_buffer(physical_device, device, geometry.vertices.data(),
                        geometry.vertices.size() * sizeof(Vertex),
@@ -1300,13 +1277,6 @@ void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
                                 scene_sky_bounce_top_[2], 0.0f};
     constants.sky_bounce_bottom = {scene_sky_bounce_bottom_[0], scene_sky_bounce_bottom_[1],
                                    scene_sky_bounce_bottom_[2], 0.0f};
-    // Grounded exponential fog + ground mist (apply_env_fog). D3D12 parity.
-    if (scene_has_fog_curve_) constants.fog_curve = scene_fog_curve_;
-    else constants.fog_curve = {0.0f, 1.0f, 1.0f, 0.0f};  // amp 0 -> linear fog_range
-    if (scene_has_ground_mist_)
-        constants.fog_mist = {scene_mist_[0], scene_mist_[1], scene_min_y_ + scene_mist_[2],
-                              scene_mist_[3]};
-    else constants.fog_mist = {0.0f, 25.0f, 0.0f, 4.0f};
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     VkViewport viewport{0.0f, static_cast<float>(height), static_cast<float>(width),

@@ -24,28 +24,7 @@ layout(set = 0, binding = 0) uniform Camera {
     vec4 ambient_flat;        // rgb = flat AmbientColour, w = has_ambient (1/0)
     vec4 sky_bounce_top;      // rgb = hemisphere sky-bounce (up)
     vec4 sky_bounce_bottom;   // rgb = hemisphere sky-bounce (down)
-    vec4 fog_curve;           // start, inv_span2, power, amp (amp>0 = exponential fog)
-    vec4 fog_mist;            // strength, depth_scale, mist_top_y, falloff
 } camera;
-// Grounded fog (ModelPreview.cpp apply_env_fog): exponential power-curve distance fog +
-// height-based ground mist. Shared by the world and water paths.
-float env_fog_factor(float fd, float wy) {
-    float f;
-    if (camera.fog_curve.w > 0.0) {
-        float dn = max(fd - camera.fog_curve.x, 0.0) * camera.fog_curve.y;
-        float od = camera.fog_curve.w * pow(min(dn, 1.25), camera.fog_curve.z);
-        f = 1.0 - exp(-od);
-    } else {
-        f = clamp((fd - camera.fog_range.x) / max(camera.fog_range.y - camera.fog_range.x, 1.0),
-                  0.0, 1.0) * camera.fog_color.w;
-    }
-    if (camera.fog_mist.x > 0.0) {
-        float below = clamp((camera.fog_mist.z - wy) / max(camera.fog_mist.w, 0.5), 0.0, 1.0);
-        f = clamp(f + camera.fog_mist.x * below * clamp(fd / max(camera.fog_mist.y, 1.0), 0.0, 1.0),
-                  0.0, 1.0);
-    }
-    return f;
-}
 layout(set = 0, binding = 1) uniform sampler2D albedo;
 layout(set = 0, binding = 2) uniform sampler2D normalTex;
 layout(set = 0, binding = 3) uniform Lights {
@@ -149,12 +128,13 @@ vec4 water() {
         float shoreline = mix(0.05, 1.0, clamp((gl_FragCoord.z - scene_z) * 256.0, 0.0, 1.0));
         refr_k *= shoreline;
     }
-    // Distance fog + ground mist on the water surface too (coherent with opaque geometry).
+    // Distance fog on the water surface too (coherent with opaque geometry).
     if (camera.fog_color.w > 0.0) {
         float fd = length(camera.eye_time.xyz - world_pos);
-        float f = env_fog_factor(fd, world_pos.y);
-        vec3 fog_tint = (camera.fog_curve.w > 0.0) ? camera.sky_horizon.rgb : camera.fog_color.rgb;
-        col = mix(col, fog_tint, f);
+        float f = clamp((fd - camera.fog_range.x) /
+                        max(camera.fog_range.y - camera.fog_range.x, 1.0), 0.0, 1.0) *
+                  camera.fog_color.w;
+        col = mix(col, camera.fog_color.rgb, f);
     }
     return vec4(col, clamp(refr_k, 0.0, 1.0));
 }
@@ -217,8 +197,10 @@ void main() {
     // world geometry to the horizon/backdrop. Matches the D3D12 world PS.
     if (camera.fog_color.w > 0.0) {
         float fd = length(camera.eye_time.xyz - world_pos);
-        vec3 fog_tint = (camera.fog_curve.w > 0.0) ? camera.sky_horizon.rgb : camera.fog_color.rgb;
-        lit = mix(lit, fog_tint, env_fog_factor(fd, world_pos.y));
+        float f = clamp((fd - camera.fog_range.x) /
+                        max(camera.fog_range.y - camera.fog_range.x, 1.0), 0.0, 1.0) *
+                  camera.fog_color.w;
+        lit = mix(lit, camera.fog_color.rgb, f);
     }
     out_color = vec4(lit, 1.0);  // opaque -> alpha 1 makes the global blend a no-op
 }

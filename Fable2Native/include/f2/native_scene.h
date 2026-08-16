@@ -153,20 +153,6 @@ struct NativeScene {
     float fog_start = 0.0f;
     float fog_end = 1.0f;
     float fog_max = 0.0f;
-    // Grounded exponential distance fog (1:1 with ModelPreview.cpp apply_env_fog). When
-    // has_fog_curve, the world PS uses 1-exp(-amp*pow(min((d-start)*inv_span2,1.25),power))
-    // instead of the linear fog_range ramp. fog_curve = {start, inv_span2, power, amp}.
-    // See cook_levels.py `fog_curve` emit. Absent -> linear fog (backward-compatible).
-    bool has_fog_curve = false;
-    std::array<float, 4> fog_curve{0.0f, 1.0f, 1.0f, 0.0f};
-    // Ground mist (theme GroundMist; apply_env_fog height-based term). mist = strength *
-    // saturate((mist_top - worldY)/falloff) * saturate(depth/depth_scale), added to fog.
-    // mist_top = scene ground (AABB min Y) + height_offset. Absent -> no mist.
-    bool has_ground_mist = false;
-    float mist_strength = 0.0f;
-    float mist_depth_scale = 25.0f;
-    float mist_height_offset = 4.0f;
-    float mist_falloff = 4.0f;
     // Authored AMBIENT model (theme Lighting sub-record). ambient_flat = flat AmbientColour;
     // sky_bounce_top/bottom = the hemisphere sky-bounce gradient (up/down). Gated by has_ambient
     // so scenes without an `ambient`/`sky_bounce` opcode keep the renderer's hardcoded hemisphere.
