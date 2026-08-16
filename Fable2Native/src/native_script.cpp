@@ -18,21 +18,27 @@ namespace {
 // catalog records only by their bare method names (so it never tagged the class itself).
 // The auto-stub only fabricates a stub for names IN this set; everything else reads as nil so
 // the game's own script-defined globals (quest types, managers) register without collision.
+//
+// Native CLASS tables the catalog records only by bare method names (so it never tagged the
+// class) — plus a few whose defining scripts aren't in our boot set. Shared between
+// native_name_set() (answers __is_native) and the autostub PRE-CREATE loop (raw _G stubs that
+// survive the save system's _G metatable swap). Real ones we register (Debug/MessageEvents/...)
+// are skipped at pre-create by a rawget guard. FLAGGED: AIManager/CameraManager/Gossip/etc. are
+// no-op stubs until those systems are wired. NOTE: BaseObjects is NOT stubbed (aliased to _G).
+const char* const kSupplementClassNames[] = {
+    "GUI", "Debug", "MessageEvents", "Timing", "TutorialManager", "Breadcrumber",
+    "ScriptFunction", "SearchTools", "AIManager", "GameVersion", "Gossip", "Layers",
+    "CameraManager", "Look", "GroupMindManager", "Timers", "Weather", "LocationManager",
+    "Follow", "Stats", "Player", "QuestTracker", "Inventory", "Physics", "Money",
+};
+
 const std::unordered_set<std::string>& native_name_set() {
     static const std::unordered_set<std::string> set = [] {
         std::unordered_set<std::string> s;
         for (const char* n : kNativeClassNames) s.insert(n);
         for (const char* n : kNativeGlobalNames) s.insert(n);
-        // Native class tables the catalog missed (methods cataloged as bare globals):
-        // NOTE: do NOT stub BaseObjects — it is aliased to _G so the game's managers
-        // (BaseObjects.QuestManager = {...}) define real globals.
-        // AIManager is included as a stub because its script isn't in the boot set yet and its
-        // methods (SetCanRunMoveAwayFromAreaBehaviour, ...) are AI-behaviour hints the runtime
-        // doesn't implement — FLAGGED: remove once the AI system + aimanager.lua are wired.
-        for (const char* n : {"GUI", "Debug", "MessageEvents", "Timing", "Gameflow",
-                              "TutorialManager", "Breadcrumber", "ScriptFunction", "SearchTools",
-                              "AIManager", "EMessageEventType", "Platform", "ScriptEnum"})
-            s.insert(n);
+        for (const char* n : kSupplementClassNames) s.insert(n);
+        for (const char* n : {"EMessageEventType", "Platform", "ScriptEnum"}) s.insert(n);  // enums
         return s;
     }();
     return set;
@@ -381,11 +387,21 @@ bool NativeScriptVM::install_autostub() {
     static const char* kBootstrap = R"LUA(
         local seen = {}
         local NIL
+        -- Arithmetic/compare/concat/len metamethods keep the black-hole from crashing when a
+        -- stubbed getter's value is used numerically (e.g. `GameVersion.GetX() + 1`) — it
+        -- degrades to 0 / false / "" instead of "arithmetic on a table value". FLAGGED: this is
+        -- stub behaviour; a getter whose value actually matters needs a real native.
+        local function zero() return 0 end
+        local function no() return false end
         local nilmt = {
           __index = function() return NIL end,
           __call = function() return NIL end,
           __newindex = function() end,
           __tostring = function() return "nil" end,
+          __add = zero, __sub = zero, __mul = zero, __div = zero, __mod = zero,
+          __pow = zero, __unm = zero, __len = zero,
+          __lt = no, __le = no, __eq = no,
+          __concat = function() return "" end,
         }
         NIL = setmetatable({}, nilmt)
         _G.__F2_NIL = NIL
@@ -454,10 +470,7 @@ bool NativeScriptVM::install_autostub() {
     // the save system). Real classes we've already registered are skipped (rawget guard).
     std::string pre;
     for (const char* n : kNativeClassNames) { pre += "__mkclassstub('"; pre += n; pre += "') "; }
-    for (const char* n : {"GUI", "AIManager", "TutorialManager", "Breadcrumber", "ScriptFunction",
-                          "SearchTools", "Follow", "Stats", "Player", "QuestTracker", "Inventory",
-                          "Physics", "Money"})
-    { pre += "__mkclassstub('"; pre += n; pre += "') "; }
+    for (const char* n : kSupplementClassNames) { pre += "__mkclassstub('"; pre += n; pre += "') "; }
     return run_source(pre.c_str(), "=mkclassstubs");
 }
 

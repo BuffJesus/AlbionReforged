@@ -195,7 +195,39 @@ static void test_entity_thread_spawns() {
     F2_CHECK(vm.last_error().empty());  // kill detection propagated to quest state
 }
 
+// EXPERIMENT (gated F2_EXP4): drive the self-starting gameflow and see how far it advances
+// toward StartQuest("QC010_Childhood"), and which natives block it.
+static void experiment_gameflow() {
+    const std::filesystem::path bnk_path =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    const std::filesystem::path data_root = bnk_path.parent_path().parent_path();
+    if (!std::filesystem::exists(bnk_path)) return;
+    f2::NativeGame game;
+    game.enable_scripting();
+    game.boot_game_scripts(data_root);
+    game.load_quest_scripts();
+    auto& vm = *game.script_vm;
+    auto dump = [&](const char* tag) {
+        std::fprintf(stderr, "[%s] err='%s'\n", tag, vm.last_error().c_str());
+        for (auto& l : game.script_log) std::fprintf(stderr, "  | %s\n", l.c_str());
+        game.script_log.clear();
+    };
+    vm.run_source("print('Gameflow='..type(Gameflow)..' pos='..tostring(Gameflow.PositionInGameflow))");
+    // The new-game handoff, set BEFORE the first tick (else Gameflow.Update's first resume hits
+    // its `if not GameflowMode then loop-forever` trap): gameflow mode on + advance from the
+    // GAMEFLOW_START gate. GetPlayerHero primes QuestManager.HeroEntity for Init.
+    vm.run_source("QuestManager.HeroEntity = GetPlayerHero()");
+    vm.run_source("Gameflow.GameflowMode = true; Gameflow.SkipToNextPositionInGameflow = true");
+    dump("setup");
+    for (int i = 0; i < 10; ++i) vm.run_source("QuestManager.Update()");
+    vm.run_source(
+        "print('after ticks: pos='..tostring(Gameflow.PositionInGameflow)..' init='..tostring(Gameflow._Initialised)"
+        "..' childhood='..type(Gameflow.Childhood)..' QC010='..type(_G.QC010_Childhood))");
+    dump("afterticks");
+}
+
 int main() {
+    if (std::getenv("F2_EXP4")) { experiment_gameflow(); return 0; }
     const std::array<std::uint8_t, 136> dxt1 = [] {
         std::array<std::uint8_t, 136> bytes{};
         bytes[0] = 'D'; bytes[1] = 'D'; bytes[2] = 'S'; bytes[3] = ' ';

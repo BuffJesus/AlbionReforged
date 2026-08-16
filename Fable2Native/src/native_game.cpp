@@ -120,17 +120,23 @@ int NativeGame::load_quest_scripts() {
     }
 
     const std::size_t before = loaded_scripts.size();
-    script_vm->run_bytecode(qb.data(), qb.size(), "=questsetupscript");
 
-    // FLAGGED stand-in: neutralize the quest save/permanents registration
-    // (QuestManager.AddQuestToPermanentsTables reaches into PlutoPermanentsSaveTable, which is
-    // initialized by the save subsystem we don't fully wire yet). Without this, NewQuestThread
-    // aborts mid-registration. Quests still run their gameplay logic; only save-persistence of
-    // quest state is deferred. Remove once the save/permanents subsystem is wired.
+    // Pre-load QuestManager (questsetupscript's first RunScript) via RunScript so it registers
+    // in loaded_scripts, THEN neutralize its save/permanents registration BEFORE the quest
+    // modules load. FLAGGED stand-in: QuestManager.AddQuestToPermanentsTables reaches into
+    // PlutoPermanentsSaveTable (initialized by the save subsystem we don't fully wire yet), so
+    // every quest's NewQuestThread would otherwise abort at registration. Neutralizing it here
+    // (before the quests, after QuestManager exists) lets ALL quests + gameflow load fully;
+    // only save-persistence of quest state is deferred. Remove once save/permanents is wired.
+    script_vm->run_source("RunScript('quests/questmanager.lua')", "=preload_qm");
     script_vm->run_source(
         "if QuestManager and QuestManager.AddQuestToPermanentsTables then "
         "QuestManager.AddQuestToPermanentsTables = function() end end",
         "=permanents_shim");
+
+    // Now run the quest bootstrap; its RunScript('Quests/QuestManager.lua') is de-duped, and the
+    // quest modules + gameflow load with the permanents registration neutralized.
+    script_vm->run_bytecode(qb.data(), qb.size(), "=questsetupscript");
 
     return static_cast<int>(loaded_scripts.size() - before);
 }
