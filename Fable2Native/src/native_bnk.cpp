@@ -25,6 +25,47 @@ bool zinflate(const std::uint8_t* src, std::size_t src_len, std::size_t out_size
     const int rc = mz_uncompress(out.data(), &dst_len, src, static_cast<mz_ulong>(src_len));
     return rc == MZ_OK && dst_len == out_size;
 }
+
+// Inflate exactly ONE zlib stream starting at src (up to src_len bytes), appending its full
+// output to `out` and reporting how many COMPRESSED bytes it consumed (so the caller can find
+// the next back-to-back stream). `hint` sizes the scratch buffer. Grounded in the reference
+// extractor (tools/lua_mod/script_index.py entry_bytes: decompressobj per chunk, advancing by
+// consumed bytes). Returns false on a zlib error before the stream ends.
+bool inflate_one_stream(const std::uint8_t* src, std::size_t src_len, std::size_t hint,
+                        std::vector<std::uint8_t>& out, std::size_t& consumed) {
+    consumed = 0;
+    mz_stream s;
+    std::memset(&s, 0, sizeof(s));
+    if (mz_inflateInit(&s) != MZ_OK) return false;
+    s.next_in = src;
+    s.avail_in = static_cast<unsigned int>(src_len);
+    // Fixed oversized scratch (NOT sized to `hint`): if the output buffer is exactly the
+    // decompressed size, miniz can return MZ_BUF_ERROR instead of MZ_STREAM_END because it
+    // has no room to emit the end-of-stream on the same pass. Keeping spare avail_out lets it
+    // flag MZ_STREAM_END; larger payloads just loop. (`hint` is retained for the API.)
+    (void)hint;
+    std::vector<std::uint8_t> buf(1u << 16);
+    int rc = MZ_OK;
+    for (;;) {
+        s.next_out = buf.data();
+        s.avail_out = static_cast<unsigned int>(buf.size());
+        rc = mz_inflate(&s, MZ_NO_FLUSH);
+        out.insert(out.end(), buf.data(), buf.data() + (buf.size() - s.avail_out));
+        if (rc == MZ_STREAM_END) break;
+        if (s.avail_out == 0) continue;   // output buffer full -> more payload pending, loop
+        // avail_out > 0 means miniz produced everything it could this pass. MZ_OK/MZ_BUF_ERROR
+        // here with no input left = the stream is fully decoded; miniz just doesn't always flag
+        // MZ_STREAM_END (mz_uncompress is more lenient, which is why it worked before). Any
+        // other code, or leftover input it can't use, is a genuine error.
+        if ((rc == MZ_OK || rc == MZ_BUF_ERROR) && s.avail_in == 0) break;
+        mz_inflateEnd(&s);
+        return false;
+    }
+    consumed = static_cast<std::size_t>(s.total_in);
+    mz_inflateEnd(&s);
+    // Success = a clean end, or a fully-consumed stream that produced output (the miniz quirk).
+    return rc == MZ_STREAM_END || (s.avail_in == 0 && !out.empty());
+}
 }  // namespace
 
 std::string BnkReader::normalize(const std::string& name) {
@@ -140,20 +181,40 @@ std::vector<std::uint8_t> BnkReader::extract(const std::string& name) {
         return {};
     }
     const std::uint8_t* raw = file_.data() + base;
-    constexpr std::uint32_t kChunkStride = 0x8000;  // 32KB COMPRESSED stride, independent streams
+    const std::size_t comp = e.comp_size;
+    constexpr std::size_t kBlock = 32768;  // 0x8000
     std::vector<std::uint8_t> out;
     out.reserve(e.decomp_size);
-    for (std::size_t c = 0; c < e.chunk_decomp.size(); ++c) {
-        const std::uint32_t coff = static_cast<std::uint32_t>(c) * kChunkStride;
-        if (coff >= e.comp_size) break;
-        const std::uint32_t cin = std::min(kChunkStride, e.comp_size - coff);
-        std::vector<std::uint8_t> part;
-        if (!zinflate(raw + coff, cin, e.chunk_decomp[c], part)) {
-            error_ = "entry chunk inflate failed: " + key;
-            return {};
+
+    if (comp > kBlock) {
+        // Large entry: fixed 32768-COMPRESSED-byte blocks, each an independent zlib stream
+        // (script_index.entry_bytes: `for pos in range(0, len(raw), 32768)`).
+        for (std::size_t pos = 0; pos < comp; pos += kBlock) {
+            const std::size_t blk = std::min(kBlock, comp - pos);
+            std::size_t consumed = 0;
+            if (!inflate_one_stream(raw + pos, blk, 0, out, consumed)) {
+                error_ = "entry block inflate failed: " + key;
+                return {};
+            }
         }
-        out.insert(out.end(), part.begin(), part.end());
+    } else {
+        // Small entry: back-to-back zlib streams whose boundaries are found by consumption.
+        // The TOC's per-chunk decompressed sizes are the targets; fall back to one stream.
+        std::vector<std::uint32_t> targets = e.chunk_decomp;
+        if (targets.empty()) targets.push_back(e.decomp_size);
+        std::size_t pos = 0;
+        for (const std::uint32_t target : targets) {
+            if (pos >= comp) break;
+            std::size_t consumed = 0;
+            if (!inflate_one_stream(raw + pos, comp - pos, target, out, consumed)) {
+                error_ = "entry chunk inflate failed: " + key;
+                return {};
+            }
+            if (consumed == 0) break;
+            pos += consumed;
+        }
     }
+    if (out.size() > e.decomp_size) out.resize(e.decomp_size);  // truncate to recorded size
     return out;
 }
 

@@ -2,6 +2,7 @@
 
 #include "f2/native_bnk.h"
 #include "f2/native_game.h"
+#include "f2/native_gdb_hash.h"
 #include "f2/native_script.h"
 
 #include <array>
@@ -152,6 +153,238 @@ void register_native_api(NativeScriptVM& vm, NativeGame& /*game*/) {
     });
 }
 
+namespace {
+// Get-or-create the hero entity and return its uid. Prefers an existing scene-tagged hero
+// (world.hero); otherwise makes a bare entity with a Transform seeded from the player, so
+// GetPlayerHero() always yields a usable handle even in a headless/no-hero-mesh world.
+std::uint64_t ensure_hero(NativeGame& g) {
+    if (g.hero_uid != 0 && g.world.entities.find(g.hero_uid)) return g.hero_uid;
+    if (g.world.hero) {
+        g.hero_uid = g.world.hero->uid;
+    } else {
+        NativeEntity& e = g.world.entities.create_entity();
+        auto tf = std::make_unique<TransformComponent>();
+        tf->position = g.player.position();
+        e.add_component(std::move(tf));
+        g.hero_uid = e.uid;
+    }
+    g.entity_names[g.hero_uid] = "Hero";
+    return g.hero_uid;
+}
+
+TransformComponent* entity_transform(NativeGame& g, std::uint64_t uid) {
+    NativeEntity* e = g.world.entities.find(uid);
+    return e ? e->get<TransformComponent>(kTypeIdTransform) : nullptr;
+}
+}  // namespace
+
+void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
+    // ---- manager registration (the game's Lua managers hand themselves to the engine) ----
+    // SetGeneralScriptManager(tbl)/SetAIManager(tbl) capture the table's Update method;
+    // SetQuestUpdateFunction(fn) captures the function directly. The InWorld tick resumes
+    // these each frame (NativeGame wires them to script_systems after boot).
+    vm.register_global("SetGeneralScriptManager", [](NativeScriptVM& v) -> int {
+        if (auto* g = game_of(v)) { v.unref(g->general_update_ref); g->general_update_ref = v.ref_arg_field(1, "Update"); }
+        return 0;
+    });
+    vm.register_global("SetQuestUpdateFunction", [](NativeScriptVM& v) -> int {
+        if (auto* g = game_of(v)) { v.unref(g->quest_update_ref); g->quest_update_ref = v.ref_arg(1); }
+        return 0;
+    });
+    vm.register_global("SetAIManager", [](NativeScriptVM& v) -> int {
+        if (auto* g = game_of(v)) { v.unref(g->ai_update_ref); g->ai_update_ref = v.ref_arg_field(1, "Update"); }
+        return 0;
+    });
+
+    // ---- hero + entity object model ----
+    vm.register_global("GetPlayerHero", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        v.push_handle("Entity", g ? ensure_hero(*g) : 0);
+        return 1;
+    });
+    vm.register_global("GetIDFromEntity", [](NativeScriptVM& v) -> int {
+        v.push_number(static_cast<double>(v.arg_handle(1)));
+        return 1;
+    });
+    // Debug.CreateEntityAt(class, name, x, y, z) — spawn from a class name at a position
+    // (gameflow.txt: Debug.CreateEntityAt("CreatureCrummi","Crummi", HeroEntity:GetPosition())
+    // where GetPosition returns 3 numbers). Returns the new entity handle. FLAGGED: `class`
+    // is recorded as the name but not yet resolved to a GDB archetype (no GDB cook here).
+    vm.register_native("Debug", "CreateEntityAt", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (!g) { v.push_nil(); return 1; }
+        NativeEntity& e = g->world.entities.create_entity();
+        auto tf = std::make_unique<TransformComponent>();
+        tf->position = {static_cast<float>(v.arg_number(3)), static_cast<float>(v.arg_number(4)),
+                        static_cast<float>(v.arg_number(5))};
+        e.add_component(std::move(tf));
+        const char* name = v.arg_string(2);
+        g->entity_names[e.uid] = (name && *name) ? name : v.arg_string(1);
+        v.push_handle("Entity", e.uid);
+        return 1;
+    });
+
+    vm.register_object_method("Entity", "GetPosition", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        TransformComponent* t = g ? entity_transform(*g, v.arg_handle(1)) : nullptr;
+        const std::array<float, 3> p = t ? t->position : std::array<float, 3>{};
+        v.push_number(p[0]); v.push_number(p[1]); v.push_number(p[2]);
+        return 3;
+    });
+    vm.register_object_method("Entity", "SetPosition", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (TransformComponent* t = g ? entity_transform(*g, v.arg_handle(1)) : nullptr)
+            t->position = {static_cast<float>(v.arg_number(2)), static_cast<float>(v.arg_number(3)),
+                           static_cast<float>(v.arg_number(4))};
+        return 0;
+    });
+    vm.register_object_method("Entity", "GetName", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        auto it = g ? g->entity_names.find(v.arg_handle(1)) : std::unordered_map<std::uint64_t, std::string>::iterator{};
+        v.push_string((g && it != g->entity_names.end()) ? it->second.c_str() : "");
+        return 1;
+    });
+    vm.register_object_method("Entity", "GetID", [](NativeScriptVM& v) -> int {
+        v.push_number(static_cast<double>(v.arg_handle(1)));
+        return 1;
+    });
+    vm.register_object_method("Entity", "IsAlive", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        NativeEntity* e = g ? g->world.entities.find(v.arg_handle(1)) : nullptr;
+        auto* h = e ? e->get<HealthComponent>(kTypeIdHealth) : nullptr;
+        v.push_bool(e != nullptr && (h == nullptr || !h->is_dead()));
+        return 1;
+    });
+    vm.register_object_method("Entity", "Kill", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        NativeEntity* e = g ? g->world.entities.find(v.arg_handle(1)) : nullptr;
+        if (e) {
+            if (auto* h = e->get<HealthComponent>(kTypeIdHealth)) h->health = 0.0f;
+        }
+        // NOTE: the retail MESSAGE_EVENT_KILLED is posted by the combat/death system with
+        // the enum id from MessageEventEnum.lua. We don't fabricate it with a guessed C++
+        // constant — producers post symbolically from Lua via MessageEvents.PostMessage
+        // (EMessageEventType.MESSAGE_EVENT_KILLED, ...) so the id always matches consumers.
+        return 0;
+    });
+    vm.register_object_method("Entity", "GetCorpse", [](NativeScriptVM& v) -> int {
+        v.push_nil();  // no corpse entity model yet (scripts guard with IsAlive first)
+        return 1;
+    });
+
+    // ---- MessageEvents queue (the central quest poll) ----
+    // IsMessagePosted/IsMessageSentTo/IsMessageSentBy return the newest matching Event
+    // (id > lastSeenId), or nil — the questmanager.lua wait idiom. Event handles carry the
+    // message id; Event methods read the bus.
+    vm.register_native("MessageEvents", "GetMostRecentMessageID", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        v.push_number(g ? static_cast<double>(g->messages.most_recent_id()) : 0.0);
+        return 1;
+    });
+    vm.register_native("MessageEvents", "IsMessagePosted", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const int type = static_cast<int>(v.arg_number(1));
+        const std::uint32_t after = static_cast<std::uint32_t>(v.arg_number(2));
+        const GameMessage* m = g ? g->messages.find(type, after, 0, 0) : nullptr;
+        if (m) v.push_handle("Event", m->id); else v.push_nil();
+        return 1;
+    });
+    vm.register_native("MessageEvents", "IsMessageSentTo", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const int type = static_cast<int>(v.arg_number(1));
+        const std::uint64_t to = v.arg_handle(2);
+        const std::uint32_t after = static_cast<std::uint32_t>(v.arg_number(3));
+        const GameMessage* m = g ? g->messages.find(type, after, to, 0) : nullptr;
+        if (m) v.push_handle("Event", m->id); else v.push_nil();
+        return 1;
+    });
+    vm.register_native("MessageEvents", "IsMessageSentBy", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const int type = static_cast<int>(v.arg_number(1));
+        const std::uint64_t by = v.arg_handle(2);
+        const std::uint32_t after = static_cast<std::uint32_t>(v.arg_number(3));
+        const GameMessage* m = g ? g->messages.find(type, after, 0, by) : nullptr;
+        if (m) v.push_handle("Event", m->id); else v.push_nil();
+        return 1;
+    });
+    // Producer side (engine/scripts post): PostMessage(type[, extra][, sentBy][, sentTo]).
+    vm.register_native("MessageEvents", "PostMessage", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (g) {
+            const int type = static_cast<int>(v.arg_number(1));
+            const double extra = v.arg_number(2);
+            g->messages.post(type, v.arg_handle(3), v.arg_handle(4), extra);
+        }
+        return 0;
+    });
+
+    vm.register_object_method("Event", "GetID", [](NativeScriptVM& v) -> int {
+        v.push_number(static_cast<double>(v.arg_handle(1)));
+        return 1;
+    });
+    vm.register_object_method("Event", "GetExtraDataAsNumber", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const GameMessage* m = g ? g->messages.by_id(static_cast<std::uint32_t>(v.arg_handle(1))) : nullptr;
+        v.push_number(m ? m->extra : 0.0);
+        return 1;
+    });
+    vm.register_object_method("Event", "GetEntitySentBy", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const GameMessage* m = g ? g->messages.by_id(static_cast<std::uint32_t>(v.arg_handle(1))) : nullptr;
+        v.push_handle("Entity", m ? m->sent_by : 0);
+        return 1;
+    });
+
+    // ---- gameflow / timing (grounded load-bearing natives) ----
+    // IsToStartGameflow -> true = "fresh game" (gameflow_progression.txt:201); enters the
+    // gameflow startup path rather than a save-load path.
+    vm.register_global("IsToStartGameflow", [](NativeScriptVM& v) -> int { v.push_bool(true); return 1; });
+    // GetPlatform() -> Platform.Win32. The value is arbitrary but MUST equal Platform.Win32
+    // (defined in boot before the auto-stub) so questsetupscript's platform switch matches
+    // and its "unknown platform" assert doesn't fire. FLAGGED engineering constant.
+    vm.register_global("GetPlatform", [](NativeScriptVM& v) -> int { v.push_number(2.0); return 1; });
+    // FNVHash(str) -> the game's FNV-1 hash (native_gdb_hash fnv1, basis 0x811C9DC5). Used by
+    // the save/permanents machinery to key tables. Real (not a stub) so keys are stable.
+    vm.register_global("FNVHash", [](NativeScriptVM& v) -> int {
+        v.push_number(static_cast<double>(gdb::fnv1(v.arg_string(1))));
+        return 1;
+    });
+    vm.register_native("Timing", "GetWorldFrame", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        v.push_number(g ? g->elapsed_seconds * 60.0 : 0.0);  // 60 Hz sim
+        return 1;
+    });
+    vm.register_native("Timing", "GetTickRate", [](NativeScriptVM& v) -> int { v.push_number(60.0); return 1; });
+
+    // ---- SearchTools (entity queries) ----
+    // QuestThreadBase.GetAllEntitiesWithName = StartNewSearch -> FilterWithName ->
+    // GetSearchResults. We return an EMPTY result list (no named world entities are streamed
+    // yet), so a quest's StartNewEntityThread iterates nothing and proceeds to its wait loop
+    // instead of dying on a black-hole stub. Real entity search lands with world streaming.
+    vm.register_native("SearchTools", "StartNewSearch", [](NativeScriptVM& v) -> int {
+        v.push_number(1.0);  // opaque search handle (unused until real search exists)
+        return 1;
+    });
+    vm.register_native("SearchTools", "FilterWithName", [](NativeScriptVM&) -> int { return 0; });
+    vm.register_native("SearchTools", "FilterWithScriptFilter", [](NativeScriptVM&) -> int { return 0; });
+    vm.register_native("SearchTools", "GetSearchResults", [](NativeScriptVM& v) -> int {
+        v.push_new_table();  // empty {} — no results
+        return 1;
+    });
+
+    // Capture the game's own print() output so quest progress is observable (and doesn't
+    // spam stdout). Concatenates its args tab-separated, like Lua's print.
+    vm.register_global("print", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (!g) return 0;
+        std::string line;
+        const int n = v.arg_count();
+        for (int i = 1; i <= n; ++i) { if (i > 1) line += '\t'; line += v.arg_string(i); }
+        g->script_log.push_back(std::move(line));
+        return 0;
+    });
+}
+
 void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
     // RunScript(name): pull the named LuaQ chunk from the game's script BNK and run it.
     // De-duplicated (a script only loads once) with a hard cap as a runaway backstop.
@@ -162,6 +395,10 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         const char* name = v.arg_string(1);
         if (!name || !*name) return 0;
         const std::string key = BnkReader::normalize(name);
+        // Skip the project's own mod-menu hook (MyConsoleHook0) — it is injected tooling that
+        // polls Debug.Mod/right-stick before a world exists (the "stall" natives), not stock
+        // game logic. Bringing up the real quests doesn't need it.
+        if (key.find("myconsolehook") != std::string::npos) return 0;
         for (const auto& s : g->loaded_scripts) {
             if (s == key) return 0;  // already loaded
         }

@@ -21,4 +21,14 @@ void register_native_api(NativeScriptVM& vm, NativeGame& game);
 // script BNK via game.script_bnk and runs it). Used by NativeGame::boot_game_scripts.
 void register_boot_api(NativeScriptVM& vm, NativeGame& game);
 
+// Bind the game-script SUBSTRATE: the load-bearing natives the game's own quest/gameflow
+// Lua calls so its coroutines can actually run and advance on the native systems — manager
+// registration (SetGeneralScriptManager/SetQuestUpdateFunction/SetAIManager), the hero +
+// entity object model (GetPlayerHero, Debug.CreateEntityAt, entity methods), the
+// MessageEvents queue + event objects (the central quest poll), and a few grounded gameflow
+// natives (IsToStartGameflow, Timing.*). Overrides `print` to capture into game.script_log.
+// Grounded in ghidra_out + the decompiled questmanager.lua/gameflow.lua wait idioms; the
+// long tail of unimplemented natives still falls through to the auto-stub.
+void register_game_systems_api(NativeScriptVM& vm, NativeGame& game);
+
 }  // namespace f2

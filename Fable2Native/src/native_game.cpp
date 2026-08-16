@@ -47,43 +47,6 @@ bool NativeGame::enable_scripting() {
     return true;
 }
 
-namespace {
-// The manager boot shim: QuestManager/GeneralScriptManager/AIManager with the retail
-// AddScript=coroutine model + a per-frame Update that resumes each live thread. Threads
-// are created but NOT resumed during boot (deferred to the first Update) — a safe
-// deviation from retail's resume-on-add so loading the ~160 scripts can't hang on a
-// top-level coroutine loop. AddScript is also a bare global (scripts call it at top level).
-constexpr const char* kBootShim = R"LUA(
-    local function make_manager()
-      local m = { threads = {} }
-      function m:AddScript(fn)
-        if type(fn) ~= "function" then return end
-        local co = coroutine.create(fn)
-        self.threads[#self.threads + 1] = co
-        return co
-      end
-      m.NewQuestThread = m.AddScript
-      m.NewEntityThread = m.AddScript
-      function m:Update(dt)
-        local live = {}
-        for i = 1, #self.threads do
-          local co = self.threads[i]
-          if coroutine.status(co) ~= "dead" then
-            local ok = coroutine.resume(co, dt)
-            if ok and coroutine.status(co) ~= "dead" then live[#live + 1] = co end
-          end
-        end
-        self.threads = live
-      end
-      return m
-    end
-    QuestManager = make_manager()
-    GeneralScriptManager = make_manager()
-    AIManager = make_manager()
-    function AddScript(fn) return GeneralScriptManager:AddScript(fn) end
-)LUA";
-}  // namespace
-
 int NativeGame::boot_game_scripts(const std::filesystem::path& data_root) {
     if (!script_vm) return -1;
     script_bnk = std::make_unique<BnkReader>();
@@ -93,18 +56,83 @@ int NativeGame::boot_game_scripts(const std::filesystem::path& data_root) {
         return -1;
     }
     loaded_scripts.clear();
-    // Boot natives (RunScript) + the manager shim BEFORE the auto-stub (so the real tables
-    // exist), then the auto-stub catches every other native the scripts call.
+
+    // Substrate natives BEFORE the scripts run: the manager-registration + entity + message
+    // + gameflow natives the game's own Lua calls (register_game_systems_api), and RunScript
+    // (register_boot_api). The auto-stub, installed LAST, swallows the still-unimplemented
+    // long tail so quest/gameflow Lua runs without every native.
+    register_game_systems_api(*script_vm, *this);
     register_boot_api(*script_vm, *this);
-    script_vm->run_source(kBootShim, "=bootshim");
-    script_vm->install_autostub();
-    // Load the boot script; its RunScript list pulls the ~160 gameplay scripts from the BNK.
+
+    // Run the real boot: generalsetupscript loads GeneralScriptManager + every enum/helper/
+    // interactable and self-registers via SetGeneralScriptManager. (RunScript skips the
+    // project's own MyConsoleHook0 mod-menu hook — not stock game logic; see register_boot_api.)
     std::vector<std::uint8_t> boot =
         script_bnk->extract("miscellaneous/generalsetupscript.lua");
     if (!boot.empty()) {
         script_vm->run_bytecode(boot.data(), boot.size(), "=generalsetupscript");
     }
+
+    // Define the Platform enum consistently with GetPlatform() (Win32=2) before the auto-stub
+    // claims `Platform` as a stub table. Values are arbitrary but self-consistent.
+    script_vm->run_source("Platform = { Xbox360 = 1, Win32 = 2, PS3 = 3, PC = 2 }", "=platform");
+
+    script_vm->install_autostub();
+
+    // Wire the registered manager Update callbacks into the tick, retail Quest->General->AI
+    // order. The managers are pure Lua; the native tick just resumes each one's Update.
+    NativeScriptVM* vm = script_vm.get();
+    NativeGame* self = this;
+    script_systems.quest.enabled = true;
+    script_systems.quest.update = [vm, self](double) {
+        if (self->quest_update_ref >= 0) vm->call_ref(self->quest_update_ref);
+    };
+    script_systems.general.enabled = true;
+    script_systems.general.update = [vm, self](double) {
+        if (self->general_update_ref >= 0) vm->call_ref(self->general_update_ref);
+    };
+    script_systems.ai.enabled = true;
+    script_systems.ai.update = [vm, self](double) {
+        if (self->ai_update_ref >= 0) vm->call_ref(self->ai_update_ref);
+    };
+
     return static_cast<int>(loaded_scripts.size());
+}
+
+int NativeGame::load_quest_scripts() {
+    if (!script_vm || !script_bnk) return -1;
+    // The quest bootstrap (quests/questsetupscript.lua) RunScripts QuestManager.lua + the
+    // quest modules + gameflow. QuestManager.lua self-registers via SetQuestUpdateFunction.
+    std::vector<std::uint8_t> qb = script_bnk->extract("quests/questsetupscript.lua");
+    if (qb.empty()) return -1;
+    // The quest scripts store their managers in a `BaseObjects` table but reference them as
+    // globals (BaseObjects.QuestManager = {...} then `QuestManager.NewQuestThread(...)`), so
+    // BaseObjects must alias _G. The engine sets this up before the quests bank runs.
+    script_vm->run_source("if not BaseObjects then BaseObjects = _G end", "=baseobjects");
+
+    // The save/load system defines helpers the quest machinery calls at registration time
+    // (AddFunctionsInTableToPermanentsTables, via QuestManager.AddQuestToPermanentsTables).
+    // The engine loads it in C++ (no Lua RunScript references it), so we load it here too,
+    // before the quests bank. Best-effort: a failure just leaves those helpers to the stub.
+    for (const char* dep : {"miscellaneous/saveload/saveloadsystem.lua"}) {
+        std::vector<std::uint8_t> b = script_bnk->extract(dep);
+        if (!b.empty()) script_vm->run_bytecode(b.data(), b.size(), "=saveload");
+    }
+
+    const std::size_t before = loaded_scripts.size();
+    script_vm->run_bytecode(qb.data(), qb.size(), "=questsetupscript");
+
+    // FLAGGED stand-in: neutralize the quest save/permanents registration
+    // (QuestManager.AddQuestToPermanentsTables reaches into PlutoPermanentsSaveTable, which is
+    // initialized by the save subsystem we don't fully wire yet). Without this, NewQuestThread
+    // aborts mid-registration. Quests still run their gameplay logic; only save-persistence of
+    // quest state is deferred. Remove once the save/permanents subsystem is wired.
+    script_vm->run_source(
+        "if QuestManager and QuestManager.AddQuestToPermanentsTables then "
+        "QuestManager.AddQuestToPermanentsTables = function() end end",
+        "=permanents_shim");
+
+    return static_cast<int>(loaded_scripts.size() - before);
 }
 
 int NativeGame::load_mods(const std::filesystem::path& dir) {

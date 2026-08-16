@@ -11,12 +11,14 @@
 #include "native_save.h"
 #include "native_script.h"
 #include "native_bnk.h"
+#include "native_message.h"
 
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace f2 {
@@ -57,6 +59,18 @@ struct NativeGame {
     // The game's script BNK (null until boot_game_scripts). RunScript pulls chunks from it.
     std::unique_ptr<BnkReader> script_bnk;
     std::vector<std::string> loaded_scripts;  // normalized names RunScript has loaded
+
+    // Game-script substrate (populated by boot_game_scripts). The message-event bus quests
+    // poll; the hero entity handle GetPlayerHero() returns; per-entity display names for
+    // Debug.CreateEntityAt'd + hero entities; and the three manager Update callbacks the
+    // game's managers register (SetGeneralScriptManager/SetQuestUpdateFunction/SetAIManager),
+    // resumed each InWorld tick in the retail Quest->General->AI order.
+    MessageBus messages;
+    std::uint64_t hero_uid = 0;
+    std::unordered_map<std::uint64_t, std::string> entity_names;
+    int quest_update_ref = -2;    // luaL_ref sentinels (<0 = unset)
+    int general_update_ref = -2;
+    int ai_update_ref = -2;
 
     // Live entity graph seeded from the cooked scene; pushes transforms into
     // scene.instances[] each InWorld tick.
@@ -101,6 +115,12 @@ struct NativeGame {
     // scope: scripts LOAD and their boot coroutines are created; full gameplay needs the
     // backing systems the stubbed natives stand in for.
     int boot_game_scripts(const std::filesystem::path& data_root);
+
+    // Load the quest bootstrap (quests/questsetupscript.lua) on top of a booted VM — pulls
+    // QuestManager + the quest modules + gameflow from the BNK. Separate from boot_game_scripts
+    // because retail loads quests on a later path (level/gameflow entry), not at general boot.
+    // Requires boot_game_scripts() first. Returns scripts loaded, or -1 if unavailable.
+    int load_quest_scripts();
 
     // Own-format save/restore (gamestate_save_restore.txt model; see native_save.h).
     // save_state serializes the game-flow state + the live entity delta into a byte blob.

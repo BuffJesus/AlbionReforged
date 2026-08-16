@@ -18,8 +18,11 @@
 // lua_State is kept opaque (no lua.h in this header) so consumers don't pull in Lua.
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
+
+struct lua_State;  // global fwd-decl (matches lua.h) so cur_() can name it without pulling in Lua
 
 namespace f2 {
 
@@ -28,6 +31,12 @@ class NativeScriptVM;
 // A native function callable from Lua. Reads its args + pushes results via the VM's
 // helpers; returns the number of values it pushed (like a lua_CFunction, but Lua-free).
 using ScriptNativeFn = int (*)(NativeScriptVM& vm);
+
+// A named integer constant for register_enum (e.g. {"MESSAGE_EVENT_...", 42}).
+struct ScriptEnumConst {
+    const char* key;
+    long long value;
+};
 
 class NativeScriptVM {
 public:
@@ -50,6 +59,36 @@ public:
 
     // Bind fn as a bare GLOBAL function (e.g. RunScript) rather than Class.Method.
     void register_global(const char* name, ScriptNativeFn fn);
+
+    // --- object handles (entities, quests, ...) ---------------------------------------
+    // The game's scripts hold OBJECTS (a hero entity, a quest) and call methods on them
+    // (`hero:GetName()`, `quest:IsComplete()`). We represent each as a Lua table carrying an
+    // integer handle + a class tag, with a shared per-tag metatable whose __index dispatches
+    // to the registered methods. push_handle caches one wrapper per (tag,id) in the registry
+    // so repeated pushes return the SAME table — object identity + `==` + field-stashing all
+    // work the way retail scripts expect.
+    //
+    // Register a method on object class `tag` (e.g. tag="Entity", method="GetPosition").
+    void register_object_method(const char* tag, const char* method, ScriptNativeFn fn);
+    // Push the object wrapper for (tag,id). id==0 pushes nil (the null handle) so scripts'
+    // `if not e then` checks behave. Returns nothing; leaves one value on the stack.
+    void push_handle(const char* tag, std::uint64_t id);
+    // Read the integer handle from a self/object arg (its __id field); 0 if not an object.
+    [[nodiscard]] std::uint64_t arg_handle(int index) const;
+
+    // Define a read-only enum/constant table: global `name` gets a table of the given
+    // {key,value} integer constants (e.g. EMessageEventType). Scripts read name.KEY.
+    void register_enum(const char* name, const struct ScriptEnumConst* consts, std::size_t count);
+
+    // --- persistent callable references (manager Update fns) ---------------------------
+    // The game's managers register themselves via natives (SetGeneralScriptManager(tbl),
+    // SetQuestUpdateFunction(fn)) and the native tick must call them back each frame. These
+    // capture a Lua value into the registry and invoke it later. Returns a ref handle (>=0)
+    // or a negative sentinel; call_ref/unref accept the sentinel harmlessly.
+    int ref_arg(int index);                              // ref the arg at `index`
+    int ref_arg_field(int index, const char* field);     // ref arg[index][field]
+    bool call_ref(int ref);                              // call the ref'd function (0 args)
+    void unref(int ref);
 
     // Load + run a chunk. run_source takes Lua text; run_bytecode takes compiled LuaQ
     // (the game's scripts). Both return false + set last_error() on a load/runtime error.
@@ -94,14 +133,21 @@ public:
     void push_number(double v);
     void push_string(const char* v);
     void push_bool(bool v);
+    void push_nil();
+    void push_new_table();  // push a fresh empty Lua table (e.g. an empty result list)
 
-    // Dispatched from the bound closures — internal.
+    // Dispatched from the bound closures — internal. dispatch_from routes the arg/push
+    // helpers to the ACTUAL calling state (a coroutine thread when called inside a resumed
+    // quest) for the duration of the call.
     int dispatch_(int fn_index);
+    int dispatch_from(void* call_state, int fn_index);
 
 private:
     bool load_and_run_(const void* data, std::size_t size, const char* name);
+    ::lua_State* cur_() const;  // current call state (call_state_ or state_)
 
-    void* state_ = nullptr;                 // lua_State*
+    void* state_ = nullptr;                 // lua_State* (main)
+    void* call_state_ = nullptr;            // lua_State* of the in-flight native call (or null)
     void* user_data_ = nullptr;             // opaque game context for bound natives
     std::vector<ScriptNativeFn> natives_;   // registered fns, indexed by closure upvalue
     std::vector<std::string> stub_misses_;  // unique missing-native worklist

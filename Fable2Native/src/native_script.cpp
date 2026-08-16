@@ -8,6 +8,33 @@ extern "C" {
 
 #include <fstream>
 #include <iterator>
+#include <unordered_set>
+
+namespace {
+#include "f2/native_lua_catalog.inc"  // kNativeClassNames[], kNativeGlobalNames[]
+
+// The set of every name the retail binary exposes as a Lua native (class or global),
+// from ghidra_out/lua_natives5_catalog.tsv, plus a manual supplement for native CLASSES the
+// catalog records only by their bare method names (so it never tagged the class itself).
+// The auto-stub only fabricates a stub for names IN this set; everything else reads as nil so
+// the game's own script-defined globals (quest types, managers) register without collision.
+const std::unordered_set<std::string>& native_name_set() {
+    static const std::unordered_set<std::string> set = [] {
+        std::unordered_set<std::string> s;
+        for (const char* n : kNativeClassNames) s.insert(n);
+        for (const char* n : kNativeGlobalNames) s.insert(n);
+        // Native class tables the catalog missed (methods cataloged as bare globals):
+        // NOTE: do NOT stub BaseObjects — it is aliased to _G so the game's managers
+        // (BaseObjects.QuestManager = {...}) define real globals.
+        for (const char* n : {"GUI", "Debug", "MessageEvents", "Timing", "Gameflow",
+                              "TutorialManager", "Breadcrumber", "ScriptFunction", "SearchTools",
+                              "EMessageEventType", "Platform", "ScriptEnum"})
+            s.insert(n);
+        return s;
+    }();
+    return set;
+}
+}  // namespace
 
 namespace f2 {
 
@@ -15,11 +42,34 @@ namespace {
 lua_State* L(void* s) { return static_cast<lua_State*>(s); }
 
 // Trampoline for every bound native: upvalue 1 = the VM, upvalue 2 = the native index.
+// `s` is the ACTUAL calling state — which is a coroutine thread, not the main state, whenever
+// the native is invoked from inside a resumed quest coroutine. dispatch_from routes the arg/
+// push helpers to `s` for the duration of the call (see cur_()).
 int native_trampoline(lua_State* s) {
     auto* vm = static_cast<NativeScriptVM*>(lua_touserdata(s, lua_upvalueindex(1)));
     const int idx = static_cast<int>(lua_tointeger(s, lua_upvalueindex(2)));
-    return vm->dispatch_(idx);
+    return vm->dispatch_from(s, idx);
 }
+
+// Get-or-create a table stored in the registry under `key`, left on the stack top. When
+// `weak_mode` is non-null, a freshly created table gets a {__mode=weak_mode} metatable.
+void get_registry_table(lua_State* s, const char* key, const char* weak_mode) {
+    lua_getfield(s, LUA_REGISTRYINDEX, key);          // [t?]
+    if (lua_istable(s, -1)) return;
+    lua_pop(s, 1);
+    lua_newtable(s);                                  // [t]
+    if (weak_mode) {
+        lua_newtable(s);                              // [t, mt]
+        lua_pushstring(s, weak_mode);
+        lua_setfield(s, -2, "__mode");                // mt.__mode = weak_mode
+        lua_setmetatable(s, -2);                      // [t]
+    }
+    lua_pushvalue(s, -1);                             // [t, t]
+    lua_setfield(s, LUA_REGISTRYINDEX, key);          // [t]
+}
+
+// A capture-less no-op used as the read-only __newindex on enum tables.
+int enum_readonly_newindex(lua_State*) { return 0; }
 }  // namespace
 
 NativeScriptVM::NativeScriptVM() {
@@ -39,6 +89,20 @@ NativeScriptVM::~NativeScriptVM() {
 int NativeScriptVM::dispatch_(int fn_index) {
     if (fn_index < 0 || fn_index >= static_cast<int>(natives_.size())) return 0;
     return natives_[static_cast<std::size_t>(fn_index)](*this);
+}
+
+int NativeScriptVM::dispatch_from(void* call_state, int fn_index) {
+    void* prev = call_state_;
+    call_state_ = call_state;
+    const int r = dispatch_(fn_index);
+    call_state_ = prev;
+    return r;
+}
+
+// The lua_State the arg/push helpers operate on: the current native call's state (a coroutine
+// thread when called from a resumed quest), falling back to the main state outside a call.
+lua_State* NativeScriptVM::cur_() const {
+    return static_cast<lua_State*>(call_state_ ? call_state_ : state_);
 }
 
 void NativeScriptVM::register_native(const char* class_name, const char* method,
@@ -73,6 +137,113 @@ void NativeScriptVM::register_global(const char* name, ScriptNativeFn fn) {
     lua_pushinteger(s, idx);
     lua_pushcclosure(s, &native_trampoline, 2);
     lua_setglobal(s, name);
+}
+
+void NativeScriptVM::register_object_method(const char* tag, const char* method,
+                                            ScriptNativeFn fn) {
+    if (!state_) return;
+    lua_State* s = L(state_);
+    const int idx = static_cast<int>(natives_.size());
+    natives_.push_back(fn);
+    const std::string key = std::string("f2.methods.") + tag;
+    get_registry_table(s, key.c_str(), nullptr);      // [methods]
+    lua_pushlightuserdata(s, this);
+    lua_pushinteger(s, idx);
+    lua_pushcclosure(s, &native_trampoline, 2);        // [methods, closure]
+    lua_setfield(s, -2, method);                        // methods[method] = closure
+    lua_pop(s, 1);
+}
+
+void NativeScriptVM::push_handle(const char* tag, std::uint64_t id) {
+    if (!state_) return;
+    lua_State* s = cur_();
+    if (id == 0) { lua_pushnil(s); return; }  // null handle -> nil (scripts' `if not e`)
+    void* key = reinterpret_cast<void*>(static_cast<std::uintptr_t>(id));
+    const std::string cachekey = std::string("f2.objcache.") + tag;
+    get_registry_table(s, cachekey.c_str(), "v");     // [cache]  (weak VALUES)
+    lua_pushlightuserdata(s, key);
+    lua_rawget(s, -2);                                 // [cache, obj?]
+    if (lua_istable(s, -1)) { lua_remove(s, -2); return; }  // cached -> [obj]
+    lua_pop(s, 1);                                     // [cache]
+    // Build a fresh wrapper: { __id = <lightuserdata id>, __tag = tag } with a metatable
+    // whose __index is the shared per-tag methods table (so obj:Method() dispatches).
+    lua_newtable(s);                                   // [cache, obj]
+    lua_pushlightuserdata(s, key);
+    lua_setfield(s, -2, "__id");
+    lua_pushstring(s, tag);
+    lua_setfield(s, -2, "__tag");
+    lua_newtable(s);                                   // [cache, obj, mt]
+    const std::string mkey = std::string("f2.methods.") + tag;
+    get_registry_table(s, mkey.c_str(), nullptr);      // [cache, obj, mt, methods]
+    lua_setfield(s, -2, "__index");                    // mt.__index = methods
+    lua_setmetatable(s, -2);                            // [cache, obj]
+    lua_pushlightuserdata(s, key);                     // [cache, obj, key]
+    lua_pushvalue(s, -2);                              // [cache, obj, key, obj]
+    lua_rawset(s, -4);                                 // cache[key] = obj  -> [cache, obj]
+    lua_remove(s, -2);                                 // [obj]
+}
+
+std::uint64_t NativeScriptVM::arg_handle(int index) const {
+    if (!state_) return 0;
+    lua_State* s = cur_();
+    if (!lua_istable(s, index)) return 0;
+    lua_getfield(s, index, "__id");                    // [__id]
+    std::uint64_t id = 0;
+    if (lua_islightuserdata(s, -1))
+        id = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(lua_touserdata(s, -1)));
+    lua_pop(s, 1);
+    return id;
+}
+
+void NativeScriptVM::register_enum(const char* name, const ScriptEnumConst* consts,
+                                   std::size_t count) {
+    if (!state_) return;
+    lua_State* s = L(state_);
+    lua_newtable(s);                                   // [t]
+    for (std::size_t i = 0; i < count; ++i) {
+        lua_pushinteger(s, static_cast<lua_Integer>(consts[i].value));
+        lua_setfield(s, -2, consts[i].key);
+    }
+    // Give it a metatable so (a) the auto-stub skips it (getmetatable != nil) and (b) it is
+    // read-only; unknown keys read nil rather than becoming stub no-ops.
+    lua_newtable(s);                                   // [t, mt]
+    lua_pushcfunction(s, &enum_readonly_newindex);
+    lua_setfield(s, -2, "__newindex");
+    lua_setmetatable(s, -2);                           // [t]
+    lua_setglobal(s, name);
+}
+
+int NativeScriptVM::ref_arg(int index) {
+    if (!state_) return -2;
+    lua_State* s = cur_();
+    lua_pushvalue(s, index);
+    return luaL_ref(s, LUA_REGISTRYINDEX);
+}
+
+int NativeScriptVM::ref_arg_field(int index, const char* field) {
+    if (!state_) return -2;
+    lua_State* s = cur_();
+    if (!lua_istable(s, index)) return -2;
+    lua_getfield(s, index, field);
+    return luaL_ref(s, LUA_REGISTRYINDEX);
+}
+
+bool NativeScriptVM::call_ref(int ref) {
+    if (!state_ || ref < 0) return false;
+    lua_State* s = L(state_);
+    lua_rawgeti(s, LUA_REGISTRYINDEX, ref);
+    if (!lua_isfunction(s, -1)) { lua_pop(s, 1); return false; }
+    if (lua_pcall(s, 0, 0, 0) != 0) {
+        last_error_ = lua_tostring(s, -1) ? lua_tostring(s, -1) : "runtime error";
+        lua_pop(s, 1);
+        return false;
+    }
+    last_error_.clear();
+    return true;
+}
+
+void NativeScriptVM::unref(int ref) {
+    if (state_ && ref >= 0) luaL_unref(L(state_), LUA_REGISTRYINDEX, ref);
 }
 
 bool NativeScriptVM::load_and_run_(const void* data, std::size_t size, const char* name) {
@@ -186,6 +357,20 @@ bool NativeScriptVM::install_autostub() {
     lua_pushcclosure(s, &native_trampoline, 2);
     lua_setglobal(s, "__stub_log");
 
+    // __is_native(name) -> bool: is `name` a retail Lua native (from the catalog)? The _G
+    // auto-stub only fabricates a stub for these; unknown Capitalized names read as nil so the
+    // game's own globals define cleanly.
+    const int nidx = static_cast<int>(natives_.size());
+    natives_.push_back([](NativeScriptVM& vm) -> int {
+        const char* name = vm.arg_string(1);
+        vm.push_bool(name && native_name_set().count(name) != 0);
+        return 1;
+    });
+    lua_pushlightuserdata(s, this);
+    lua_pushinteger(s, nidx);
+    lua_pushcclosure(s, &native_trampoline, 2);
+    lua_setglobal(s, "__is_native");
+
     // The metatable bootstrap: a chainable black-hole NIL + a class-table __index that
     // manufactures a cached no-op returning NIL (or false for predicates), + a _G __index
     // that turns an unknown Capitalized global into a stub class table. Each unique miss
@@ -206,25 +391,46 @@ bool NativeScriptVM::install_autostub() {
             or m:match("^Find") or m:match("^Exists") or m:match("^Can") or m:match("Loading"))
         end
         local function classmeta(cn)
-          return { __index = function(t, m)
-            if type(m) == "string" and m:sub(1, 2) == "__" then return nil end
-            local key = cn .. "." .. tostring(m)
-            if not seen[key] then seen[key] = true; __stub_log(key) end
-            local fn
-            if predicate(m) then fn = function() return false end
-            else fn = function() return NIL end end
-            rawset(t, m, fn)
-            return fn
-          end }
+          return {
+            __index = function(t, m)
+              if type(m) == "string" and m:sub(1, 2) == "__" then return nil end
+              local key = cn .. "." .. tostring(m)
+              if not seen[key] then seen[key] = true; __stub_log(key) end
+              -- Predicates get a callable returning false (used in conditions). Everything
+              -- else resolves to the black-hole NIL itself, which is BOTH callable and
+              -- indexable, so it survives `Class.Method()`, `Class.Field.Sub`, and being
+              -- stored then chained — no "attempt to index a function value".
+              local v
+              if predicate(m) then v = function() return false end else v = NIL end
+              rawset(t, m, v)
+              return v
+            end,
+            -- Many Capitalized globals are FUNCTIONS, not class tables (GetPlatform(),
+            -- GetPlayerHenchman(), ...). Make the stub callable so `Foo()` yields the
+            -- black-hole (chainable) instead of "attempt to call a table value". Predicate-
+            -- named globals return false to avoid truthiness drift.
+            __call = function(t, ...)
+              if not seen[cn] then seen[cn] = true; __stub_log(cn .. "()") end
+              if predicate(cn) then return false end
+              return NIL
+            end,
+          }
         end
         for cn, t in pairs(_G) do
+          -- Only wrap NATIVE class tables. Real game tables already loaded (GeneralScriptManager,
+          -- QuestManager, quest types) must stay unwrapped, or their nil-field reads would turn
+          -- into stubs and break their own logic (e.g. GeneralScriptManager.Update walking its
+          -- CurrentlyRunningScripts list).
           if type(t) == "table" and type(cn) == "string" and cn:match("^%u")
-             and getmetatable(t) == nil then
+             and getmetatable(t) == nil and __is_native(cn) then
             setmetatable(t, classmeta(cn))
           end
         end
         setmetatable(_G, { __index = function(t, k)
-          if type(k) == "string" and k:match("^%u") then
+          -- Only fabricate a stub for names the retail binary actually exposes as natives.
+          -- Unknown Capitalized names (the game's own script-defined quest types/managers)
+          -- read as nil, so `if _G.X == nil then define X end` registration works.
+          if type(k) == "string" and __is_native(k) then
             local tbl = setmetatable({}, classmeta(k))
             rawset(t, k, tbl)
             return tbl
@@ -235,30 +441,36 @@ bool NativeScriptVM::install_autostub() {
     return run_source(kBootstrap, "=autostub");
 }
 
-int NativeScriptVM::arg_count() const { return state_ ? lua_gettop(L(state_)) : 0; }
+int NativeScriptVM::arg_count() const { return state_ ? lua_gettop(cur_()) : 0; }
 
 double NativeScriptVM::arg_number(int index) const {
-    return state_ ? static_cast<double>(lua_tonumber(L(state_), index)) : 0.0;
+    return state_ ? static_cast<double>(lua_tonumber(cur_(), index)) : 0.0;
 }
 
 const char* NativeScriptVM::arg_string(int index) const {
     if (!state_) return "";
-    const char* str = lua_tostring(L(state_), index);
+    const char* str = lua_tostring(cur_(), index);
     return str ? str : "";
 }
 
 bool NativeScriptVM::arg_bool(int index) const {
-    return state_ ? lua_toboolean(L(state_), index) != 0 : false;
+    return state_ ? lua_toboolean(cur_(), index) != 0 : false;
 }
 
 void NativeScriptVM::push_number(double v) {
-    if (state_) lua_pushnumber(L(state_), v);
+    if (state_) lua_pushnumber(cur_(), v);
 }
 void NativeScriptVM::push_string(const char* v) {
-    if (state_) lua_pushstring(L(state_), v);
+    if (state_) lua_pushstring(cur_(), v);
 }
 void NativeScriptVM::push_bool(bool v) {
-    if (state_) lua_pushboolean(L(state_), v ? 1 : 0);
+    if (state_) lua_pushboolean(cur_(), v ? 1 : 0);
+}
+void NativeScriptVM::push_nil() {
+    if (state_) lua_pushnil(cur_());
+}
+void NativeScriptVM::push_new_table() {
+    if (state_) lua_newtable(cur_());
 }
 
 }  // namespace f2

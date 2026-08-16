@@ -100,6 +100,49 @@ static void test_boot_game_scripts() {
     std::cout << std::flush;
 }
 
+// ---- P6: run one of the game's OWN quests to completion on the native substrate ----
+// Loads the real quest bank + the shipped example quest (quests/myfirstquest.lua), then
+// drives it through the REAL QuestManager: the quest's actual Update coroutine runs, yields
+// at its WaitFor, and — once its completion condition is set — resumes and prints its own
+// "Terminating quest now". Proves the game's quest VM + scheduler + coroutine model execute
+// its bytecode end-to-end. Skipped if game data is absent.
+//
+// Two of the quest's dependencies are neutralized as FLAGGED stand-ins for subsystems not
+// wired yet (they are orthogonal to the quest's own logic): StartNewEntityThread (needs the
+// world entity-search/streaming system) and the save/permanents registration (needs the
+// save subsystem). The quest's Update/WaitFor/completion is 100% the game's real code.
+static void test_run_real_quest() {
+    const std::filesystem::path bnk_path =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    const std::filesystem::path data_root = bnk_path.parent_path().parent_path();
+    if (!std::filesystem::exists(bnk_path)) return;
+
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    F2_CHECK(game.boot_game_scripts(data_root) > 0);   // 159 misc scripts + real managers
+    F2_CHECK(game.load_quest_scripts() > 0);           // QuestManager + quest modules + gameflow
+    f2::NativeScriptVM& vm = *game.script_vm;
+
+    // Load the shipped example quest; it self-registers MyFirstQuest via NewQuestThread and
+    // defines its Update. (StartNewEntityThread stubbed first — see the note above.)
+    vm.run_source("QuestThreadBase.StartNewEntityThread = function() end");
+    F2_CHECK(vm.run_source("RunScript('quests/myfirstquest.lua')"));
+    game.script_log.clear();
+    F2_CHECK(vm.run_source("__f2ok = type(MyFirstQuest.Update) == 'function'; assert(__f2ok)"));
+
+    // Instantiate + schedule the quest through the REAL QuestManager, then drive it.
+    F2_CHECK(vm.run_source("__q = MyFirstQuest:new(); QuestManager.AddQuestThread(__q)"));
+    vm.run_source("QuestManager.Update()");              // Update runs -> yields at WaitFor
+    // WaitFor's predicate reads the quest TYPE's QuestOver; set it, then resume to completion.
+    vm.run_source("MyFirstQuest.QuestOver = true");
+    vm.run_source("QuestManager.Update()");              // WaitFor exits -> prints + ends
+
+    bool completed = false;
+    for (const auto& line : game.script_log)
+        if (line.find("Terminating quest now") != std::string::npos) completed = true;
+    F2_CHECK(completed);  // the game's quest ran its real logic to its own completion print
+}
+
 int main() {
     const std::array<std::uint8_t, 136> dxt1 = [] {
         std::array<std::uint8_t, 136> bytes{};
@@ -998,6 +1041,9 @@ int main() {
     // Runs in its own function (test_boot_game_scripts, above main) so the large NativeGame
     // local doesn't add to main()'s already-deep stack frame.
     test_boot_game_scripts();
+
+    // ---- P6: run one of the game's OWN quests to completion (real BNK; skipped if absent) ----
+    test_run_real_quest();
 
     // ---- P6: mods folder loader + Quest natives (150-bit bitset) ----
     {
