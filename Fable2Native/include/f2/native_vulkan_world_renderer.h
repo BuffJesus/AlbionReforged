@@ -64,6 +64,15 @@ public:
                            std::uint32_t width,
                            std::uint32_t height,
                            double elapsed_seconds);
+    // Refraction tile (retail program 57 g_RefractionSampler c14): replay opaque geometry with the
+    // NORMAL camera (no mirror/clip) into a renderer-owned colour tile = the scene BEHIND the water.
+    // Vulkan can't copy a colour attachment mid-render-pass (D3D12's grab-pass approach), so it
+    // re-renders opaque into an isolated pass instead (reuses the reflection render pass). Call BEFORE
+    // the world render pass. No-op if the scene has no water.
+    void render_refraction(VkCommandBuffer command_buffer,
+                           std::uint32_t width,
+                           std::uint32_t height,
+                           double elapsed_seconds);
     [[nodiscard]] bool has_water() const noexcept { return has_water_; }
     [[nodiscard]] float water_plane_y() const noexcept { return water_plane_y_; }
     // Sun ortho view-projection used for the shadow map (fits a box around the scene along the sun
@@ -144,6 +153,16 @@ private:
     VkFramebuffer reflection_framebuffer_ = VK_NULL_HANDLE;
     VkPipeline reflection_pipeline_ = VK_NULL_HANDLE;
     bool reflection_ready_ = false;
+    // Refraction tile (scene behind water). Reuses reflection_render_pass_ + reflection_pipeline_
+    // (same opaque world shaders); only a distinct colour+depth image + framebuffer are needed.
+    VkImage refraction_image_ = VK_NULL_HANDLE;
+    VkDeviceMemory refraction_memory_ = VK_NULL_HANDLE;
+    VkImageView refraction_view_ = VK_NULL_HANDLE;
+    VkImage refraction_depth_image_ = VK_NULL_HANDLE;
+    VkDeviceMemory refraction_depth_memory_ = VK_NULL_HANDLE;
+    VkImageView refraction_depth_view_ = VK_NULL_HANDLE;
+    VkFramebuffer refraction_framebuffer_ = VK_NULL_HANDLE;
+    bool refraction_ready_ = false;
     // Derived single water plane (render Y) = radius-weighted mean of the water draw ranges (phase 1;
     // multi-height canals collapse here). Second UBO slice carries the reflected VP (dynamic offset).
     bool has_water_ = false;

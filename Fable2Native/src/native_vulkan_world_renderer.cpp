@@ -896,9 +896,35 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
             refl_ok = vkCreateFramebuffer(device_, &fb, nullptr, &reflection_framebuffer_) == VK_SUCCESS;
         }
         reflection_ready_ = refl_ok;
+
+        // Refraction tile: a second colour+depth image + framebuffer, reusing reflection_render_pass_
+        // and the make_image lambda above. render_refraction re-renders opaque geometry (normal camera)
+        // into it — the scene behind the water.
+        bool refr_ok = reflection_ready_;
+        if (refr_ok)
+            refr_ok = make_image(color_format,
+                                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                 refraction_image_, refraction_memory_, refraction_view_,
+                                 VK_IMAGE_ASPECT_COLOR_BIT);
+        if (refr_ok)
+            refr_ok = make_image(VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                 refraction_depth_image_, refraction_depth_memory_,
+                                 refraction_depth_view_, VK_IMAGE_ASPECT_DEPTH_BIT);
+        if (refr_ok) {
+            VkImageView fb_views[2]{refraction_view_, refraction_depth_view_};
+            VkFramebufferCreateInfo fb{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            fb.renderPass = reflection_render_pass_;
+            fb.attachmentCount = 2;
+            fb.pAttachments = fb_views;
+            fb.width = kReflectionSize;
+            fb.height = kReflectionSize;
+            fb.layers = 1;
+            refr_ok = vkCreateFramebuffer(device_, &fb, nullptr, &refraction_framebuffer_) == VK_SUCCESS;
+        }
+        refraction_ready_ = refr_ok;
     }
 
-    VkDescriptorSetLayoutBinding bindings[9]{};
+    VkDescriptorSetLayoutBinding bindings[10]{};
     bindings[0].binding = 0;
     // DYNAMIC so the main pass (offset 0) and the reflection pass (offset ubo_slice) share the set.
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
@@ -936,8 +962,12 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[8].descriptorCount = 1;
     bindings[8].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[9].binding = 9;  // refraction tile (retail g_RefractionSampler c14)
+    bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[9].descriptorCount = 1;
+    bindings[9].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_info.bindingCount = 9;
+    layout_info.bindingCount = 10;
     layout_info.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device_, &layout_info, nullptr, &descriptor_set_layout_) != VK_SUCCESS) {
         error = "Vulkan could not create the world descriptor layout.";
@@ -948,8 +978,8 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
         // binding 0 (Camera) is dynamic; bindings 3 (lights) + 5 (water) are plain uniform buffers.
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, static_cast<std::uint32_t>(material_count)},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<std::uint32_t>(material_count * 2)},
-        // 6 combined image samplers per set: albedo, normal, spec, scene depth, shadow, reflection.
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<std::uint32_t>(material_count * 6)},
+        // 7 combined image samplers/set: albedo, normal, spec, scene depth, shadow, reflection, refraction.
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<std::uint32_t>(material_count * 7)},
     };
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool_info.maxSets = static_cast<std::uint32_t>(material_count);
@@ -977,8 +1007,9 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
     std::vector<VkDescriptorImageInfo> depth_infos(material_count);   // resolved opaque depth
     std::vector<VkDescriptorImageInfo> shadow_infos(material_count);  // sun shadow map (binding 7)
     std::vector<VkDescriptorImageInfo> reflection_infos(material_count);  // planar reflection (binding 8)
+    std::vector<VkDescriptorImageInfo> refraction_infos(material_count);  // refraction tile (binding 9)
     std::vector<VkDescriptorBufferInfo> water_infos(material_count);
-    std::vector<VkWriteDescriptorSet> writes(material_count * 9);
+    std::vector<VkWriteDescriptorSet> writes(material_count * 10);
     for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
         image_infos[material_index] = {texture_samplers_[material_index],
                                        texture_views_[material_index],
@@ -1008,69 +1039,80 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
             reflection_ready_ ? reflection_sampler_ : texture_samplers_[0],
             reflection_ready_ ? reflection_view_ : texture_views_[0],
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-        auto& uniform_write = writes[material_index * 9];
+        refraction_infos[material_index] = {
+            refraction_ready_ ? reflection_sampler_ : texture_samplers_[0],  // shares the linear sampler
+            refraction_ready_ ? refraction_view_ : texture_views_[0],
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        auto& uniform_write = writes[material_index * 10];
         uniform_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         uniform_write.dstSet = descriptor_sets_[material_index];
         uniform_write.dstBinding = 0;
         uniform_write.descriptorCount = 1;
         uniform_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         uniform_write.pBufferInfo = &buffer_info;
-        auto& image_write = writes[material_index * 9 + 1];
+        auto& image_write = writes[material_index * 10 + 1];
         image_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         image_write.dstSet = descriptor_sets_[material_index];
         image_write.dstBinding = 1;
         image_write.descriptorCount = 1;
         image_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         image_write.pImageInfo = &image_infos[material_index];
-        auto& normal_write = writes[material_index * 9 + 2];
+        auto& normal_write = writes[material_index * 10 + 2];
         normal_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         normal_write.dstSet = descriptor_sets_[material_index];
         normal_write.dstBinding = 2;
         normal_write.descriptorCount = 1;
         normal_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         normal_write.pImageInfo = &normal_infos[material_index];
-        auto& lights_write = writes[material_index * 9 + 3];
+        auto& lights_write = writes[material_index * 10 + 3];
         lights_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         lights_write.dstSet = descriptor_sets_[material_index];
         lights_write.dstBinding = 3;
         lights_write.descriptorCount = 1;
         lights_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         lights_write.pBufferInfo = &lights_info;
-        auto& spec_write = writes[material_index * 9 + 4];
+        auto& spec_write = writes[material_index * 10 + 4];
         spec_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         spec_write.dstSet = descriptor_sets_[material_index];
         spec_write.dstBinding = 4;
         spec_write.descriptorCount = 1;
         spec_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         spec_write.pImageInfo = &spec_infos[material_index];
-        auto& water_write = writes[material_index * 9 + 5];
+        auto& water_write = writes[material_index * 10 + 5];
         water_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         water_write.dstSet = descriptor_sets_[material_index];
         water_write.dstBinding = 5;
         water_write.descriptorCount = 1;
         water_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         water_write.pBufferInfo = &water_infos[material_index];
-        auto& depth_write = writes[material_index * 9 + 6];
+        auto& depth_write = writes[material_index * 10 + 6];
         depth_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         depth_write.dstSet = descriptor_sets_[material_index];
         depth_write.dstBinding = 6;
         depth_write.descriptorCount = 1;
         depth_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         depth_write.pImageInfo = &depth_infos[material_index];
-        auto& shadow_write = writes[material_index * 9 + 7];
+        auto& shadow_write = writes[material_index * 10 + 7];
         shadow_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         shadow_write.dstSet = descriptor_sets_[material_index];
         shadow_write.dstBinding = 7;
         shadow_write.descriptorCount = 1;
         shadow_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         shadow_write.pImageInfo = &shadow_infos[material_index];
-        auto& reflection_write = writes[material_index * 9 + 8];
+        auto& reflection_write = writes[material_index * 10 + 8];
         reflection_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         reflection_write.dstSet = descriptor_sets_[material_index];
         reflection_write.dstBinding = 8;
         reflection_write.descriptorCount = 1;
         reflection_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         reflection_write.pImageInfo = &reflection_infos[material_index];
+        auto& refraction_write = writes[material_index * 10 + 9];
+        refraction_write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        refraction_write.dstSet = descriptor_sets_[material_index];
+        refraction_write.dstBinding = 9;
+        refraction_write.descriptorCount = 1;
+        refraction_write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        refraction_write.pImageInfo = &refraction_infos[material_index];
     }
     vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()),
                            writes.data(), 0, nullptr);
@@ -1537,7 +1579,10 @@ void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
         push_constants.is_water = water ? 1u : 0u;
         push_constants.has_scene_depth = depth_resolve_enabled_ ? 1u : 0u;
         push_constants.is_character = range.is_character ? 1u : 0u;
-        push_constants.reflection_enabled = (water && reflection_ready_ && has_water_) ? 1u : 0u;
+        // One flag gates BOTH water tiles (reflection binding 8 + refraction binding 9) — they are
+        // created together, so refraction_ready_ implies reflection_ready_.
+        push_constants.reflection_enabled =
+            (water && reflection_ready_ && refraction_ready_ && has_water_) ? 1u : 0u;
         push_constants.character_offset = {character_offset_[0], character_offset_[1],
                                            character_offset_[2], 0.0f};
         push_constants.character_motion = {character_motion_phase_, character_motion_strength_,
@@ -1586,6 +1631,60 @@ void NativeVulkanWorldRenderer::render_water(VkCommandBuffer command_buffer,
                                              std::uint32_t height,
                                              double elapsed_seconds) {
     render_pass(command_buffer, width, height, elapsed_seconds, true);
+}
+
+void NativeVulkanWorldRenderer::render_refraction(VkCommandBuffer command_buffer,
+                                                  std::uint32_t width,
+                                                  std::uint32_t height,
+                                                  double elapsed_seconds) {
+    (void)elapsed_seconds;
+    if (!refraction_ready_ || !reflection_pipeline_ || !has_water_ || width == 0 || height == 0)
+        return;
+    // The refraction tile is the scene behind the water = opaque geometry from the NORMAL camera.
+    // That VP is identical to the main pass's, so this pass reads UBO slice 0 (dynamic offset 0),
+    // which render_pass() writes with the same value this frame (same contract as render_shadow).
+    VkClearValue clears[2]{};
+    clears[0].color = {{scene_sky_horizon_[0], scene_sky_horizon_[1], scene_sky_horizon_[2], 1.0f}};
+    clears[1].depthStencil = {0.0f, 0};  // reversed-Z far
+    VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    pass.renderPass = reflection_render_pass_;      // same colour+depth format
+    pass.framebuffer = refraction_framebuffer_;
+    pass.renderArea.extent = {kReflectionSize, kReflectionSize};
+    pass.clearValueCount = 2;
+    pass.pClearValues = clears;
+    vkCmdBeginRenderPass(command_buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport viewport{0.0f, static_cast<float>(kReflectionSize), static_cast<float>(kReflectionSize),
+                        -static_cast<float>(kReflectionSize), 0.0f, 1.0f};
+    VkRect2D scissor{{0, 0}, {kReflectionSize, kReflectionSize}};
+    vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+    vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, reflection_pipeline_);
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer_, &offset);
+    vkCmdBindIndexBuffer(command_buffer, index_buffer_, 0, VK_INDEX_TYPE_UINT32);
+    const std::uint32_t dyn_offset = 0;  // main VP slice (identical to what this pass needs)
+    for (const auto& range : draw_ranges_) {
+        if (range.is_water || range.is_character) continue;
+        if (range_distance_culled(range, camera_eye_)) continue;
+        const auto material_index =
+            std::min<std::size_t>(range.material_index, descriptor_sets_.size() - 1);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout_, 0,
+                                1, &descriptor_sets_[material_index], 1, &dyn_offset);
+        struct PushConstants {
+            std::uint32_t is_water = 0;
+            std::uint32_t has_scene_depth = 0;
+            std::uint32_t is_character = 0;
+            std::uint32_t reflection_enabled = 0;
+            std::array<float, 4> character_offset{};
+            std::array<float, 4> character_motion{};
+            std::array<float, 4> clip_plane{};  // 0 = no discard (whole scene behind)
+        } push_constants;
+        vkCmdPushConstants(command_buffer, pipeline_layout_,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(push_constants), &push_constants);
+        vkCmdDrawIndexed(command_buffer, range.index_count, 1, range.first_index, 0, 0);
+    }
+    vkCmdEndRenderPass(command_buffer);
 }
 
 void NativeVulkanWorldRenderer::render_reflection(VkCommandBuffer command_buffer,
@@ -1751,6 +1850,13 @@ void NativeVulkanWorldRenderer::destroy() {
     if (reflection_depth_view_) vkDestroyImageView(device_, reflection_depth_view_, nullptr);
     if (reflection_depth_image_) vkDestroyImage(device_, reflection_depth_image_, nullptr);
     if (reflection_depth_memory_) vkFreeMemory(device_, reflection_depth_memory_, nullptr);
+    if (refraction_framebuffer_) vkDestroyFramebuffer(device_, refraction_framebuffer_, nullptr);
+    if (refraction_view_) vkDestroyImageView(device_, refraction_view_, nullptr);
+    if (refraction_image_) vkDestroyImage(device_, refraction_image_, nullptr);
+    if (refraction_memory_) vkFreeMemory(device_, refraction_memory_, nullptr);
+    if (refraction_depth_view_) vkDestroyImageView(device_, refraction_depth_view_, nullptr);
+    if (refraction_depth_image_) vkDestroyImage(device_, refraction_depth_image_, nullptr);
+    if (refraction_depth_memory_) vkFreeMemory(device_, refraction_depth_memory_, nullptr);
     if (pipeline_layout_) vkDestroyPipelineLayout(device_, pipeline_layout_, nullptr);
     for (const auto sampler : texture_samplers_) {
         if (sampler) vkDestroySampler(device_, sampler, nullptr);

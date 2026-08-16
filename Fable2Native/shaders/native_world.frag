@@ -35,6 +35,7 @@ layout(set = 0, binding = 5) uniform Water {
 layout(set = 0, binding = 6) uniform sampler2D sceneDepth;
 layout(set = 0, binding = 7) uniform sampler2DShadow shadowMap;  // sun shadow depth (t4-equivalent)
 layout(set = 0, binding = 8) uniform sampler2D reflectionTex;    // planar reflection RT (g_ReflectionSampler)
+layout(set = 0, binding = 9) uniform sampler2D refractionTex;    // refraction tile (g_RefractionSampler c14)
 
 // Sun shadow factor at a world position: 1 = lit, 0 = fully shadowed. Projects world_pos into the
 // light's ortho clip space, then 3x3 PCF against the shadow depth. Mirrors the D3D12 sun_shadow():
@@ -113,9 +114,21 @@ vec4 water() {
                              nxy * water_params.params[6].yz * 0.02, vec2(0.0), vec2(1.0));
         reflection = texture(reflectionTex, refl_uv).rgb;
     }
+    // Refraction tile (retail g_RefractionSampler c14): the scene BEHIND the water (opaque
+    // re-rendered in render_refraction), sampled by screen uv distorted by REFRACTION_SCALE
+    // (param[27/28] = params[6].w/[7].x), tinted by water_opacity (params[9].y). Same gate as the
+    // reflection tile (both created together). Mirrors the D3D12 ps_water refraction combine.
+    vec3 base_col = watercol;
+    if (pc.reflection_enabled != 0u && pc.has_scene_depth != 0u) {
+        vec2 refr_uv = clamp(gl_FragCoord.xy / vec2(textureSize(sceneDepth, 0)) +
+                             nxy * vec2(water_params.params[6].w, water_params.params[7].x) * 0.02,
+                             vec2(0.0), vec2(1.0));
+        vec3 refraction = texture(refractionTex, refr_uv).rgb;
+        base_col = mix(refraction, watercol, clamp(water_params.params[9].y, 0.0, 1.0));
+    }
     float refl_strength = clamp(water_params.params[7].y, 0.0, 1.0);
     float refl = refl_strength * mix(fres_reflect, 1.0, distf);
-    vec3 col = watercol * (1.0 - refl_strength) + reflection * refl;
+    vec3 col = base_col * (1.0 - refl_strength) + reflection * refl;
     vec3 L = normalize(camera.sun_direction.xyz);
     vec3 Ng = Nf;
     // The authored PF40 normal map supplies the water ripple detail and glitter response.
@@ -127,6 +140,7 @@ vec4 water() {
     // framebuffer behind the surface supply the scene/refraction term. Vulkan optionally adds
     // the resolved scene-depth edge factor below when MSAA depth resolve is supported.
     float refr_k = (1.0 - distf) * refl_strength * (1.0 - fres_reflect);
+    float shoreline = 1.0;
     if (pc.has_scene_depth != 0u) {
         vec2 screen_uv = clamp(gl_FragCoord.xy / vec2(textureSize(sceneDepth, 0)),
                                vec2(0.0), vec2(1.0));
@@ -134,7 +148,7 @@ vec4 water() {
         // Reversed-Z: opaque geometry beneath water has a larger depth value than the water
         // surface. Fade the refraction term at the resolved shoreline while leaving open water
         // (resolved far clear = 0) fully visible.
-        float shoreline = mix(0.05, 1.0, clamp((gl_FragCoord.z - scene_z) * 256.0, 0.0, 1.0));
+        shoreline = mix(0.05, 1.0, clamp((gl_FragCoord.z - scene_z) * 256.0, 0.0, 1.0));
         refr_k *= shoreline;
     }
     // Distance fog on the water surface too (coherent with opaque geometry).
@@ -145,6 +159,10 @@ vec4 water() {
                   camera.fog_color.w;
         col = mix(col, camera.fog_color.rgb, f);
     }
+    // With the explicit refraction tile the composite is opaque: alpha suppresses the ONE/SRC_ALPHA
+    // framebuffer term (refraction is in `col`), a tiny shoreline edge softens the very edge. Without
+    // the tile, keep the alpha-blend refraction stand-in. Mirrors the D3D12 ps_water output.
+    if (pc.reflection_enabled != 0u) return vec4(col, (1.0 - shoreline) * 0.5);
     return vec4(col, clamp(refr_k, 0.0, 1.0));
 }
 

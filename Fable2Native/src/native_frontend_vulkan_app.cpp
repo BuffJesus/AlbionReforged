@@ -2076,6 +2076,12 @@ private:
             // the scene has no water. Mirrors the D3D12 frontend wiring.
             world_renderer_.render_reflection(command_buffers_[image_index], extent_.width,
                                               extent_.height, game_.elapsed_seconds);
+            // Refraction tile (retail g_RefractionSampler c14): opaque geometry from the normal camera
+            // = the scene behind the water, in its OWN isolated pass (Vulkan can't copy a colour
+            // attachment mid-pass like D3D12's grab-pass). Left SHADER_READ_ONLY for the water frag
+            // (binding 9). No-op when the scene has no water.
+            world_renderer_.render_refraction(command_buffers_[image_index], extent_.width,
+                                              extent_.height, game_.elapsed_seconds);
         }
         VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         pass.renderPass = use_hdr ? hdr_render_pass_ : render_pass_;
