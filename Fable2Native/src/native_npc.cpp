@@ -55,10 +55,29 @@ void NpcController::set_patrol_goal(const std::array<float, 3>& goal) {
     state = NpcState::Patrol;
 }
 
+void NpcController::flee_from(const std::array<float, 3>& threat) {
+    flee_threat_ = threat;
+    flee_timer_ = 3.0f;  // ENGINEERING flee duration (villagers scatter briefly)
+    state = NpcState::Flee;
+}
+
 void NpcController::update(const NativeCollisionWorld& world, const std::array<float, 3>& target,
                            const std::array<float, 3>& lod_centre, float lod_radius, float dt) {
     if (!alive) { controller.move(world, {0.0f, 0.0f}, dt); return; }  // dead: hold + ground-clamp
     if (!update_lod(lod_centre, lod_radius)) return;  // culled by LOD -> no tick
+
+    // Flee takes priority: run directly away from the threat until the timer expires.
+    if (flee_timer_ > 0.0f) {
+        flee_timer_ -= dt;
+        state = NpcState::Flee;
+        const std::array<float, 3>& p = controller.position;
+        float ax = p[0] - flee_threat_[0], az = p[2] - flee_threat_[2];
+        const float m = std::sqrt(ax * ax + az * az);
+        if (m > 1e-4f) { ax /= m; az /= m; } else { ax = 1.0f; az = 0.0f; }
+        move_to(world, {p[0] + ax * 10.0f, p[1], p[2] + az * 10.0f}, dt);
+        if (flee_timer_ <= 0.0f) state = NpcState::Idle;
+        return;
+    }
 
     // Stand-in brain: notice the target when it is visible and close; otherwise idle or
     // continue an externally-set patrol. (Real DECIDE = Lua behaviour scoring, gap/P6.)

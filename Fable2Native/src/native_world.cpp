@@ -85,6 +85,8 @@ NativeWorld::MeleeResult NativeWorld::melee_attack(const NativeCollisionWorld& c
         if (killed) {
             agent.controller.alive = false;  // death -> the reward/death dispatch analogue
             ++result.kills;
+        } else {
+            agent.controller.flee_from(origin);  // survivors scatter from the attacker
         }
     }
     return result;

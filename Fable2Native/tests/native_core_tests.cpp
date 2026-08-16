@@ -813,6 +813,15 @@ int main() {
         assert(w.melee_attack(collision, {0, 0, 0}, 0.0f).kills == 1); // 20 -> 0 = kill
         assert(front_hp->is_dead() && !w.npcs[0].controller.alive);
         assert(w.melee_attack(collision, {0, 0, 0}, 0.0f).hits == 0);  // already dead
+
+        // Non-lethal hit makes a survivor flee AWAY from the attacker.
+        f2::NativeWorld w2; w2.spawn_from_scene(s);
+        auto hit = w2.melee_attack(collision, {0, 0, 0}, 0.0f);  // hits front NPC (survives)
+        assert(hit.hits == 1 && hit.kills == 0);
+        assert(w2.npcs[0].controller.state == f2::NpcState::Flee);
+        const float z0 = w2.npcs[0].controller.position()[2];   // starts at +1.5
+        for (int i = 0; i < 60; ++i) w2.update_npcs(collision, {0, 0, 0}, 1.0f / 60.0f);
+        assert(w2.npcs[0].controller.position()[2] > z0);        // moved further from attacker (+z)
     }
 
     // ---- P4 ACT: line-of-sight + NPC perception/LOD/motor ----

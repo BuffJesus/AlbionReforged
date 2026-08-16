@@ -37,6 +37,7 @@ enum class NpcState {
     Idle,     // standing (default)
     Notice,   // saw the target within notice range: turn to face it
     Patrol,   // moving toward an externally-set goal (a real brain would set it)
+    Flee,     // running away from a threat (e.g. after being attacked)
 };
 
 class NpcController {
@@ -69,6 +70,11 @@ public:
     // autonomous wandering). Sets state to Patrol.
     void set_patrol_goal(const std::array<float, 3>& goal);
 
+    // React to a threat by fleeing away from it for a short while (villagers scatter
+    // when attacked). Grounded structure (CECFollow flee, npc_ai_brain_system); the
+    // trigger/duration are the flagged stand-in. Overrides Idle/Notice/Patrol.
+    void flee_from(const std::array<float, 3>& threat);
+
     // ACT tick: LOD gate -> perception -> stand-in brain -> motor. `target` = the player
     // (or a point of interest). Idle/Notice are automatic; Patrol runs if a goal is set.
     void update(const NativeCollisionWorld& world, const std::array<float, 3>& target,
@@ -78,6 +84,8 @@ private:
     void face(const std::array<float, 3>& toward);
     std::array<float, 3> patrol_goal_{0.0f, 0.0f, 0.0f};
     bool have_patrol_goal_ = false;
+    std::array<float, 3> flee_threat_{0.0f, 0.0f, 0.0f};
+    float flee_timer_ = 0.0f;  // seconds of fleeing left
     float facing_yaw_ = 0.0f;
 };
 
