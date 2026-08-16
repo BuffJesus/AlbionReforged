@@ -103,6 +103,22 @@ bool NativeScriptVM::run_file(const char* path) {
     return load_and_run_(buf.data(), buf.size(), path);
 }
 
+bool NativeScriptVM::load_only(const void* data, std::size_t size, const char* chunk_name) {
+    if (!state_) {
+        last_error_ = "VM not initialised";
+        return false;
+    }
+    lua_State* s = L(state_);
+    if (luaL_loadbuffer(s, static_cast<const char*>(data), size, chunk_name) != 0) {
+        last_error_ = lua_tostring(s, -1) ? lua_tostring(s, -1) : "load error";
+        lua_pop(s, 1);
+        return false;
+    }
+    lua_pop(s, 1);  // discard the compiled function; we only verified it loads
+    last_error_.clear();
+    return true;
+}
+
 bool NativeScriptVM::call_global(const char* fn_name, double dt) {
     if (!state_) return false;
     lua_State* s = L(state_);

@@ -19,6 +19,15 @@ if(MSVC)
     target_compile_options(lua51 PRIVATE /wd4996 /wd4310 /wd4334 /wd4244 /wd4267 /wd4324)
 endif()
 
+# Vendored miniz (zlib-compatible inflate) — the game's script BNKs are zlib-compressed,
+# so the native BnkReader (native_bnk.cpp) inflates them with miniz. No system zlib dep.
+add_library(miniz STATIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz/miniz.c")
+target_include_directories(miniz PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz")
+if(MSVC)
+    target_compile_definitions(miniz PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(miniz PRIVATE /wd4996 /wd4244 /wd4267)
+endif()
+
 add_library(f2native_core STATIC
     src/native_scene.cpp
     src/native_texture.cpp
@@ -33,6 +42,7 @@ add_library(f2native_core STATIC
     src/native_animation.cpp
     src/native_npc.cpp
     src/native_script.cpp
+    src/native_bnk.cpp
     src/native_frontend.cpp
     src/native_install.cpp
     src/native_cook.cpp
@@ -49,9 +59,9 @@ add_library(f2native_core STATIC
 target_include_directories(f2native_core PUBLIC include)
 # Vendored public-domain stb_truetype for the native font atlas (ImGui-free UI text).
 target_include_directories(f2native_core PRIVATE third_party)
-# Embedded Lua 5.1 VM (native_script.cpp). PRIVATE: lua headers stay out of the public
-# API (native_script.h keeps lua_State opaque), so consumers don't need the lua include.
-target_link_libraries(f2native_core PRIVATE lua51)
+# Embedded Lua 5.1 VM (native_script.cpp) + miniz (native_bnk.cpp). PRIVATE: both stay
+# out of the public API (opaque in the headers), so consumers don't need their includes.
+target_link_libraries(f2native_core PRIVATE lua51 miniz)
 
 # Dev builds locate the offline cookers (tools/cook_*.py) at the source tree; a shipped
 # installer bundles them next to the executable (see default_tools_dir()).

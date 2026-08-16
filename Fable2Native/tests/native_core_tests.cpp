@@ -14,6 +14,7 @@
 #include "f2/native_save.h"
 #include "f2/native_npc.h"
 #include "f2/native_script.h"
+#include "f2/native_bnk.h"
 #include "f2/native_install.h"
 #include "f2/native_scene.h"
 #include "f2/native_texture.h"
@@ -858,6 +859,33 @@ int main() {
 
         // Missing file is reported, not crashed.
         assert(!game.script_vm->run_file("does_not_exist.lua") && !game.script_vm->last_error().empty());
+    }
+
+    // ---- P6: BnkReader + LuaQ load (real game BNK; skipped if game data absent) ----
+    {
+        const std::filesystem::path bnk_path =
+            "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+        if (std::filesystem::exists(bnk_path)) {
+            f2::BnkReader bnk;
+            assert(bnk.open(bnk_path.string()));
+            assert(bnk.entry_count() >= 500);  // ~555 entries
+            assert(bnk.has("miscellaneous/generalsetupscript.lua"));
+            auto boot = bnk.extract("miscellaneous/generalsetupscript.lua");
+            assert(boot.size() > 6);
+            // LuaQ signature 1B 4C 75 61 51 00.
+            assert(boot[0] == 0x1b && boot[1] == 'L' && boot[2] == 'u' && boot[3] == 'a' &&
+                   boot[4] == 'Q' && boot[5] == 0x00);
+            // STEP 0 proof: the float-configured VM ACCEPTS the game's 4-byte-Number LuaQ
+            // header (no "bad header in precompiled chunk"). load_only doesn't run it.
+            f2::NativeScriptVM vm;
+            assert(vm.load_only(boot.data(), boot.size(), "=generalsetupscript"));
+            // A two-chunk entry also decodes + loads (exercises the 0x8000-stride path).
+            if (bnk.has("quests/qc010_childhood.lua")) {
+                auto q = bnk.extract("quests/qc010_childhood.lua");
+                assert(q.size() > 6 && q[0] == 0x1b);
+                assert(vm.load_only(q.data(), q.size(), "=qc010"));
+            }
+        }
     }
 
     // ---- P6: mods folder loader + Quest natives (150-bit bitset) ----

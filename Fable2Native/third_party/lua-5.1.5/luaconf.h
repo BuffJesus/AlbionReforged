@@ -501,8 +501,14 @@
 ** ===================================================================
 */
 
-#define LUA_NUMBER_DOUBLE
-#define LUA_NUMBER	double
+/* FABLE2NATIVE PATCH: the game's LuaQ bytecode is dumped with lua_Number = 4-byte
+** FLOAT (header byte sizeof(lua_Number)=4, integral=0). Stock Lua 5.1 defaults to
+** 8-byte double, so luaU_undump's header memcmp rejects the game's chunks ("bad header
+** in precompiled chunk"). Building the VM with LUA_NUMBER=float makes the dump header
+** match naturally (and matches how the game compiled its scripts). LUA_NUMBER_DOUBLE is
+** left UNDEFINED so the double-only Pentium int-conversion trick below is skipped (it
+** assumes the double bit layout). See ghidra_out (P6 native scripting). */
+#define LUA_NUMBER	float
 
 /*
 @@ LUAI_UACNUMBER is the result of an 'usual argument conversion'
@@ -518,8 +524,8 @@
 @@ LUAI_MAXNUMBER2STR is maximum size of previous conversion.
 @@ lua_str2number converts a string to a number.
 */
-#define LUA_NUMBER_SCAN		"%lf"
-#define LUA_NUMBER_FMT		"%.14g"
+#define LUA_NUMBER_SCAN		"%f"
+#define LUA_NUMBER_FMT		"%.7g"		/* FABLE2NATIVE: float precision (was %.14g) */
 #define lua_number2str(s,n)	sprintf((s), LUA_NUMBER_FMT, (n))
 #define LUAI_MAXNUMBER2STR	32 /* 16 digits, sign, point, and \0 */
 #define lua_str2number(s,p)	strtod((s), (p))

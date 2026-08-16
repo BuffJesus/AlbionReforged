@@ -57,6 +57,11 @@ public:
     // mod scripts and the game's own script files. Returns false + sets last_error().
     bool run_file(const char* path);
 
+    // Compile/undump a chunk WITHOUT running it — verifies the loader accepts it (e.g.
+    // that the float VM accepts the game's LuaQ header). Returns false + last_error on a
+    // load/undump error. The compiled function is discarded.
+    bool load_only(const void* data, std::size_t size, const char* chunk_name = "=chunk");
+
     // Call a global function `fn_name(dt)`. Returns false if it is missing or errors
     // (last_error set). This is how a ScriptSystems manager drives its Lua Update.
     bool call_global(const char* fn_name, double dt);
