@@ -948,6 +948,18 @@ int main() {
         player.skin(base, out);
         assert(approx(out[0][0], 5.0f));
 
+        // Locomotion selection by nearest measured root speed (idle 0 / walk 0.77 / run 4.20).
+        f2::AnimClip idle; idle.hash = 0x1B78A889;
+        f2::AnimClip walk; walk.hash = 0x02EE1AA7;
+        f2::AnimClip run;  run.hash = 0x8C7D7F7E;
+        std::vector<f2::LocomotionClip> set{{&idle, 0.0f}, {&walk, 0.77f}, {&run, 4.20f}};
+        assert(f2::select_locomotion_clip(0.0f, set)->hash == 0x1B78A889u);   // standing -> idle
+        assert(f2::select_locomotion_clip(0.8f, set)->hash == 0x02EE1AA7u);   // ~walk speed -> walk
+        assert(f2::select_locomotion_clip(4.0f, set)->hash == 0x8C7D7F7Eu);   // sprint -> run
+        assert(f2::select_locomotion_clip(2.0f, set)->hash == 0x02EE1AA7u);   // mid -> nearer walk
+        assert(f2::select_locomotion_clip(3.0f, set)->hash == 0x8C7D7F7Eu);   // faster -> nearer run
+        assert(f2::select_locomotion_clip(1.0f, {}) == nullptr);
+
         // Weighted blend across two bones (0.5 each): identity + translate -> +2.5 x.
         f2::AnimClip clip2;
         clip2.bone_count = 2; clip2.frame_count = 1; clip2.fps = 30.0f;

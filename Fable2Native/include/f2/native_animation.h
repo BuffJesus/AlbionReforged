@@ -70,4 +70,20 @@ private:
     std::vector<std::array<float, 12>> pose_;
 };
 
+// A locomotion clip tagged with its intrinsic root speed (measured, wu/s):
+// idle id_1B78A889 = 0.00, walk id_02EE1AA7 = 0.77, run id_8C7D7F7E = 4.20
+// (anim_runtime_sampler_re.txt, net-root-translation metric).
+struct LocomotionClip {
+    const AnimClip* clip = nullptr;
+    float root_speed = 0.0f;
+};
+
+// Pick the locomotion clip whose intrinsic root speed best matches the character's
+// planar `speed` (wu/s) — nearest-speed match so the foot plant tracks ground motion
+// (minimises sliding). The clip SPEEDS are measured data; this nearest-match SELECTION
+// POLICY is the engineering choice the spec flags (retail selection is engine/AI-side,
+// anim_runtime_sampler_re §C). Returns nullptr if the set is empty.
+[[nodiscard]] const AnimClip* select_locomotion_clip(float speed,
+                                                     const std::vector<LocomotionClip>& set);
+
 }  // namespace f2

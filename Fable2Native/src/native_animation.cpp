@@ -55,6 +55,20 @@ void AnimationPlayer::rebuild_pose() {
     }
 }
 
+const AnimClip* select_locomotion_clip(float speed, const std::vector<LocomotionClip>& set) {
+    const AnimClip* best = nullptr;
+    float best_diff = 0.0f;
+    for (const LocomotionClip& lc : set) {
+        if (!lc.clip) continue;
+        const float diff = std::abs(lc.root_speed - speed);
+        if (!best || diff < best_diff) {
+            best = lc.clip;
+            best_diff = diff;
+        }
+    }
+    return best;
+}
+
 void AnimationPlayer::skin(const std::vector<SkinnedVertex>& base,
                            std::vector<std::array<float, 3>>& out_positions) const {
     out_positions.resize(base.size());
