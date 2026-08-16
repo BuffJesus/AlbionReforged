@@ -10,6 +10,7 @@
 #include "f2/native_physics.h"
 #include "f2/native_camera.h"
 #include "f2/native_player.h"
+#include "f2/native_animation.h"
 #include "f2/native_install.h"
 #include "f2/native_scene.h"
 #include "f2/native_texture.h"
@@ -703,6 +704,50 @@ int main() {
         cc.position = {0.0f, 0.0f, 0.0f};
         for (int i = 0; i < 120; ++i) cc.move(world, {5.0f, 0.0f}, 1.0f / 60.0f);  // +x
         assert(cc.position[0] < 5.0f - 0.5f + 0.001f);  // blocked before the box interior
+    }
+
+    // ---- P5: runtime animation player (skin math + playback + interpolation) ----
+    {
+        // Identity skin matrix leaves a point unchanged; a translation moves it.
+        const std::array<float, 12> identity{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+        auto p = f2::AnimationPlayer::transform_point(identity, {2.0f, 3.0f, 4.0f});
+        assert(approx(p[0], 2.0f) && approx(p[1], 3.0f) && approx(p[2], 4.0f));
+        const std::array<float, 12> translate{1, 0, 0, 5, 0, 1, 0, 0, 0, 0, 1, 0};  // +5 x
+        p = f2::AnimationPlayer::transform_point(translate, {2.0f, 3.0f, 4.0f});
+        assert(approx(p[0], 7.0f));
+
+        // A 1-bone, 2-frame clip: frame0 identity, frame1 translate +10 x. 1 fps so each
+        // frame is 1s; duration 2s.
+        f2::AnimClip clip;
+        clip.hash = 0x1B78A889; clip.bone_count = 1; clip.frame_count = 2; clip.fps = 1.0f;
+        clip.skin = { {1,0,0,0, 0,1,0,0, 0,0,1,0},      // frame 0 identity
+                      {1,0,0,10, 0,1,0,0, 0,0,1,0} };   // frame 1 +10 x
+        f2::SkinnedVertex v; v.position = {0.0f, 0.0f, 0.0f}; v.bones = {0,0,0,0}; v.weights = {1,0,0,0};
+        std::vector<f2::SkinnedVertex> base{v};
+        std::vector<std::array<float, 3>> out;
+
+        f2::AnimationPlayer player;
+        player.set_clip(&clip);
+        player.skin(base, out);
+        assert(approx(out[0][0], 0.0f));    // t=0 -> frame 0 -> at origin
+        player.update(0.5f);                // t=0.5 -> halfway frame0->frame1
+        player.skin(base, out);
+        assert(approx(out[0][0], 5.0f));    // linear blend -> +5
+        player.update(0.5f);                // t=1.0 -> frame 1
+        player.skin(base, out);
+        assert(approx(out[0][0], 10.0f));   // +10
+        player.update(1.5f);               // t=2.5 -> loops to t=0.5 -> +5 again
+        player.skin(base, out);
+        assert(approx(out[0][0], 5.0f));
+
+        // Weighted blend across two bones (0.5 each): identity + translate -> +2.5 x.
+        f2::AnimClip clip2;
+        clip2.bone_count = 2; clip2.frame_count = 1; clip2.fps = 30.0f;
+        clip2.skin = { {1,0,0,0, 0,1,0,0, 0,0,1,0},  {1,0,0,5, 0,1,0,0, 0,0,1,0} };
+        f2::SkinnedVertex v2; v2.position = {0,0,0}; v2.bones = {0,1,0,0}; v2.weights = {0.5f,0.5f,0,0};
+        std::vector<f2::SkinnedVertex> base2{v2};
+        f2::AnimationPlayer p2; p2.set_clip(&clip2); p2.skin(base2, out);
+        assert(approx(out[0][0], 2.5f));
     }
 
     // ---- P4: NPC/villager entity substrate (registry identities + tagging) ----
