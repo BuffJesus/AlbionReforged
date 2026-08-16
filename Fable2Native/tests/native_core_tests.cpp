@@ -15,6 +15,7 @@
 #include "f2/native_npc.h"
 #include "f2/native_script.h"
 #include "f2/native_bnk.h"
+#include "f2/native_hero_anim.h"
 #include "f2/native_install.h"
 #include "f2/native_scene.h"
 #include "f2/native_texture.h"
@@ -452,6 +453,44 @@ static void test_stage2_camera() {
     game.tick(1.0 / 60.0);
     F2_CHECK(game.camera.position[1] != 5.0f ||
              game.camera.position[0] != 0.0f);  // follow-cam moved the camera off the scripted pose
+}
+
+// Stage 3: the cooked hero skeletal-animation package + a BIT-EXACT runtime-convention check.
+// Skinning the bind vertices with the idle clip at frame 0 via AnimationPlayer must reproduce the
+// validated fable_pose reference pose (proves the cook's transposed 3x4 emit == the runtime skin
+// convention). Skipped if the .heroanim isn't cooked (game data absent).
+static void test_stage3_hero_anim() {
+    const std::filesystem::path pkg =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/cooked/hero.heroanim";
+    if (!std::filesystem::exists(pkg)) return;
+    f2::HeroAnimData d = f2::load_hero_anim(pkg.string());
+    F2_CHECK(d.ok);
+    F2_CHECK(d.bone_count == 143);
+    F2_CHECK(d.clips.size() == 3);
+    F2_CHECK(d.geom_bind.size() == d.ref_pose.size() && !d.geom_bind.empty());
+
+    // Idle = clips[0] (root speed 0). Skin each geom at idle@0 and match the reference bit-exactly.
+    f2::AnimationPlayer player;
+    player.set_clip(&d.clips[0]);  // time 0 -> frame 0
+    float max_err = 0.0f;
+    for (std::size_t g = 0; g < d.geom_bind.size(); ++g) {
+        std::vector<std::array<float, 3>> out;
+        player.skin(d.geom_bind[g], out);
+        F2_CHECK(out.size() == d.ref_pose[g].size());
+        for (std::size_t v = 0; v < out.size(); ++v)
+            for (int k = 0; k < 3; ++k) {
+                const float e = std::fabs(out[v][k] - d.ref_pose[g][v][k]);
+                if (e > max_err) max_err = e;
+            }
+    }
+    F2_CHECK(max_err < 1e-3f);  // runtime skinner == validated fable_pose baker
+
+    // The baked clips select by their measured root speed.
+    std::vector<f2::LocomotionClip> loco;
+    for (std::size_t i = 0; i < d.clips.size(); ++i)
+        loco.push_back({&d.clips[i], d.root_speeds[i]});
+    F2_CHECK(f2::select_locomotion_clip(0.0f, loco) == &d.clips[0]);  // idle
+    F2_CHECK(f2::select_locomotion_clip(4.2f, loco) == &d.clips[2]);  // run
 }
 
 int main() {
@@ -1366,6 +1405,7 @@ int main() {
     test_stage2_navigation();
     test_stage2_animation();
     test_stage2_camera();
+    test_stage3_hero_anim();
 
     // ---- P6: mods folder loader + Quest natives (150-bit bitset) ----
     {

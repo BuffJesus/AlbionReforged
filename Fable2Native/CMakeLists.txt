@@ -40,6 +40,7 @@ add_library(f2native_core STATIC
     src/native_camera.cpp
     src/native_player.cpp
     src/native_animation.cpp
+    src/native_hero_anim.cpp
     src/native_npc.cpp
     src/native_script.cpp
     src/native_bnk.cpp
