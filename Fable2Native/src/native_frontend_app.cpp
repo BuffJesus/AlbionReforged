@@ -276,6 +276,22 @@ public:
         }
         if (command_line_flag(L"--show-fps")) game_.frontend.set_fps_display_enabled(true);
         if (command_line_flag(L"--gameplay")) gameplay_mode_ = true;
+        // Embedded Lua scripting (opt-in). Boots the VM, registers the native API, wires
+        // the Quest/General/AI managers, then loads Lua mods from --mods <dir> (default a
+        // "mods" folder next to the game data). Game-script (LuaQ) loading rides the same
+        // VM (added with the BNK reader). Safe if it fails: the VM just isn't created.
+        if (command_line_flag(L"--scripting")) {
+            if (game_.enable_scripting()) {
+                const auto mods_dir = command_line_path(L"--mods").value_or(
+                    source_ ? source_->data_root.parent_path() / "mods"
+                            : std::filesystem::path{L"mods"});
+                const int mods_loaded = game_.load_mods(mods_dir);
+                if (mods_loaded > 0) {
+                    OutputDebugStringA(("Fable2Native: loaded " + std::to_string(mods_loaded) +
+                                        " Lua mod(s)\n").c_str());
+                }
+            }
+        }
         if (command_line_flag(L"--start-world")) {
             game_.frontend.debug_jump_to(f2::FrontendState::World);
         }
