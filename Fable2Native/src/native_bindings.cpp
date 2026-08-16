@@ -287,13 +287,19 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         v.push_number(g ? static_cast<double>(g->messages.most_recent_id()) : 0.0);
         return 1;
     });
+    // These return TWO values: (posted, event). The retail bytecode tests the first as a
+    // boolean and calls :GetID() on the SECOND (questmanager.lua QuestEntityThreadBase.Update:
+    // `CALL IsMessageSentTo ret=2; TEST R1; SELF R2['GetID']`). We return the event in BOTH
+    // slots (or nil,nil) so both 2-return sites and single-return sites (`local ev = ...`)
+    // work. Any of type/to/by == 0 means "don't care".
     vm.register_native("MessageEvents", "IsMessagePosted", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
         const int type = static_cast<int>(v.arg_number(1));
         const std::uint32_t after = static_cast<std::uint32_t>(v.arg_number(2));
         const GameMessage* m = g ? g->messages.find(type, after, 0, 0) : nullptr;
-        if (m) v.push_handle("Event", m->id); else v.push_nil();
-        return 1;
+        if (m) { v.push_handle("Event", m->id); v.push_handle("Event", m->id); }
+        else { v.push_nil(); v.push_nil(); }
+        return 2;
     });
     vm.register_native("MessageEvents", "IsMessageSentTo", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
@@ -301,8 +307,9 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         const std::uint64_t to = v.arg_handle(2);
         const std::uint32_t after = static_cast<std::uint32_t>(v.arg_number(3));
         const GameMessage* m = g ? g->messages.find(type, after, to, 0) : nullptr;
-        if (m) v.push_handle("Event", m->id); else v.push_nil();
-        return 1;
+        if (m) { v.push_handle("Event", m->id); v.push_handle("Event", m->id); }
+        else { v.push_nil(); v.push_nil(); }
+        return 2;
     });
     vm.register_native("MessageEvents", "IsMessageSentBy", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
@@ -310,8 +317,9 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         const std::uint64_t by = v.arg_handle(2);
         const std::uint32_t after = static_cast<std::uint32_t>(v.arg_number(3));
         const GameMessage* m = g ? g->messages.find(type, after, 0, by) : nullptr;
-        if (m) v.push_handle("Event", m->id); else v.push_nil();
-        return 1;
+        if (m) { v.push_handle("Event", m->id); v.push_handle("Event", m->id); }
+        else { v.push_nil(); v.push_nil(); }
+        return 2;
     });
     // "Nothing happened" queries the managers poll every frame. These MUST return real
     // falsy/empty values, not the auto-stub's truthy black-hole — otherwise, e.g.,

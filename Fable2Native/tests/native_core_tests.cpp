@@ -160,27 +160,39 @@ static void test_entity_thread_spawns() {
     F2_CHECK(game.load_quest_scripts() > 0);
     f2::NativeScriptVM& vm = *game.script_vm;
 
-    // Spawn the named world entity the quest searches for, then load + start MyFirstQuest.
+    // Spawn the named world entities the quest searches for, then load + start MyFirstQuest.
     vm.run_source("QuestGiverEnt = Debug.CreateEntityAt('Villager','QuestGiver',0,0,0)");
+    vm.run_source("EvilTwinEnt   = Debug.CreateEntityAt('Bandit','EvilTwin',0,0,0)");
     F2_CHECK(vm.run_source("RunScript('quests/myfirstquest.lua')"));
     vm.run_source("__q = MyFirstQuest:new(); QuestManager.AddQuestThread(__q)");
     for (int i = 0; i < 2; ++i) vm.run_source("QuestManager.Update()");  // Update -> StartNewEntityThread
 
-    // A real VillagerWithQuest entity thread, bound to the QuestGiver entity, now exists —
-    // spawned by the quest's own StartNewEntityThread via real SearchTools.
+    // Real VillagerWithQuest + EnemyToKill entity threads, bound to the named entities, now
+    // exist — spawned by the quest's own StartNewEntityThread via real SearchTools.
     vm.run_source(
         "local vt = QuestManager.EntitiesWithQuestThread[GetIDFromEntity(QuestGiverEnt)]; "
         "assert(vt ~= nil and vt.Entity ~= nil and type(vt.OnInteract) == 'function')");
     F2_CHECK(vm.last_error().empty());
 
-    // Running the spawned thread's OnInteract executes the quest's own interaction dialogue.
+    // Interact THROUGH the real QuestManager.Update: post an INTERACTED_WITH message to the
+    // QuestGiver, tick, and the entity thread's Update coroutine polls it and runs the quest's
+    // own OnInteract dialogue. (This is the manager-driven path — it exercises the entity
+    // thread's real coroutine, not a direct call.)
     game.script_log.clear();
-    vm.run_source(
-        "local vt = QuestManager.EntitiesWithQuestThread[GetIDFromEntity(QuestGiverEnt)]; vt:OnInteract()");
+    vm.run_source("MessageEvents.PostMessage(EMessageEventType.MESSAGE_EVENT_INTERACTED_WITH,0,nil,QuestGiverEnt)");
+    for (int i = 0; i < 2; ++i) vm.run_source("QuestManager.Update()");
     bool talked = false;
     for (const auto& line : game.script_log)
         if (line.find("kill this evil twin") != std::string::npos) talked = true;
-    F2_CHECK(talked);  // the spawned entity thread ran the game's own interaction dialogue
+    F2_CHECK(talked);  // the spawned entity thread ran the game's dialogue via the message poll
+
+    // Kill the evil twin: mark it dead + post KILLED. The manager sees IsAlive() false and
+    // terminates the EnemyToKill thread; its OnTerminated sees the KILLED message and sets
+    // MyFirstQuest.KilledTwin — proving the kill -> OnTerminated -> quest-state chain.
+    vm.run_source("EvilTwinEnt:Kill(); MessageEvents.PostMessage(EMessageEventType.MESSAGE_EVENT_KILLED,0,nil,EvilTwinEnt)");
+    for (int i = 0; i < 3; ++i) vm.run_source("QuestManager.Update()");
+    vm.run_source("assert(MyFirstQuest.KilledTwin == true)");
+    F2_CHECK(vm.last_error().empty());  // kill detection propagated to quest state
 }
 
 int main() {
