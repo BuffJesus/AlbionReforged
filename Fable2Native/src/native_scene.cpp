@@ -235,22 +235,6 @@ bool load_native_scene(const std::filesystem::path& path,
                 !read_value(line, parsed.fog_max)) {
                 return fail(&error, "invalid fog_range at line " + std::to_string(line_number));
             }
-        } else if (opcode == "ambient") {
-            // ambient <r> <g> <b> — flat AmbientColour (theme Lighting sub-record). Optional; paired
-            // with `sky_bounce`. Sets has_ambient so the world PS uses the theme ambient model
-            // instead of its hardcoded hemisphere.
-            if (!read_vec3(line, parsed.ambient_flat)) {
-                return fail(&error, "invalid ambient at line " + std::to_string(line_number));
-            }
-            parsed.has_ambient = true;
-        } else if (opcode == "sky_bounce") {
-            // sky_bounce <topR topG topB> <botR botG botB> — the hemisphere sky-bounce gradient
-            // (SkyColourFinalBounce Top/Bottom). Optional; scenes without it keep the hardcoded
-            // hemisphere defaults (native_scene.h).
-            if (!read_vec3(line, parsed.sky_bounce_top) ||
-                !read_vec3(line, parsed.sky_bounce_bottom)) {
-                return fail(&error, "invalid sky_bounce at line " + std::to_string(line_number));
-            }
         } else if (opcode == "focus") {
             // focus <cx> <cy> <cz> <radius> — camera-fit bounds over the town geometry only
             // (excludes horizon backdrop props). The world renderers frame this instead of the

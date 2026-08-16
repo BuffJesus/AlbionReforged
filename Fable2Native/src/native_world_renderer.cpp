@@ -42,13 +42,6 @@ struct Constants {
     // y=depth bias, z=enabled (1/0), w=strength (how dark the shadowed sun term goes).
     float light_view_projection[4][4]{};
     float shadow_params[4]{0.0f, 0.0f, 0.0f, 1.0f};
-    // Authored ambient model (theme Lighting sub-record; fable2-theme-ambient-lighting). ambient_flat
-    // rgb = flat AmbientColour, w = has_ambient (1 = use theme ambient, 0 = hardcoded hemisphere).
-    // sky_bounce_top/bottom rgb = the hemisphere sky-bounce gradient. Defaults mirror the old
-    // hardcoded hemisphere so untheme d scenes are unchanged.
-    float ambient_flat[4]{0.0f, 0.0f, 0.0f, 0.0f};
-    float sky_bounce_top[4]{0.55f, 0.58f, 0.62f, 0.0f};
-    float sky_bounce_bottom[4]{0.18f, 0.20f, 0.24f, 0.0f};
 };
 
 // b1 point-light cbuffer (level_lights_effects_re.txt §3.1). Mirrors the HLSL layout:
@@ -529,9 +522,6 @@ cbuffer Camera : register(b0) {
     float4 sky_horizon;  // theme sky gradient bottom
     row_major float4x4 light_view_projection;  // sun ortho VP the shadow map was rendered with
     float4 shadow_params;  // x=texel size, y=depth bias, z=enabled, w=strength
-    float4 ambient_flat;        // rgb = flat AmbientColour, w = has_ambient (1/0)
-    float4 sky_bounce_top;      // rgb = hemisphere sky-bounce (up)
-    float4 sky_bounce_bottom;   // rgb = hemisphere sky-bounce (down)
 };
 // Local point lights (level_lights_effects_re.txt §3.1): lamp posts, lanterns, braziers.
 cbuffer Lights : register(b1) {
@@ -611,13 +601,7 @@ float4 ps_main(PSInput input) : SV_TARGET {
     float shadow = lerp(1.0, sun_shadow(input.world_pos), shadow_params.w);
     ndl *= shadow;
     float hemi = 0.5 + 0.5 * N.y;
-    // Ambient: theme-authored model when cooked (flat AmbientColour + SkyColourFinalBounce
-    // hemisphere), else the old hardcoded hemisphere. fable2-theme-ambient-lighting.
-    float3 ambient;
-    if (ambient_flat.w > 0.5)
-        ambient = ambient_flat.rgb + lerp(sky_bounce_bottom.rgb, sky_bounce_top.rgb, hemi);
-    else
-        ambient = lerp(float3(0.18, 0.20, 0.24), float3(0.55, 0.58, 0.62), hemi);
+    float3 ambient = lerp(float3(0.18, 0.20, 0.24), float3(0.55, 0.58, 0.62), hemi);
     // Per-prop baked ambient (.lmp LightmapFile SH probe DC term, world_shading §lmp): when a
     // probe is present (probe.w>0.5) it replaces the synthetic hemisphere floor, so static
     // props get their real baked GI (fixes the dark building faces). No-probe geometry (terrain,
@@ -1128,11 +1112,7 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     for (int i = 0; i < 3; ++i) {
         constants.sky_zenith[i] = scene.sky_color[i];
         constants.sky_horizon[i] = scene.sky_horizon_color[i];
-        constants.ambient_flat[i] = scene.ambient_flat[i];
-        constants.sky_bounce_top[i] = scene.sky_bounce_top[i];
-        constants.sky_bounce_bottom[i] = scene.sky_bounce_bottom[i];
     }
-    constants.ambient_flat[3] = scene.has_ambient ? 1.0f : 0.0f;
     // Sun shadow map: enable only when a shadow target is bound AND the sun is above the horizon
     // (travelling downward → sun.y < 0). At night the sun term is ~0 anyway, so shadows are off.
     const bool shadows_on = shadow_size_ > 0 && sun[1] < -0.05f;

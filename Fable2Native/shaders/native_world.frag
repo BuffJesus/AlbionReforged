@@ -20,10 +20,6 @@ layout(set = 0, binding = 0) uniform Camera {
     // (1/res), y=depth bias, z=enabled (1/0), w=strength (how dark the shadowed sun term goes).
     mat4 light_view_projection;
     vec4 shadow_params;
-    // Authored ambient model (theme Lighting sub-record; fable2-theme-ambient-lighting).
-    vec4 ambient_flat;        // rgb = flat AmbientColour, w = has_ambient (1/0)
-    vec4 sky_bounce_top;      // rgb = hemisphere sky-bounce (up)
-    vec4 sky_bounce_bottom;   // rgb = hemisphere sky-bounce (down)
 } camera;
 layout(set = 0, binding = 1) uniform sampler2D albedo;
 layout(set = 0, binding = 2) uniform sampler2D normalTex;
@@ -161,14 +157,7 @@ void main() {
     float shadow = mix(1.0, sun_shadow(world_pos), camera.shadow_params.w);
     ndl *= shadow;
     float hemi = 0.5 + 0.5 * N.y;
-    // Ambient: theme-authored model when cooked (flat AmbientColour + SkyColourFinalBounce
-    // hemisphere), else the old hardcoded hemisphere. Mirrors the D3D12 world PS.
-    vec3 ambient;
-    if (camera.ambient_flat.w > 0.5)
-        ambient = camera.ambient_flat.rgb +
-                  mix(camera.sky_bounce_bottom.rgb, camera.sky_bounce_top.rgb, hemi);
-    else
-        ambient = mix(vec3(0.18, 0.20, 0.24), vec3(0.55, 0.58, 0.62), hemi);
+    vec3 ambient = mix(vec3(0.18, 0.20, 0.24), vec3(0.55, 0.58, 0.62), hemi);
     if (probe.w > 0.5) ambient = probe.rgb;
     vec3 lit = base.rgb * (ambient + ndl * camera.sun_color.rgb);
     // Specular highlight (world_shading_model_re.txt §7, ladder step 3): Blinn-Phong gated by the

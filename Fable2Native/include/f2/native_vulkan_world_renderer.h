@@ -130,11 +130,6 @@ private:
     // Theme sky endpoints -> the water reflection tracks the real rendered sky per time-of-day.
     std::array<float, 4> scene_sky_zenith_{0.6549f, 0.8157f, 1.0f, 1.0f};
     std::array<float, 3> scene_sky_horizon_{0.222f, 0.5789f, 1.11f};
-    // Authored ambient model (theme Lighting sub-record; fable2-theme-ambient-lighting).
-    bool scene_has_ambient_ = false;
-    std::array<float, 3> scene_ambient_flat_{0.0f, 0.0f, 0.0f};
-    std::array<float, 3> scene_sky_bounce_top_{0.55f, 0.58f, 0.62f};
-    std::array<float, 3> scene_sky_bounce_bottom_{0.18f, 0.20f, 0.24f};
     std::array<float, 3> scene_center_{0.0f, 0.0f, 0.0f};    // geometry bounds -> auto-frame camera
     float scene_radius_ = 1.0f;
     bool free_camera_ = false;

@@ -153,15 +153,6 @@ struct NativeScene {
     float fog_start = 0.0f;
     float fog_end = 1.0f;
     float fog_max = 0.0f;
-    // Authored AMBIENT model (theme Lighting sub-record). ambient_flat = flat AmbientColour;
-    // sky_bounce_top/bottom = the hemisphere sky-bounce gradient (up/down). Gated by has_ambient
-    // so scenes without an `ambient`/`sky_bounce` opcode keep the renderer's hardcoded hemisphere.
-    // Defaults mirror that hardcoded hemisphere. See cook_levels.py `ambient`/`sky_bounce` emit and
-    // memory fable2-theme-ambient-lighting.
-    bool has_ambient = false;
-    std::array<float, 3> ambient_flat{0.0f, 0.0f, 0.0f};
-    std::array<float, 3> sky_bounce_top{0.55f, 0.58f, 0.62f};
-    std::array<float, 3> sky_bounce_bottom{0.18f, 0.20f, 0.24f};
     // Optional camera-fit override (render space) cooked over the town geometry only, so
     // horizon backdrop props (the Tattered Spire vista at ~1000wu) don't blow up the auto-fit.
     // When has_focus, the world renderers frame focus_center/focus_radius instead of the full
