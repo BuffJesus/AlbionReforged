@@ -80,6 +80,22 @@ or bone-matrix upload + the setter, wired into the existing character range. **B
 (1) the anim-sampler RE (bone matrices — the gameplay session's research agent, `anim_havok §F.2`),
 and (2) the A/B choice above. Ping me with the choice + the data shape and I'll land it.
 
+## 3. Planar reflection RTT water — 🚧 D3D12 SHIPPED (f8e0b8e); Vulkan parity in flight
+
+Retail water (`Shaders.sbk` shader 62 `PSHADER_WATERPATCH`) is planar reflection/refraction, not
+analytic (see `docs/RENDERER_GROUNDING_AUDIT.md`). **Phase 1 (D3D12, done + verified):** the frontend
+owns a `kSceneColorFormat` reflection RT + its own depth + an SRV (mirrors the shadow-map split);
+`render_reflection` replays opaque geometry MIRRORED about the derived water plane
+(`water_plane_y_` = radius-weighted mean of water `DrawRange` centres) via a `vs_reflect` clip-plane VS
+variant (`SV_ClipDistance` drops submerged geo; cull stays NONE so no winding flip). The water PS
+samples it by screen-space uv perturbed by the bump normal (data-backed `REFLECTION_SCALE`
+param[25/26]). A second cbuffer slice carries the reflected VP/eye/clip-plane (avoids the single-buffer
+race). Analytic-sky fallback when no target/water; `FABLE2NATIVE_NO_REFLECT` forces it.
+Verified with a red-tint A/B (town reflects only on water pixels where the mirror ray hits it).
+**Phase 2 = Vulkan parity** (renderer-owned reflection image/render-pass/framebuffer, mirroring the
+Vulkan shadow pass; `gl_ClipDistance` in a `native_world_reflect.vert`; identical UBO byte layout).
+**Phase 3 (optional) = refraction RT + full `saturate(fresnel_bias - N·V)` grounding.**
+
 ## Coordination rules
 - Only the environment session edits `native_world_renderer.cpp` / `native_vulkan_world_renderer.cpp`
   / `native_scene.h` renderer structs. Gameplay sets the interface fields + feeds data.
