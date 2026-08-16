@@ -42,6 +42,35 @@ static_assert(fnv1("Position") == kFieldPosition, "FNV-1 variant mismatch");
 static_assert(fnv1("GraphicAppearanceStaticMeshComponent") == kCompGraphicAppearanceStaticMesh,
               "component field name form mismatch");
 
+// --- NPC / AI component identities (<Name>Component convention, verified) ---
+// The GDB component field name is the CEC class name minus "CEC" plus "Component"
+// (schema convention, confirmed on all 33 enumerated components). typeIds are from
+// gdb_component_registry.txt (the 261-class table).
+inline constexpr std::uint32_t kCompVillager           = 0x5BA014D4u;  // CECVillager typeId 26
+inline constexpr std::uint32_t kCompAIBrain            = 0xCD405756u;  // CECAIBrain typeId 71
+inline constexpr std::uint32_t kCompPerception         = 0xF0FB7769u;  // CECPerception typeId 61
+inline constexpr std::uint32_t kCompNavigation         = 0x08E9F814u;  // CECNavigation typeId 60
+inline constexpr std::uint32_t kCompCreatureGenerator  = 0xA2371C5Au;  // CECCreatureGenerator typeId 51
+static_assert(fnv1("VillagerComponent") == kCompVillager, "FNV mismatch");
+static_assert(fnv1("AIBrainComponent") == kCompAIBrain, "FNV mismatch");
+static_assert(fnv1("PerceptionComponent") == kCompPerception, "FNV mismatch");
+static_assert(fnv1("NavigationComponent") == kCompNavigation, "FNV mismatch");
+// Cross-checked: gdb_instantiation_re.txt names CreatureGeneratorComponent as GDB
+// field 0xA2371C5A — independent confirmation of the convention + this hash.
+static_assert(fnv1("CreatureGeneratorComponent") == kCompCreatureGenerator, "FNV mismatch");
+
+// --- VillagerComponent field hashes (schema-verified, gdb_component_schemas.txt) ---
+inline constexpr std::uint32_t kFieldAge    = 0x484C8542u;  // enum
+inline constexpr std::uint32_t kFieldGender = 0x2297CE0Au;  // enum
+inline constexpr std::uint32_t kFieldJob    = 0x20367F82u;  // enum
+inline constexpr std::uint32_t kFieldRich   = 0x026A39B3u;  // bool
+inline constexpr std::uint32_t kFieldJobTag = 0x7FA702D2u;  // string
+static_assert(fnv1("Age") == kFieldAge, "FNV mismatch");
+static_assert(fnv1("Gender") == kFieldGender, "FNV mismatch");
+static_assert(fnv1("Job") == kFieldJob, "FNV mismatch");
+static_assert(fnv1("Rich") == kFieldRich, "FNV mismatch");
+static_assert(fnv1("JobTag") == kFieldJobTag, "FNV mismatch");
+
 // --- Byte-validated ground truth (source string unknown; do NOT recompute) ---
 // SimpleTransformComponent field hash — byte-validated 109/109 in chapter2slums
 // (npc_spawn_re.txt:35); this is where an entity's Position subrecord lives.

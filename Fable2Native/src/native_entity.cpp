@@ -43,6 +43,30 @@ void ComponentRegistry::seed_defaults() {
                   [](NativeEntity&) -> std::unique_ptr<NativeComponent> {
                       return std::make_unique<GraphicAppearanceStaticMeshComponent>();
                   });
+    // Villager (typeId 26, CECVillager createFn 0x82635280) — real component.
+    register_hash(gdb::kCompVillager, kTypeIdVillager,
+                  [](NativeEntity&) -> std::unique_ptr<NativeComponent> {
+                      return std::make_unique<VillagerComponent>();
+                  });
+    // NPC/AI family (Brain/Perception/Navigation/Generator) — registered as inert
+    // placeholders carrying their retail typeIds so records instantiate faithfully;
+    // behaviour is the P4 gap. Non-capturing lambdas -> function pointers.
+    register_hash(gdb::kCompAIBrain, kTypeIdAIBrain,
+                  [](NativeEntity&) -> std::unique_ptr<NativeComponent> {
+                      return std::make_unique<InertComponent>(kTypeIdAIBrain);
+                  });
+    register_hash(gdb::kCompPerception, kTypeIdPerception,
+                  [](NativeEntity&) -> std::unique_ptr<NativeComponent> {
+                      return std::make_unique<InertComponent>(kTypeIdPerception);
+                  });
+    register_hash(gdb::kCompNavigation, kTypeIdNavigation,
+                  [](NativeEntity&) -> std::unique_ptr<NativeComponent> {
+                      return std::make_unique<InertComponent>(kTypeIdNavigation);
+                  });
+    register_hash(gdb::kCompCreatureGenerator, kTypeIdCreatureGenerator,
+                  [](NativeEntity&) -> std::unique_ptr<NativeComponent> {
+                      return std::make_unique<InertComponent>(kTypeIdCreatureGenerator);
+                  });
     // Transform is engine-special and attached directly (see spawn_from_scene), so
     // it is intentionally NOT registered here.
 }

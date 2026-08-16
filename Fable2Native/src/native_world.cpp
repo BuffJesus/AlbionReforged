@@ -27,6 +27,18 @@ void NativeWorld::spawn_from_scene(const NativeScene& scene) {
         if (gfx) {
             gfx->scene_instance = static_cast<int>(i);
         }
+
+        // Tag by cooked mesh name: the cook names hero geoms "heroN" and villager
+        // geoms "npcP_G" (cook_levels.py; npc_spawn_re.txt). The hero geom marks the
+        // player entity; villager geoms carry a VillagerComponent (placement-derived —
+        // per-NPC age/gender/job await the marker->archetype cook, gap P1).
+        const std::string& mesh_name =
+            inst.mesh < scene.meshes.size() ? scene.meshes[inst.mesh].name : std::string{};
+        if (mesh_name.rfind("hero", 0) == 0) {
+            if (!hero) hero = &e;
+        } else if (mesh_name.rfind("npc", 0) == 0) {
+            entities.create_component_by_hash(e, gdb::kCompVillager);
+        }
     }
 }
 

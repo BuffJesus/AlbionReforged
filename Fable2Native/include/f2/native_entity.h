@@ -25,6 +25,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -38,6 +39,11 @@ enum ComponentTypeId : std::uint8_t {
     kTypeIdPhysics                    = 2,   // all CECPhysics* share slot 2
     kTypeIdGraphicAppearance          = 3,   // CECGraphicAppearance
     kTypeIdGraphicAppearanceStaticMesh= 4,   // CECGraphicAppearanceStaticMesh
+    kTypeIdNavigation                 = 60,  // CECNavigation
+    kTypeIdPerception                 = 61,  // CECPerception
+    kTypeIdAIBrain                    = 71,  // CECAIBrain
+    kTypeIdCreatureGenerator          = 51,  // CECCreatureGenerator
+    kTypeIdVillager                   = 26,  // CECVillager
     // Transform is engine-special (NOT in the 261-class CEC registry). Retail
     // commits it specially (entity+0x90 |= 0xA0); its exact typeId is ambiguous in
     // the specs (STEP3.6 says 3, but registry 3 = GraphicAppearance). We give it a
@@ -74,6 +80,33 @@ public:
     [[nodiscard]] std::uint8_t type_id() const noexcept override {
         return kTypeIdGraphicAppearanceStaticMesh;
     }
+};
+
+// VillagerComponent — a townsperson's identity (age/gender/job/home). Fields mirror
+// the real GDB VillagerComponent schema (gdb_component_schemas.txt, hashes verified in
+// native_gdb_hash.h). Values are read from the GDB villager record via init_from_gdb
+// once the marker->generator->archetype binding is cooked (npc_spawn_re.txt gap P1);
+// until then they carry their neutral defaults.
+class VillagerComponent final : public NativeComponent {
+public:
+    int age = 0;             // Age enum (0x484C8542)
+    int gender = 0;          // Gender enum (0x2297CE0A)
+    int job = 0;             // Job enum (0x20367F82)
+    bool rich = false;       // Rich bool (0x026A39B3)
+    std::string job_tag;     // JobTag string (0x7FA702D2), e.g. TEXT_CHARACTER_OCCUPATION_*
+    [[nodiscard]] std::uint8_t type_id() const noexcept override { return kTypeIdVillager; }
+};
+
+// InertComponent — a registered-but-unimplemented component that carries its retail
+// typeId so real GDB records still instantiate faithfully (the AI family: Brain/
+// Perception/Navigation/Generator). Behaviour is a documented gap (P4).
+class InertComponent final : public NativeComponent {
+public:
+    explicit InertComponent(std::uint8_t type_id) noexcept : type_id_(type_id) {}
+    [[nodiscard]] std::uint8_t type_id() const noexcept override { return type_id_; }
+
+private:
+    std::uint8_t type_id_;
 };
 
 // Registry descriptor (mirrors the retail 0x18-stride entry {nameHash, createFn, .., typeId}).

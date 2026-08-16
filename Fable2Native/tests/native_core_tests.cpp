@@ -705,6 +705,36 @@ int main() {
         assert(cc.position[0] < 5.0f - 0.5f + 0.001f);  // blocked before the box interior
     }
 
+    // ---- P4: NPC/villager entity substrate (registry identities + tagging) ----
+    {
+        f2::ComponentRegistry reg;
+        reg.seed_defaults();
+        // Villager + the AI family register with their retail typeIds.
+        assert(reg.lookup(f2::gdb::kCompVillager)->type_id == f2::kTypeIdVillager);      // 26
+        assert(reg.lookup(f2::gdb::kCompAIBrain)->type_id == f2::kTypeIdAIBrain);        // 71
+        assert(reg.lookup(f2::gdb::kCompPerception)->type_id == f2::kTypeIdPerception);  // 61
+        assert(reg.lookup(f2::gdb::kCompNavigation)->type_id == f2::kTypeIdNavigation);  // 60
+        assert(reg.lookup(f2::gdb::kCompCreatureGenerator)->type_id == f2::kTypeIdCreatureGenerator); // 51
+
+        // spawn_from_scene tags hero + villager meshes by their cooked names.
+        f2::NativeScene s;
+        f2::NativeMesh hero_mesh; hero_mesh.name = "hero0"; s.meshes.push_back(hero_mesh);
+        f2::NativeMesh npc_mesh;  npc_mesh.name = "npc0_0"; s.meshes.push_back(npc_mesh);
+        f2::NativeInstance hi; hi.mesh = 0; s.instances.push_back(hi);
+        f2::NativeInstance ni; ni.mesh = 1; s.instances.push_back(ni);
+
+        f2::NativeWorld w;
+        w.spawn_from_scene(s);
+        assert(w.entities.entity_count() == 2);
+        assert(w.hero != nullptr);  // hero pointer now set from the "hero0" mesh
+        assert(w.hero->component_by_typeid(f2::kTypeIdVillager) == nullptr);  // hero is not a villager
+        // The npc entity (uid 2) carries a VillagerComponent.
+        f2::NativeEntity* npc = w.entities.find(2);
+        assert(npc != nullptr);
+        auto* v = npc->get<f2::VillagerComponent>(f2::kTypeIdVillager);
+        assert(v != nullptr);
+    }
+
     // ---- P2: wall raycast (camera-collision primitive) ----
     {
         f2::NativeScene s;
