@@ -47,6 +47,28 @@ struct NativeWorld {
     // instances an entity is bound to.
     void sync_to_scene(NativeScene& scene) const;
 
+    // A melee swing: damage all live NPCs inside the attack volume. range/cone/damage are
+    // FLAGGED engineering (the retail attack-volume geometry IsEntityInAttackerAttackVolume
+    // @0x8277A988 is a Ghidra gap; weapon damage is item data). See melee_attack.
+    struct MeleeAttackConfig {
+        float range = 2.5f;         // ENGINEERING (attack-volume reach is a gap)
+        float cone_cos = -0.2f;     // ENGINEERING: dot(forward,toTarget) >= this to hit (~fwd 100deg arc)
+        float damage = 25.0f;       // ENGINEERING (retail = weapon damage window)
+        float eye_height = 1.2f;    // LOS/attack ray height above feet
+    };
+    struct MeleeResult {
+        int hits = 0;
+        int kills = 0;
+    };
+
+    // Swing from `origin` facing `yaw`: every live NPC within range, inside the facing
+    // cone, and with clear line-of-sight takes Health.Modify(-damage) via its
+    // HealthComponent (the single retail damage verb, combat_system.txt A). NPCs whose
+    // health reaches 0 are killed (agent.alive=false). Returns hit/kill counts.
+    MeleeResult melee_attack(const NativeCollisionWorld& collision,
+                             const std::array<float, 3>& origin, float yaw,
+                             const MeleeAttackConfig& config = {});
+
     // Tick the live NPCs (the master order's "entity/brain" step): each agent runs its
     // ACT layer against `target` (the player) with the LOD centre = target, then its
     // resolved position is written back into the entity's TransformComponent so the

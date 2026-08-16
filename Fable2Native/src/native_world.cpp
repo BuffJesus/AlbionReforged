@@ -3,6 +3,7 @@
 #include "f2/native_save.h"
 #include "f2/native_physics.h"
 
+#include <cmath>
 #include <cstddef>
 
 namespace f2 {
@@ -54,6 +55,39 @@ void NativeWorld::spawn_from_scene(const NativeScene& scene) {
             npcs.push_back(agent);
         }
     }
+}
+
+NativeWorld::MeleeResult NativeWorld::melee_attack(const NativeCollisionWorld& collision,
+                                                   const std::array<float, 3>& origin, float yaw,
+                                                   const MeleeAttackConfig& config) {
+    MeleeResult result;
+    const std::array<float, 3> forward{std::sin(yaw), 0.0f, std::cos(yaw)};
+    const std::array<float, 3> eye{origin[0], origin[1] + config.eye_height, origin[2]};
+    for (NpcAgent& agent : npcs) {
+        if (!agent.controller.alive) continue;
+        const std::array<float, 3>& np = agent.controller.position();
+        const float dx = np[0] - origin[0];
+        const float dz = np[2] - origin[2];
+        const float dist = std::sqrt(dx * dx + dz * dz);
+        if (dist > config.range || dist < 1e-4f) continue;
+        // Facing cone: the target must be roughly in front.
+        const float dot = (forward[0] * dx + forward[2] * dz) / dist;
+        if (dot < config.cone_cos) continue;
+        // Line of sight so a wall blocks the swing.
+        const std::array<float, 3> tgt{np[0], np[1] + config.eye_height, np[2]};
+        if (!collision.line_of_sight(eye, tgt)) continue;
+        // Apply the single damage verb (Health.Modify) via the target's HealthComponent.
+        NativeEntity* e = entities.find(agent.entity_uid);
+        auto* health = e ? e->get<HealthComponent>(kTypeIdHealth) : nullptr;
+        if (!health) continue;
+        const bool killed = health->modify(-config.damage);
+        ++result.hits;
+        if (killed) {
+            agent.controller.alive = false;  // death -> the reward/death dispatch analogue
+            ++result.kills;
+        }
+    }
+    return result;
 }
 
 void NativeWorld::update_npcs(const NativeCollisionWorld& collision,

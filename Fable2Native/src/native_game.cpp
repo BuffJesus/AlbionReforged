@@ -87,6 +87,11 @@ void NativeGame::tick(double delta_seconds) {
             world.update_npcs(collision, player.position(),
                               static_cast<float>(simulation_step));
 
+            // Melee: X swings toward the aim (camera yaw). One swing per press (edge).
+            if (input.pressed(PadButton::X)) {
+                world.melee_attack(collision, player.position(), camera_controller.yaw);
+            }
+
             // Movement: camera-relative input -> desired velocity -> collide-and-slide.
             player.update(collision, input, camera_controller.yaw,
                           static_cast<float>(simulation_step));

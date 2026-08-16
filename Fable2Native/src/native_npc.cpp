@@ -57,6 +57,7 @@ void NpcController::set_patrol_goal(const std::array<float, 3>& goal) {
 
 void NpcController::update(const NativeCollisionWorld& world, const std::array<float, 3>& target,
                            const std::array<float, 3>& lod_centre, float lod_radius, float dt) {
+    if (!alive) { controller.move(world, {0.0f, 0.0f}, dt); return; }  // dead: hold + ground-clamp
     if (!update_lod(lod_centre, lod_radius)) return;  // culled by LOD -> no tick
 
     // Stand-in brain: notice the target when it is visible and close; otherwise idle or

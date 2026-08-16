@@ -776,6 +776,45 @@ int main() {
         assert(!w2.npcs[0].controller.active);
     }
 
+    // ---- Melee attack (Health.Modify via the attack volume) ----
+    {
+        f2::NativeScene s;
+        f2::NativeMesh ground;
+        auto gv = [&](float x, float y, float z) {
+            f2::NativeVertex vv; vv.position = {x, y, z}; ground.vertices.push_back(vv);
+        };
+        gv(-30, 0, -30); gv(30, 0, -30); gv(30, 0, 30); gv(-30, 0, 30);
+        ground.indices = {0, 1, 2, 0, 2, 3};
+        s.meshes.push_back(ground);
+        f2::NativeMesh npc_mesh; npc_mesh.name = "npc0_0"; s.meshes.push_back(npc_mesh);
+        // Two villagers: one 1.5 units in +z (in front), one 1.5 in -z (behind).
+        f2::NativeInstance gi; gi.mesh = 0; s.instances.push_back(gi);
+        f2::NativeInstance front; front.mesh = 1; front.position = {0.0f, 0.0f, 1.5f}; s.instances.push_back(front);
+        f2::NativeInstance behind; behind.mesh = 1; behind.position = {0.0f, 0.0f, -1.5f}; s.instances.push_back(behind);
+
+        f2::NativeCollisionWorld collision; collision.build_from_scene(s);
+        f2::NativeWorld w; w.spawn_from_scene(s);
+        assert(w.npcs.size() == 2);
+        const auto close_to = [](float a, float b) { return std::abs(a - b) < 1e-4f; };
+        // npcs[0] = front (+z, instance order), npcs[1] = behind (-z).
+        auto* front_e = w.entities.find(w.npcs[0].entity_uid);
+        auto* front_hp = front_e->get<f2::HealthComponent>(f2::kTypeIdHealth);
+
+        // Swing facing +z (yaw 0 -> forward (0,0,1)): hits only the one in front.
+        auto res = w.melee_attack(collision, {0, 0, 0}, 0.0f);
+        assert(res.hits == 1 && res.kills == 0);
+        assert(close_to(front_hp->health, 45.0f));   // 70 - 25; behind NPC untouched
+
+        // Out of range: nobody hit.
+        assert(w.melee_attack(collision, {50, 0, 50}, 0.0f).hits == 0);
+
+        // Keep swinging the front NPC to death; it becomes !alive and stops being hit.
+        assert(w.melee_attack(collision, {0, 0, 0}, 0.0f).hits == 1);  // 45 -> 20
+        assert(w.melee_attack(collision, {0, 0, 0}, 0.0f).kills == 1); // 20 -> 0 = kill
+        assert(front_hp->is_dead() && !w.npcs[0].controller.alive);
+        assert(w.melee_attack(collision, {0, 0, 0}, 0.0f).hits == 0);  // already dead
+    }
+
     // ---- P4 ACT: line-of-sight + NPC perception/LOD/motor ----
     {
         // Ground + a wall quad in the x=5 plane (z in [-3,3], y in [0,3]).

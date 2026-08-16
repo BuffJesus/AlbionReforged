@@ -46,6 +46,7 @@ public:
     NpcMovementConfig movement;
     NpcState state = NpcState::Idle;
     bool active = true;              // LOD gate result; inactive NPCs skip their tick
+    bool alive = true;              // false once killed (health -> 0); a dead NPC holds still
 
     void set_position(const std::array<float, 3>& p) { controller.position = p; }
     [[nodiscard]] const std::array<float, 3>& position() const noexcept { return controller.position; }
