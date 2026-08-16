@@ -259,6 +259,7 @@ public:
             }
         }
         if (command_line_flag(L"--show-fps")) game_.frontend.set_fps_display_enabled(true);
+        if (command_line_flag(L"--gameplay")) gameplay_mode_ = true;
         if (command_line_flag(L"--start-world")) {
             game_.frontend.debug_jump_to(f2::FrontendState::World);
         }
@@ -327,6 +328,18 @@ public:
             const double delta = std::chrono::duration<double>(now - previous).count();
             previous = now;
             if (delta > 0.0) current_fps_ = current_fps_ * 0.9 + (1.0 / delta) * 0.1;
+            // 'G' toggles gameplay control on/off in the World (edge-detected).
+            {
+                const bool g = (GetForegroundWindow() == window_) &&
+                               (GetAsyncKeyState('G') & 0x8000) != 0;
+                if (g && !gameplay_toggle_held_) gameplay_mode_ = !gameplay_mode_;
+                gameplay_toggle_held_ = g;
+            }
+            // Run the InWorld gameplay path only when gameplay control is on and the front
+            // end is showing the World; otherwise stay a Frontend-only tick.
+            game_.mode = (gameplay_mode_ && game_.frontend.state() == f2::FrontendState::World)
+                             ? f2::GameMode::InWorld
+                             : f2::GameMode::Frontend;
             game_.tick(delta);
             update_video();
             input_.poll();
@@ -1607,6 +1620,14 @@ private:
             world_renderer_.clear_free_camera();
             return;
         }
+        // Gameplay mode: the follow camera already wrote game_.camera in game_.tick;
+        // just hand it to the renderer (skip the free-fly WASD/arrow overwrite).
+        if (gameplay_mode_) {
+            world_renderer_.set_free_camera(game_.camera.position, game_.camera.yaw,
+                                            game_.camera.pitch);
+            world_cam_initialised_ = false;  // re-frame the inspection cam when toggled back off
+            return;
+        }
         auto center = world_renderer_.scene_center();
         float radius = world_renderer_.scene_radius();
         const bool hero_view = game_.scene.has_hero_start;
@@ -1674,6 +1695,21 @@ private:
             character_offset_ = {0.0f, 0.0f, 0.0f};
             character_motion_phase_ = 0.0f;
             character_motion_strength_ = 0.0f;
+            world_renderer_.set_character_offset(character_offset_);
+            world_renderer_.set_character_motion(character_motion_phase_, character_motion_strength_);
+            return;
+        }
+        // Gameplay mode: the hero draw follows the collision-resolved character controller
+        // (delta from the RE'd PlayerStart the renderer draws the hero mesh relative to).
+        if (gameplay_mode_) {
+            const auto& p = game_.player.position();
+            const auto& hs = game_.scene.hero_start;
+            character_offset_ = {p[0] - hs[0], p[1] - hs[1], p[2] - hs[2]};
+            const float move_mag = std::sqrt(game_.input.move[0] * game_.input.move[0] +
+                                             game_.input.move[1] * game_.input.move[1]);
+            character_motion_strength_ = move_mag > 0.05f ? 1.0f : 0.0f;
+            if (character_motion_strength_ > 0.0f)
+                character_motion_phase_ += static_cast<float>(delta) * 6.0f;
             world_renderer_.set_character_offset(character_offset_);
             world_renderer_.set_character_motion(character_motion_phase_, character_motion_strength_);
             return;
@@ -2266,6 +2302,10 @@ private:
     float hdr_bloom_threshold_ = 0.62f;   // HDR level above which bloom is extracted
     float hdr_bloom_intensity_ = 0.90f;   // bloom add strength (0 == byte-identical no-bloom)
     bool world_cam_initialised_ = false;
+    // Opt-in P2 gameplay (--gameplay / toggle 'G'): follow camera + character controller
+    // instead of the free-fly inspection cam. Default OFF preserves inspection behaviour.
+    bool gameplay_mode_ = false;
+    bool gameplay_toggle_held_ = false;
     std::array<float, 3> character_offset_{0.0f, 0.0f, 0.0f};
     float character_motion_phase_ = 0.0f;
     float character_motion_strength_ = 0.0f;
