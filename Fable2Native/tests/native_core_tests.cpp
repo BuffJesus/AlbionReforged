@@ -776,6 +776,65 @@ int main() {
         assert(!w2.npcs[0].controller.active);
     }
 
+    // ---- Integration: full NativeGame InWorld tick (movement+NPC+combat+save) ----
+    {
+        f2::NativeScene s;
+        f2::NativeMesh ground;
+        auto gv = [&](float x, float y, float z) {
+            f2::NativeVertex vv; vv.position = {x, y, z}; ground.vertices.push_back(vv);
+        };
+        gv(-40, 0, -40); gv(40, 0, -40); gv(40, 0, 40); gv(-40, 0, 40);
+        ground.indices = {0, 1, 2, 0, 2, 3};
+        s.meshes.push_back(ground);
+        f2::NativeMesh hero_mesh; hero_mesh.name = "hero0"; s.meshes.push_back(hero_mesh);
+        f2::NativeMesh npc_mesh; npc_mesh.name = "npc0_0"; s.meshes.push_back(npc_mesh);
+        f2::NativeInstance gi; gi.mesh = 0; s.instances.push_back(gi);
+        f2::NativeInstance hi; hi.mesh = 1; hi.position = {0.0f, 0.0f, 0.0f}; s.instances.push_back(hi);
+        f2::NativeInstance ni; ni.mesh = 2; ni.position = {0.0f, 0.0f, 2.0f}; s.instances.push_back(ni);
+        s.has_hero_start = true; s.hero_start = {0.0f, 0.0f, 0.0f}; s.hero_yaw = 0.0f;
+
+        f2::NativeGame game;
+        game.scene = s;
+        game.prepare_world();
+        game.mode = f2::GameMode::InWorld;
+        game.external_input = true;
+        game.camera_controller.yaw = 0.0f;  // aim +z (toward the NPC)
+
+        // Drive "hold forward" for ~0.5s: the hero walks +z (camera-relative).
+        game.input = f2::InputState{};
+        game.input.last_active_device = f2::InputDevice::Controller;
+        game.input.move = {0.0f, 1.0f};
+        const float z_before = game.player.position()[2];
+        for (int i = 0; i < 30; ++i) game.tick(1.0 / 60.0);
+        assert(game.player.position()[2] > z_before + 0.2f);   // moved forward
+        // The follow camera repositioned behind the moved hero (camera writes NativeCamera).
+        assert(game.camera.position[2] < game.player.position()[2]);
+
+        // NPC saw the approaching hero -> Notice; its transform synced into the scene.
+        assert(game.world.npcs.size() == 1);
+        assert(game.world.npcs[0].controller.state == f2::NpcState::Notice);
+
+        // Attack once (X press edge): the NPC takes damage and flees.
+        game.input.move = {0.0f, 0.0f};
+        game.input.buttons_pressed = static_cast<std::uint16_t>(f2::PadButton::X);
+        game.tick(1.0 / 60.0);
+        game.input.buttons_pressed = 0;
+        auto* npc_e = game.world.entities.find(game.world.npcs[0].entity_uid);
+        auto* npc_hp = npc_e->get<f2::HealthComponent>(f2::kTypeIdHealth);
+        assert(npc_hp->health < 70.0f);                        // damaged by the swing
+        assert(game.world.npcs[0].controller.state == f2::NpcState::Flee);
+
+        // Save the whole live state, then load it into a fresh game on the same baseline.
+        game.game_state.header.chapter = 3;
+        auto blob = game.save_state();
+        f2::NativeGame game2; game2.scene = s; game2.prepare_world();
+        assert(game2.load_state(blob));
+        assert(game2.game_state.header.chapter == 3);
+        assert(approx(game2.player.position()[2], game.player.position()[2]));
+        auto* npc_e2 = game2.world.entities.find(game2.world.npcs[0].entity_uid);
+        assert(approx(npc_e2->get<f2::HealthComponent>(f2::kTypeIdHealth)->health, npc_hp->health));
+    }
+
     // ---- Melee attack (Health.Modify via the attack volume) ----
     {
         f2::NativeScene s;

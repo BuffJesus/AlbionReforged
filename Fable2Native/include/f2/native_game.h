@@ -40,6 +40,9 @@ struct NativeGame {
     // Gameplay input (analog + KB&M + last-active-device); sampled once per frame.
     InputState input;
     InputSampler input_sampler;
+    // When true, tick() does NOT sample devices — a headless driver (tests/tools) sets
+    // `input` directly each frame. Default false = the app samples real devices.
+    bool external_input = false;
 
     // Master gameplay tick driver (Quest -> General -> AI, retail-recovered order).
     ScriptSystems script_systems;
@@ -60,6 +63,10 @@ struct NativeGame {
     double elapsed_seconds = 0.0;
 
     bool load_scene(const std::filesystem::path& path, std::string& error);
+    // Set up the live world from the current `scene` (entities + collision + hero
+    // placement). load_scene calls this; a headless driver can call it after setting
+    // `scene` directly to enter the world without a file.
+    void prepare_world();
     void tick(double delta_seconds);
 
     // Own-format save/restore (gamestate_save_restore.txt model; see native_save.h).

@@ -41,6 +41,11 @@ bool NativeGame::load_scene(const std::filesystem::path& path, std::string& erro
     if (!load_native_scene(path, scene, error)) {
         return false;
     }
+    prepare_world();
+    return true;
+}
+
+void NativeGame::prepare_world() {
     // Seed the live entity graph from the cooked baseline (one entity per instance,
     // Transform + GraphicAppearanceStaticMesh). Sim only advances it when InWorld.
     world.spawn_from_scene(scene);
@@ -58,7 +63,6 @@ bool NativeGame::load_scene(const std::filesystem::path& path, std::string& erro
     player.set_position(start);
     camera_controller.yaw = scene.hero_yaw;
     camera_controller.pitch = -0.3f;
-    return true;
 }
 
 void NativeGame::tick(double delta_seconds) {
@@ -66,7 +70,8 @@ void NativeGame::tick(double delta_seconds) {
 
     // Input is sampled ONCE per frame, before the fixed-step accumulator: retail
     // input_pad_poll (@0x822B3A10) polls per frame, not per simulation sub-step.
-    input_sampler.tick(input);
+    // external_input lets a headless driver (tests/tools) set `input` directly.
+    if (!external_input) input_sampler.tick(input);
 
     constexpr double simulation_step = 1.0 / 60.0;
     simulation_accumulator_ += delta_seconds;
