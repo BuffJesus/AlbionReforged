@@ -79,6 +79,15 @@ int NativeGame::boot_game_scripts(const std::filesystem::path& data_root) {
 
     script_vm->install_autostub();
 
+    // Make Lua's require() load quest modules from the BNK: QuestManager.LoadQuestModule uses
+    // require() (which searches the filesystem), but our scripts live in the BNK. Insert a
+    // package.loaders entry that compiles the module via __bnk_chunk. (module((...),
+    // package.seeall) inside a quest module then sets up its namespace normally.)
+    script_vm->run_source(
+        "if package and package.loaders then table.insert(package.loaders, 1, function(m) "
+        "local c = __bnk_chunk(m); if c then return c end; return '\\n\\tno BNK module '..m end) end",
+        "=bnk_require");
+
     // Wire the registered manager Update callbacks into the tick, retail Quest->General->AI
     // order. The managers are pure Lua; the native tick just resumes each one's Update.
     NativeScriptVM* vm = script_vm.get();
@@ -114,9 +123,13 @@ int NativeGame::load_quest_scripts() {
     // (AddFunctionsInTableToPermanentsTables, via QuestManager.AddQuestToPermanentsTables).
     // The engine loads it in C++ (no Lua RunScript references it), so we load it here too,
     // before the quests bank. Best-effort: a failure just leaves those helpers to the stub.
-    for (const char* dep : {"miscellaneous/saveload/saveloadsystem.lua"}) {
+    // Common helper scripts the quest modules expect as globals but that generalsetupscript
+    // doesn't load (the engine loads them on another path): saveload (permanents helpers) and
+    // utils (CreateEnum, used by quest modules at load time).
+    for (const char* dep : {"miscellaneous/saveload/saveloadsystem.lua",
+                            "miscellaneous/utils.lua"}) {
         std::vector<std::uint8_t> b = script_bnk->extract(dep);
-        if (!b.empty()) script_vm->run_bytecode(b.data(), b.size(), "=saveload");
+        if (!b.empty()) script_vm->run_bytecode(b.data(), b.size(), (std::string("=") + dep).c_str());
     }
 
     const std::size_t before = loaded_scripts.size();
@@ -138,7 +151,46 @@ int NativeGame::load_quest_scripts() {
     // quest modules + gameflow load with the permanents registration neutralized.
     script_vm->run_bytecode(qb.data(), qb.size(), "=questsetupscript");
 
+    // FLAGGED stand-ins for peripheral subsystems the gameflow coroutine drives but that aren't
+    // wired yet, so Gameflow.Update advances instead of asserting. Orchestra/crescendo (audio
+    // mood intensity) is called from CheckForGamePosition on every position change and asserts a
+    // per-chapter gameflow name we don't author. Remove as each subsystem is implemented.
+    script_vm->run_source(
+        "if Orchestra then Orchestra.SetToDefaultForChapter = function() end "
+        "  Orchestra.SetFromGameflow = function() end end "
+        // The save/permanents tables the (un)load path indexes — empty tables so
+        // AddFunctions/RemoveFunctionsInTableFromPermanentsTables no-op cleanly.
+        "PlutoPermanentsSaveTable = PlutoPermanentsSaveTable or {} "
+        "PlutoPermanentsLoadTable = PlutoPermanentsLoadTable or {} "
+        // FLAGGED: keep quest-base metatables writable. The save system flips
+        // ReadOnlyMetatablesActive on, which makes QuestThreadBase.__NewIndexFunc reject
+        // non-function fields on quest TYPES (as opposed to instances) — but several scripts
+        // (incl. the MyFirstQuest tutorial) set type-level fields. Off until save is wired.
+        "ReadOnlyMetatablesActive = false",
+        "=gameflow_compat");
+
     return static_cast<int>(loaded_scripts.size() - before);
+}
+
+void NativeGame::start_new_game(bool female) {
+    if (!script_vm) return;
+    // FLAGGED: gender -> child hero model. Stored as the hero entity's name so Gender.Get /
+    // ChangePlayerEntityType have something to read until the appearance/model system is wired.
+    const std::uint64_t hero = hero_uid;  // ensure_hero() runs inside GetPlayerHero below
+    (void)hero;
+    // The new-game handoff: prime QuestManager.HeroEntity, run Gameflow:Init (populates the
+    // DebugQuestStartTable), flip GameflowMode on, and release the GAMEFLOW_START gate. After
+    // this, the InWorld tick's QuestManager.Update advances the gameflow into QC010_Childhood.
+    script_vm->run_source(
+        "QuestManager.HeroEntity = GetPlayerHero(); "
+        "if Gameflow then "
+        "  pcall(function() Gameflow:Init() end); "
+        "  Gameflow.GameflowMode = true; Gameflow._Initialised = true; "
+        "  Gameflow.LoadedFromSave = false; Gameflow.SkipToNextPositionInGameflow = true; "
+        "end",
+        "=start_new_game");
+    const std::string model = female ? "CreatureHeroFemaleChild" : "CreatureHeroChild";
+    if (hero_uid != 0) entity_names[hero_uid] = model;
 }
 
 int NativeGame::load_mods(const std::filesystem::path& dir) {

@@ -104,6 +104,11 @@ public:
     // load/undump error. The compiled function is discarded.
     bool load_only(const void* data, std::size_t size, const char* chunk_name = "=chunk");
 
+    // Compile a chunk and LEAVE the resulting function on the Lua stack (does not run it) —
+    // for a require() loader that returns a module's chunk. Returns false + last_error on a
+    // load error (nothing pushed).
+    bool push_loaded_chunk(const void* data, std::size_t size, const char* chunk_name = "=chunk");
+
     // Call a global function `fn_name(dt)`. Returns false if it is missing or errors
     // (last_error set). This is how a ScriptSystems manager drives its Lua Update.
     bool call_global(const char* fn_name, double dt);

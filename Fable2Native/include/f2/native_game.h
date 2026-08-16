@@ -128,6 +128,14 @@ struct NativeGame {
     // Requires boot_game_scripts() first. Returns scripts loaded, or -1 if unavailable.
     int load_quest_scripts();
 
+    // Kick the self-starting gameflow into a FRESH game: prime the hero, run Gameflow:Init, set
+    // GameflowMode, and release the GAMEFLOW_START gate — the native side of the front-end "New
+    // Game" handoff (grounded in gameflow.lua's Update gate + Init). After this, QuestManager.
+    // Update (the InWorld tick) advances GAMEFLOW_START -> DebugQC010 -> StartQuest("QC010_
+    // Childhood"). `female` selects the child hero model (FLAGGED: gender->model is a stand-in).
+    // Requires load_quest_scripts() first.
+    void start_new_game(bool female = false);
+
     // Own-format save/restore (gamestate_save_restore.txt model; see native_save.h).
     // save_state serializes the game-flow state + the live entity delta into a byte blob.
     // load_state overlays a blob onto the CURRENT world — the scene must already be loaded

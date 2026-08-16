@@ -310,6 +310,18 @@ bool NativeScriptVM::load_only(const void* data, std::size_t size, const char* c
     return true;
 }
 
+bool NativeScriptVM::push_loaded_chunk(const void* data, std::size_t size, const char* chunk_name) {
+    if (!state_) return false;
+    lua_State* s = cur_();
+    if (luaL_loadbuffer(s, static_cast<const char*>(data), size, chunk_name) != 0) {
+        last_error_ = lua_tostring(s, -1) ? lua_tostring(s, -1) : "load error";
+        lua_pop(s, 1);
+        return false;
+    }
+    last_error_.clear();
+    return true;  // the compiled chunk function is left on the stack
+}
+
 bool NativeScriptVM::call_global(const char* fn_name, double dt) {
     if (!state_) return false;
     lua_State* s = L(state_);
@@ -392,15 +404,15 @@ bool NativeScriptVM::install_autostub() {
         -- degrades to 0 / false / "" instead of "arithmetic on a table value". FLAGGED: this is
         -- stub behaviour; a getter whose value actually matters needs a real native.
         local function zero() return 0 end
-        local function no() return false end
         local nilmt = {
           __index = function() return NIL end,
           __call = function() return NIL end,
           __newindex = function() end,
           __tostring = function() return "nil" end,
+          -- Arithmetic + concat + len only. NOT __eq/__lt/__le: faking equality/ordering
+          -- (NIL == NIL -> false, etc.) breaks comparisons the game relies on.
           __add = zero, __sub = zero, __mul = zero, __div = zero, __mod = zero,
           __pow = zero, __unm = zero, __len = zero,
-          __lt = no, __le = no, __eq = no,
           __concat = function() return "" end,
         }
         NIL = setmetatable({}, nilmt)
@@ -463,6 +475,12 @@ bool NativeScriptVM::install_autostub() {
         function __mkclassstub(cn)
           if rawget(_G, cn) == nil then rawset(_G, cn, setmetatable({}, classmeta(cn))) end
         end
+        -- Global native FUNCTIONS (GetPlayerHero, C2DBoxI, ...) that aren't implemented also
+        -- die to the metatable swap. Pre-create them as the black-hole NIL (callable + indexable
+        -- + arithmetic-safe) as a raw _G entry. Real registered globals are skipped (rawget guard).
+        function __mkglobalstub(n)
+          if rawget(_G, n) == nil then rawset(_G, n, NIL) end
+        end
     )LUA";
     if (!run_source(kBootstrap, "=autostub")) return false;
 
@@ -471,7 +489,17 @@ bool NativeScriptVM::install_autostub() {
     std::string pre;
     for (const char* n : kNativeClassNames) { pre += "__mkclassstub('"; pre += n; pre += "') "; }
     for (const char* n : kSupplementClassNames) { pre += "__mkclassstub('"; pre += n; pre += "') "; }
-    return run_source(pre.c_str(), "=mkclassstubs");
+    if (!run_source(pre.c_str(), "=mkclassstubs")) return false;
+    // Pre-create the catalog's global native functions as black-hole stubs (chunked so the Lua
+    // chunk stays small). Real registered globals are skipped by __mkglobalstub's rawget guard.
+    std::string gp;
+    std::size_t count = 0;
+    for (const char* n : kNativeGlobalNames) {
+        gp += "__mkglobalstub('"; gp += n; gp += "') ";
+        if (++count % 400 == 0) { run_source(gp.c_str(), "=mkglobalstubs"); gp.clear(); }
+    }
+    if (!gp.empty()) run_source(gp.c_str(), "=mkglobalstubs");
+    return true;
 }
 
 int NativeScriptVM::arg_count() const { return state_ ? lua_gettop(cur_()) : 0; }

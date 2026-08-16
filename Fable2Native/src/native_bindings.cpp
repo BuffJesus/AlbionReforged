@@ -248,6 +248,13 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         v.push_number(static_cast<double>(v.arg_handle(1)));
         return 1;
     });
+    // utils.lua redefines GetIDFromEntity(e) as e:GetTableKey() — the entity's hashable key.
+    // Return the uid (same identity space as GetID) so it keys tables like
+    // QuestManager.EntitiesWithQuestThread correctly.
+    vm.register_object_method("Entity", "GetTableKey", [](NativeScriptVM& v) -> int {
+        v.push_number(static_cast<double>(v.arg_handle(1)));
+        return 1;
+    });
     vm.register_object_method("Entity", "IsAlive", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
         const std::uint64_t uid = v.arg_handle(1);
@@ -467,6 +474,23 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
             v.run_bytecode(bytes.data(), bytes.size(), ("=" + key).c_str());
         }
         return 0;
+    });
+
+    // __bnk_chunk(modname): compile a quest module from the BNK and return its chunk function
+    // (WITHOUT running it) — the backend for a require() loader. QuestManager.LoadQuestModule
+    // uses Lua's require(), which searches the filesystem; our scripts live in the BNK, so a
+    // custom package.loaders entry (installed in boot_game_scripts) calls this. Returns nil if
+    // the module isn't a BNK entry (require then tries the next loader).
+    vm.register_global("__bnk_chunk", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const char* name = v.arg_string(1);
+        if (!g || !g->script_bnk || !name || !*name) return 0;
+        // Quest modules live under quests/. BnkReader::normalize lowercases + resolves the path.
+        std::vector<std::uint8_t> bytes = g->script_bnk->extract(std::string("quests/") + name + ".lua");
+        if (bytes.empty()) return 0;
+        if (!v.push_loaded_chunk(bytes.data(), bytes.size(), (std::string("=") + name).c_str()))
+            return 0;
+        return 1;  // the compiled module chunk
     });
 }
 
