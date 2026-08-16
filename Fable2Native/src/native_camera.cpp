@@ -21,31 +21,40 @@ void CameraController::update(const std::array<float, 3>& hero_position,
     }
     pitch = std::clamp(pitch, config.min_pitch, config.max_pitch);
 
-    // Look target above the hero's feet; camera pulls back along -forward.
+    // Look target above the hero's feet; the camera sits back along -forward (centred
+    // behind — the default follow, not over-the-shoulder; see header).
     target = {hero_position[0], hero_position[1] + config.height, hero_position[2]};
     const float cp = std::cos(pitch);
     const std::array<float, 3> fwd{cp * std::sin(yaw), std::sin(pitch), cp * std::cos(yaw)};
-    std::array<float, 3> desired{target[0] - fwd[0] * config.distance,
-                                 target[1] - fwd[1] * config.distance,
-                                 target[2] - fwd[2] * config.distance};
 
-    // Keep the camera above the terrain so it never clips through the ground.
+    // Camera collision: raycast from the focus back toward the eye; if a wall is closer
+    // than the ideal boom length, pull the eye in to just short of it (retail §2, the
+    // DoesCameraRayIntersect focus->eye physics ray). Boom retracts fast, extends slow.
+    float allowed = config.distance;
     if (world) {
-        const float gy = world->sample_ground(desired[0], desired[2], desired[1] + 100.0f);
-        if (std::isfinite(gy) && desired[1] < gy + config.ground_margin) {
-            desired[1] = gy + config.ground_margin;
-        }
+        const std::array<float, 3> eye_dir{-fwd[0], -fwd[1], -fwd[2]};
+        const float reach = config.distance + config.collision_margin;
+        const float hit = world->raycast_walls(target, eye_dir, reach);
+        if (hit < reach) allowed = std::max(config.min_distance, hit - config.collision_margin);
+    }
+    if (current_distance_ < 0.0f) {
+        current_distance_ = allowed;  // snap on the first frame
+    } else {
+        const float rate = (allowed < current_distance_) ? config.boom_in_speed : config.boom_out_speed;
+        const float step = rate * dt;
+        if (std::abs(allowed - current_distance_) <= step) current_distance_ = allowed;
+        else current_distance_ += (allowed > current_distance_) ? step : -step;
     }
 
-    // Smooth the position toward the desired pose (snap on the first frame).
-    if (!initialised_ || dt <= 0.0f) {
-        position = desired;
-        initialised_ = true;
-    } else {
-        const float a = 1.0f - std::exp(-config.follow_smoothing * dt);
-        position = {position[0] + (desired[0] - position[0]) * a,
-                    position[1] + (desired[1] - position[1]) * a,
-                    position[2] + (desired[2] - position[2]) * a};
+    position = {target[0] - fwd[0] * current_distance_, target[1] - fwd[1] * current_distance_,
+                target[2] - fwd[2] * current_distance_};
+
+    // Keep the eye above the terrain so it never clips through the ground.
+    if (world) {
+        const float gy = world->sample_ground(position[0], position[2], position[1] + 100.0f);
+        if (std::isfinite(gy) && position[1] < gy + config.ground_margin) {
+            position[1] = gy + config.ground_margin;
+        }
     }
 }
 

@@ -53,6 +53,12 @@ public:
                                                   const std::array<float, 3>& delta,
                                                   float radius, float height) const;
 
+    // Distance to the nearest wall triangle along origin + dir*[0, max_dist] (dir unit),
+    // or max_dist if none. Camera collision uses this to pull the eye in on a hit
+    // (retail DoesCameraRayIntersect @0x822B77E8, the physics ray focus->eye, §2).
+    [[nodiscard]] float raycast_walls(const std::array<float, 3>& origin,
+                                      const std::array<float, 3>& dir, float max_dist) const;
+
     [[nodiscard]] std::size_t wall_triangle_count() const noexcept { return walls_.size(); }
 
 private:

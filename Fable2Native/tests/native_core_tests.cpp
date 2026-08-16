@@ -705,6 +705,61 @@ int main() {
         assert(cc.position[0] < 5.0f - 0.5f + 0.001f);  // blocked before the box interior
     }
 
+    // ---- P2: wall raycast (camera-collision primitive) ----
+    {
+        f2::NativeScene s;
+        f2::NativeMesh ground;
+        auto gv = [&](float x, float y, float z) {
+            f2::NativeVertex v; v.position = {x, y, z}; ground.vertices.push_back(v);
+        };
+        gv(-20, 0, -20); gv(20, 0, -20); gv(20, 0, 20); gv(-20, 0, 20);
+        ground.indices = {0, 1, 2, 0, 2, 3};
+        s.meshes.push_back(ground);
+        f2::NativeInstance gi; gi.mesh = 0; s.instances.push_back(gi);
+        // Vertical wall quad in the x=5 plane, z in [-2,2], y in [0,3].
+        f2::NativeMesh wall;
+        auto wv = [&](float x, float y, float z) {
+            f2::NativeVertex v; v.position = {x, y, z}; wall.vertices.push_back(v);
+        };
+        wv(5, 0, -2); wv(5, 0, 2); wv(5, 3, 2); wv(5, 3, -2);
+        wall.indices = {0, 1, 2, 0, 2, 3};
+        s.meshes.push_back(wall);
+        f2::NativeInstance wi; wi.mesh = 1; s.instances.push_back(wi);
+
+        f2::NativeCollisionWorld world;
+        world.build_from_scene(s);
+        assert(world.wall_triangle_count() >= 2);
+        // Ray toward +x at wall height hits at ~5.
+        assert(approx(world.raycast_walls({0, 1, 0}, {1, 0, 0}, 20.0f), 5.0f));
+        // Opposite direction misses -> returns max_dist.
+        assert(approx(world.raycast_walls({0, 1, 0}, {-1, 0, 0}, 20.0f), 20.0f));
+        // Above the wall (y=5 > top 3) misses.
+        assert(approx(world.raycast_walls({0, 5, 0}, {1, 0, 0}, 20.0f), 20.0f));
+
+        // Camera boom pulls in when a wall is behind the hero.
+        f2::NativeScene s2;
+        s2.meshes.push_back(ground);
+        f2::NativeInstance gi2; gi2.mesh = 0; s2.instances.push_back(gi2);
+        f2::NativeMesh backwall;  // z = -2 plane, x in [-2,2], y in [0,3]
+        auto bv = [&](float x, float y, float z) {
+            f2::NativeVertex v; v.position = {x, y, z}; backwall.vertices.push_back(v);
+        };
+        bv(-2, 0, -2); bv(2, 0, -2); bv(2, 3, -2); bv(-2, 3, -2);
+        backwall.indices = {0, 1, 2, 0, 2, 3};
+        s2.meshes.push_back(backwall);
+        f2::NativeInstance wi2; wi2.mesh = 1; s2.instances.push_back(wi2);
+        f2::NativeCollisionWorld world2;
+        world2.build_from_scene(s2);
+
+        f2::CameraController cam;
+        cam.yaw = 0.0f; cam.pitch = 0.0f;  // forward = +z, so eye pulls back to -z
+        cam.config.distance = 4.5f;
+        cam.update({0.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, false, 1.0f / 60.0f, &world2);
+        // Ideal eye would be z=-4.5; the wall at z=-2 pulls it in to ~-1.7 (2 - margin 0.3).
+        assert(cam.position[2] > -2.0f);           // in front of the wall (not clipped)
+        assert(approx(cam.position[2], -1.7f));
+    }
+
     // ---- P2: follow-camera pose matches the renderer forward convention ----
     {
         f2::CameraController cam;

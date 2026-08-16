@@ -243,6 +243,46 @@ std::array<float, 2> NativeCollisionWorld::resolve_walls(std::array<float, 2> c,
     return c;
 }
 
+float NativeCollisionWorld::raycast_walls(const std::array<float, 3>& origin,
+                                          const std::array<float, 3>& dir, float max_dist) const {
+    if (wcells_dim_ <= 0 || walls_.empty()) return max_dist;
+    const std::array<float, 3> end{origin[0] + dir[0] * max_dist, origin[1] + dir[1] * max_dist,
+                                   origin[2] + dir[2] * max_dist};
+    // Broadphase: walk the XZ cells the segment's bounding box covers.
+    int cx0 = int((std::min(origin[0], end[0]) - wcell_min_x_) / wcell_size_) - 1;
+    int cx1 = int((std::max(origin[0], end[0]) - wcell_min_x_) / wcell_size_) + 1;
+    int cz0 = int((std::min(origin[2], end[2]) - wcell_min_z_) / wcell_size_) - 1;
+    int cz1 = int((std::max(origin[2], end[2]) - wcell_min_z_) / wcell_size_) + 1;
+    cx0 = std::clamp(cx0, 0, wcells_dim_ - 1); cx1 = std::clamp(cx1, 0, wcells_dim_ - 1);
+    cz0 = std::clamp(cz0, 0, wcells_dim_ - 1); cz1 = std::clamp(cz1, 0, wcells_dim_ - 1);
+
+    float nearest = max_dist;
+    constexpr float kEps = 1e-6f;
+    for (int cz = cz0; cz <= cz1; ++cz) for (int cx = cx0; cx <= cx1; ++cx) {
+        for (std::uint32_t wi : wall_cells_[static_cast<std::size_t>(cz) * wcells_dim_ + cx]) {
+            const WallTri& t = walls_[wi];
+            // Moeller-Trumbore ray/triangle.
+            std::array<float, 3> e1{t.b[0] - t.a[0], t.b[1] - t.a[1], t.b[2] - t.a[2]};
+            std::array<float, 3> e2{t.c[0] - t.a[0], t.c[1] - t.a[1], t.c[2] - t.a[2]};
+            std::array<float, 3> h{dir[1] * e2[2] - dir[2] * e2[1], dir[2] * e2[0] - dir[0] * e2[2],
+                                   dir[0] * e2[1] - dir[1] * e2[0]};
+            float det = e1[0] * h[0] + e1[1] * h[1] + e1[2] * h[2];
+            if (det > -kEps && det < kEps) continue;  // parallel
+            float inv = 1.0f / det;
+            std::array<float, 3> s{origin[0] - t.a[0], origin[1] - t.a[1], origin[2] - t.a[2]};
+            float u = inv * (s[0] * h[0] + s[1] * h[1] + s[2] * h[2]);
+            if (u < 0.0f || u > 1.0f) continue;
+            std::array<float, 3> q{s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2],
+                                   s[0] * e1[1] - s[1] * e1[0]};
+            float v = inv * (dir[0] * q[0] + dir[1] * q[1] + dir[2] * q[2]);
+            if (v < 0.0f || u + v > 1.0f) continue;
+            float dist = inv * (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]);
+            if (dist > kEps && dist < nearest) nearest = dist;
+        }
+    }
+    return nearest;
+}
+
 std::array<float, 3> NativeCollisionWorld::slide_move(const std::array<float, 3>& pos,
                                                       const std::array<float, 3>& delta,
                                                       float radius, float height) const {
