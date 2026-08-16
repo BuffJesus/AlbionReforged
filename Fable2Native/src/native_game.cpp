@@ -54,6 +54,31 @@ bool NativeGame::enable_scripting() {
             g->game_state.header.chapter = static_cast<std::uint32_t>(vm.arg_number(1));
         return 0;
     });
+    // Quest completion (the 150-bit summary, Save_BuildProgressMeta). SetComplete(i[,v]).
+    script_vm->register_native("Quest", "SetComplete", [](NativeScriptVM& vm) -> int {
+        auto* g = static_cast<NativeGame*>(vm.user_data());
+        const int i = static_cast<int>(vm.arg_number(1));
+        const bool v = vm.arg_count() >= 2 ? vm.arg_bool(2) : true;
+        if (g && i >= 0 && i < 150) g->game_state.quest_completion.set(static_cast<std::size_t>(i), v);
+        return 0;
+    });
+    script_vm->register_native("Quest", "IsComplete", [](NativeScriptVM& vm) -> int {
+        auto* g = static_cast<NativeGame*>(vm.user_data());
+        const int i = static_cast<int>(vm.arg_number(1));
+        vm.push_bool(g && i >= 0 && i < 150 &&
+                     g->game_state.quest_completion.test(static_cast<std::size_t>(i)));
+        return 1;
+    });
+    // World.NpcPosition(index) -> x, y, z (0,0,0 for a bad index).
+    script_vm->register_native("World", "NpcPosition", [](NativeScriptVM& vm) -> int {
+        auto* g = static_cast<NativeGame*>(vm.user_data());
+        const int i = static_cast<int>(vm.arg_number(1));
+        std::array<float, 3> p{0.0f, 0.0f, 0.0f};
+        if (g && i >= 0 && i < static_cast<int>(g->world.npcs.size()))
+            p = g->world.npcs[static_cast<std::size_t>(i)].controller.position();
+        vm.push_number(p[0]); vm.push_number(p[1]); vm.push_number(p[2]);
+        return 3;
+    });
     // World.DamageNpc(index, amount) -> killed? (applies the Health.Modify verb)
     script_vm->register_native("World", "DamageNpc", [](NativeScriptVM& vm) -> int {
         auto* g = static_cast<NativeGame*>(vm.user_data());
@@ -84,6 +109,23 @@ bool NativeGame::enable_scripting() {
     script_systems.ai.enabled = true;
     script_systems.ai.update = [vm](double dt) { vm->call_global("AIUpdate", dt); };
     return true;
+}
+
+int NativeGame::load_mods(const std::filesystem::path& dir) {
+    if (!script_vm) return 0;
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) return 0;
+    std::vector<std::filesystem::path> mods;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (entry.path().extension() == ".lua") mods.push_back(entry.path());
+    }
+    std::sort(mods.begin(), mods.end());  // deterministic load order
+    int loaded = 0;
+    for (const auto& mod : mods) {
+        if (script_vm->run_file(mod.string().c_str())) ++loaded;
+        // else: broken mod -> skip (its error is in script_vm->last_error()), not fatal
+    }
+    return loaded;
 }
 
 std::vector<std::uint8_t> NativeGame::save_state() {

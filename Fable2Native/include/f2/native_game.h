@@ -83,6 +83,12 @@ struct NativeGame {
     // Opt-in (the app/tools/tests call it); returns false if the VM failed to boot.
     bool enable_scripting();
 
+    // Load every *.lua in `dir` (sorted, so load order is deterministic) into the VM —
+    // the mod entry point. A broken mod is skipped (its error is left in the VM's
+    // last_error), not fatal. Returns the number successfully loaded. No-op if scripting
+    // isn't enabled or the dir is missing.
+    int load_mods(const std::filesystem::path& dir);
+
     // Own-format save/restore (gamestate_save_restore.txt model; see native_save.h).
     // save_state serializes the game-flow state + the live entity delta into a byte blob.
     // load_state overlays a blob onto the CURRENT world — the scene must already be loaded

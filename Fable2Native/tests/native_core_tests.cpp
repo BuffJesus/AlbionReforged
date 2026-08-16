@@ -860,6 +860,27 @@ int main() {
         assert(!game.script_vm->run_file("does_not_exist.lua") && !game.script_vm->last_error().empty());
     }
 
+    // ---- P6: mods folder loader + Quest natives (150-bit bitset) ----
+    {
+        f2::NativeGame game;
+        assert(game.enable_scripting());
+        assert(game.script_vm->run_source(
+            "Quest.SetComplete(10); Quest.SetComplete(20, true); Quest.SetComplete(20, false)"));
+        assert(game.game_state.quest_completion.test(10) && !game.game_state.quest_completion.test(20));
+        assert(game.script_vm->run_source("assert(Quest.IsComplete(10) and not Quest.IsComplete(11))"));
+
+        const auto dir = std::filesystem::temp_directory_path() / "f2native_mods";
+        std::filesystem::create_directories(dir);
+        std::ofstream(dir / "01_quest.lua") << "Quest.SetComplete(30)\n";
+        std::ofstream(dir / "02_chapter.lua") << "Game.SetChapter(7)\n";
+        std::ofstream(dir / "03_broken.lua") << "this is not lua\n";  // skipped, not fatal
+        const int n = game.load_mods(dir);
+        assert(n == 2);  // two good mods loaded, the broken one skipped
+        assert(game.game_state.quest_completion.test(30) && game.game_state.header.chapter == 7);
+        std::filesystem::remove_all(dir);
+        assert(game.load_mods("no_such_dir") == 0);
+    }
+
     // ---- Integration: full NativeGame InWorld tick (movement+NPC+combat+save) ----
     {
         f2::NativeScene s;
