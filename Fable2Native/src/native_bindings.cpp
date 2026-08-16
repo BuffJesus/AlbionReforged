@@ -6,6 +6,7 @@
 #include "f2/native_script.h"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <random>
 #include <string>
@@ -284,6 +285,60 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
     // Save-tagging + level-persistence hooks entity threads call at creation. No-ops until the
     // save subsystem is wired (FLAGGED) — they gate persistence, not gameplay logic.
     vm.register_object_method("Entity", "SetAsLevelSaving", [](NativeScriptVM&) -> int { return 0; });
+
+    // ---- Control: Physics.* movement / facing / velocity primitives (scalar) ----
+    // The public Physics.TeleportToPosition/SetFacingVector/GetFacingVector/GetVelocity all
+    // traffic in CVector3 objects; the boot-installed Lua shim unpacks vectors and calls these
+    // scalar primitives (keeps C++ free of a vector-handle subsystem). Grounded: qc010/aibase
+    // teleport + face the hero on every setup (aibase.lua:481/541/550); the follow behaviours
+    // poll hero velocity to pick catch-up vs hold (behaviourallyfollowhero.lua:31-37).
+    vm.register_native("Physics", "IsAvailable", [](NativeScriptVM& v) -> int {
+        v.push_bool(true);  // FLAGGED: no Havok-availability gate; entities always accept motion
+        return 1;
+    });
+    vm.register_native("Physics", "__Teleport", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (!g) return 0;
+        const std::uint64_t uid = v.arg_handle(1);
+        const std::array<float, 3> pos = {static_cast<float>(v.arg_number(2)),
+                                          static_cast<float>(v.arg_number(3)),
+                                          static_cast<float>(v.arg_number(4))};
+        if (TransformComponent* t = entity_transform(*g, uid)) t->position = pos;
+        if (uid == g->hero_uid) g->player.set_position(pos);  // keep player + entity coherent
+        return 0;
+    });
+    vm.register_native("Physics", "__SetFacing", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (!g) return 0;
+        const std::uint64_t uid = v.arg_handle(1);
+        const float x = static_cast<float>(v.arg_number(2));
+        const float z = static_cast<float>(v.arg_number(4));
+        const float yaw = std::atan2(x, z);  // heading from a facing vector (x,_,z): yaw=atan2(x,z)
+        if (TransformComponent* t = entity_transform(*g, uid)) t->rotation[1] = yaw;
+        if (uid == g->hero_uid) g->player.set_facing_yaw(yaw);
+        return 0;
+    });
+    vm.register_native("Physics", "__GetFacingRaw", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const std::uint64_t uid = g ? v.arg_handle(1) : 0;
+        float yaw = 0.0f;
+        if (g) {
+            if (uid == g->hero_uid) yaw = g->player.facing_yaw();
+            else if (TransformComponent* t = entity_transform(*g, uid)) yaw = t->rotation[1];
+        }
+        // Unit facing vector matching __SetFacing's yaw=atan2(x,z) convention.
+        v.push_number(std::sin(yaw)); v.push_number(0.0); v.push_number(std::cos(yaw));
+        return 3;
+    });
+    vm.register_native("Physics", "__GetVelocityRaw", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        std::array<float, 3> vel{0.0f, 0.0f, 0.0f};
+        // Hero velocity is the controller's last-step velocity; non-hero entities have no live
+        // motor readback yet (FLAGGED: NPC velocity awaits the nav-goal motor, Slice 2).
+        if (g && v.arg_handle(1) == g->hero_uid) vel = g->player.controller.velocity;
+        v.push_number(vel[0]); v.push_number(vel[1]); v.push_number(vel[2]);
+        return 3;
+    });
 
     // ---- MessageEvents queue (the central quest poll) ----
     // IsMessagePosted/IsMessageSentTo/IsMessageSentBy return the newest matching Event

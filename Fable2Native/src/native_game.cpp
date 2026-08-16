@@ -92,6 +92,34 @@ int NativeGame::boot_game_scripts(const std::filesystem::path& data_root) {
         "local c = __bnk_chunk(m); if c then return c end; return '\\n\\tno BNK module '..m end) end",
         "=bnk_require");
 
+    // Stage 2 control shim: a faithful CVector3 (the engine type is a native C++ vector; vector
+    // math is unambiguous) + the Physics.* public natives that bridge CVector3 objects to the
+    // scalar C++ primitives registered above. Installed AFTER the auto-stub so it overrides the
+    // black-hole CVector3 stub; classmeta has no __newindex, so adding methods to the real
+    // Physics table is a plain rawset. FLAGGED: CVector3 reimplements the native type's behaviour
+    // (Normalise mutate-vs-return not RE'd — chosen in-place-returning-self).
+    script_vm->run_source(
+        "do local mt = {} mt.__index = mt "
+        "function mt:GetX() return self.x end function mt:GetY() return self.y end "
+        "function mt:GetZ() return self.z end "
+        "function mt:GetSquaredLength() return self.x*self.x + self.y*self.y + self.z*self.z end "
+        "function mt:GetLength() return math.sqrt(self:GetSquaredLength()) end "
+        "function mt:Normalise() local l=self:GetLength() if l>0 then "
+        "  self.x,self.y,self.z = self.x/l,self.y/l,self.z/l end return self end "
+        "mt.__sub = function(a,b) return CVector3(a.x-b.x, a.y-b.y, a.z-b.z) end "
+        "mt.__add = function(a,b) return CVector3(a.x+b.x, a.y+b.y, a.z+b.z) end "
+        "mt.__mul = function(a,s) if type(a)=='number' then a,s=s,a end "
+        "  return CVector3(a.x*s, a.y*s, a.z*s) end "
+        "function CVector3(x,y,z) if type(x)=='table' then "
+        "  return setmetatable({x=x.x or 0, y=x.y or 0, z=x.z or 0}, mt) end "
+        "  return setmetatable({x=x or 0, y=y or 0, z=z or 0}, mt) end "
+        "__CVector3_mt = mt end "
+        "function Physics.TeleportToPosition(e,pos) Physics.__Teleport(e, pos.x, pos.y, pos.z) end "
+        "function Physics.SetFacingVector(e,vec) Physics.__SetFacing(e, vec.x, vec.y, vec.z) end "
+        "function Physics.GetFacingVector(e) return CVector3(Physics.__GetFacingRaw(e)) end "
+        "function Physics.GetVelocity(e) return CVector3(Physics.__GetVelocityRaw(e)) end",
+        "=stage2_control");
+
     // Wire the registered manager Update callbacks into the tick, retail Quest->General->AI
     // order. The managers are pure Lua; the native tick just resumes each one's Update.
     NativeScriptVM* vm = script_vm.get();

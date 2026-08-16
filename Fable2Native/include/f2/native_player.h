@@ -11,6 +11,7 @@
 #include "native_physics.h"
 
 #include <array>
+#include <cmath>
 
 namespace f2 {
 
@@ -27,6 +28,18 @@ public:
     void set_position(const std::array<float, 3>& p) { controller.position = p; }
     [[nodiscard]] const std::array<float, 3>& position() const noexcept { return controller.position; }
     [[nodiscard]] float facing_yaw() const noexcept { return facing_yaw_; }
+
+    // Override the movement-derived heading (Physics.SetFacingVector — scripts turn the hero
+    // to face a point during dialogue/cutscene setup). update() overwrites this again whenever
+    // the hero is actually moving, so a script-set facing holds only while the hero is still.
+    void set_facing_yaw(float yaw) noexcept { facing_yaw_ = yaw; }
+
+    // Planar (XZ) speed of the last controller step (wu/s) — feeds locomotion-clip selection
+    // and Physics.GetVelocity. Read from the controller's velocity (no duplicate state).
+    [[nodiscard]] float planar_speed() const noexcept {
+        return std::sqrt(controller.velocity[0] * controller.velocity[0] +
+                         controller.velocity[2] * controller.velocity[2]);
+    }
 
     // Convert input.move (camera-relative planar intent) into a world desired velocity
     // and step the controller. `camera_yaw` orients the move to the view.

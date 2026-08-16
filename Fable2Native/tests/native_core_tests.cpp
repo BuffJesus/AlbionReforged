@@ -288,6 +288,48 @@ static void test_cook_scripts_package() {
     std::filesystem::remove_all(temp, ec);
 }
 
+// Stage 2 (Slice 1): the Physics control natives the childhood scripts call — CVector3 vector
+// math + teleport/facing/velocity wired to NativePlayer + the hero entity transform.
+static void test_stage2_control() {
+    const std::filesystem::path bnk_path =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    const std::filesystem::path data_root = bnk_path.parent_path().parent_path();
+    if (!std::filesystem::exists(bnk_path)) return;
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    F2_CHECK(game.boot_game_scripts(data_root) > 0);
+    f2::NativeScriptVM& vm = *game.script_vm;
+
+    // CVector3 is a real object with vector math (not the black-hole stub).
+    vm.run_source(
+        "local a=CVector3(3,0,4); assert(math.abs(a:GetLength()-5)<1e-4); "
+        "assert(a:GetSquaredLength()==25); assert(a:GetX()==3 and a:GetZ()==4); "
+        "local d=CVector3(3,0,4)-CVector3(0,0,1); assert(d:GetSquaredLength()==18)",
+        "=t_vec");
+    F2_CHECK(vm.last_error().empty());
+
+    // Teleport moves BOTH the player and the hero entity transform (coherence).
+    vm.run_source("Physics.TeleportToPosition(GetPlayerHero(), CVector3(10,0,5))", "=t_tp");
+    F2_CHECK(vm.last_error().empty());
+    F2_CHECK(std::fabs(game.player.position()[0] - 10.0f) < 1e-4f);
+    F2_CHECK(std::fabs(game.player.position()[2] - 5.0f) < 1e-4f);
+    vm.run_source("assert(math.abs(select(1, GetPlayerHero():GetPosition())-10) < 1e-3)", "=t_tp2");
+    F2_CHECK(vm.last_error().empty());
+
+    // Facing: SetFacingVector -> player.facing_yaw = atan2(x,z); GetFacingVector round-trips.
+    vm.run_source("Physics.SetFacingVector(GetPlayerHero(), CVector3(1,0,0))", "=t_face");
+    F2_CHECK(std::fabs(game.player.facing_yaw() - std::atan2(1.0f, 0.0f)) < 1e-4f);
+    vm.run_source(
+        "local f=Physics.GetFacingVector(GetPlayerHero()); "
+        "assert(math.abs(f:GetX()-1)<1e-3 and math.abs(f:GetZ())<1e-3)",
+        "=t_face2");
+    F2_CHECK(vm.last_error().empty());
+
+    // Velocity readback: hero at rest -> ~0 squared length (feeds the follow-behaviour branch).
+    vm.run_source("assert(Physics.GetVelocity(GetPlayerHero()):GetSquaredLength() < 1e-4)", "=t_vel");
+    F2_CHECK(vm.last_error().empty());
+}
+
 int main() {
     const std::array<std::uint8_t, 136> dxt1 = [] {
         std::array<std::uint8_t, 136> bytes{};
@@ -1196,6 +1238,7 @@ int main() {
     // ---- P8: New Game -> gameflow reaches the childhood chapter (real BNK; skipped if absent) ----
     test_gameflow_starts_childhood();
     test_cook_scripts_package();
+    test_stage2_control();
 
     // ---- P6: mods folder loader + Quest natives (150-bit bitset) ----
     {
