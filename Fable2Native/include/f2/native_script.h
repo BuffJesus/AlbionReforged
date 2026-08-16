@@ -135,6 +135,8 @@ public:
     void push_bool(bool v);
     void push_nil();
     void push_new_table();  // push a fresh empty Lua table (e.g. an empty result list)
+    // Push a Lua array (1-based) of object handles for `tag` (e.g. an entity search result).
+    void push_handle_list(const char* tag, const std::uint64_t* ids, std::size_t count);
 
     // Dispatched from the bound closures — internal. dispatch_from routes the arg/push
     // helpers to the ACTUAL calling state (a coroutine thread when called inside a resumed

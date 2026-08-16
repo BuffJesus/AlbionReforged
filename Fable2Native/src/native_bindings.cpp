@@ -250,27 +250,33 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
     });
     vm.register_object_method("Entity", "IsAlive", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
-        NativeEntity* e = g ? g->world.entities.find(v.arg_handle(1)) : nullptr;
+        const std::uint64_t uid = v.arg_handle(1);
+        NativeEntity* e = g ? g->world.entities.find(uid) : nullptr;
         auto* h = e ? e->get<HealthComponent>(kTypeIdHealth) : nullptr;
-        v.push_bool(e != nullptr && (h == nullptr || !h->is_dead()));
+        const bool killed = g && g->killed_entities.count(uid) != 0;
+        v.push_bool(e != nullptr && !killed && (h == nullptr || !h->is_dead()));
         return 1;
     });
     vm.register_object_method("Entity", "Kill", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
-        NativeEntity* e = g ? g->world.entities.find(v.arg_handle(1)) : nullptr;
-        if (e) {
-            if (auto* h = e->get<HealthComponent>(kTypeIdHealth)) h->health = 0.0f;
+        const std::uint64_t uid = v.arg_handle(1);
+        if (g) {
+            g->killed_entities.insert(uid);  // marks the entity dead for IsAlive()
+            if (NativeEntity* e = g->world.entities.find(uid))
+                if (auto* h = e->get<HealthComponent>(kTypeIdHealth)) h->health = 0.0f;
         }
-        // NOTE: the retail MESSAGE_EVENT_KILLED is posted by the combat/death system with
-        // the enum id from MessageEventEnum.lua. We don't fabricate it with a guessed C++
-        // constant — producers post symbolically from Lua via MessageEvents.PostMessage
-        // (EMessageEventType.MESSAGE_EVENT_KILLED, ...) so the id always matches consumers.
+        // NOTE: the retail MESSAGE_EVENT_KILLED is posted by the combat/death system with the
+        // enum id from MessageEventEnum.lua. We don't fabricate it with a guessed C++ constant
+        // — producers post symbolically from Lua via MessageEvents.PostMessage.
         return 0;
     });
     vm.register_object_method("Entity", "GetCorpse", [](NativeScriptVM& v) -> int {
         v.push_nil();  // no corpse entity model yet (scripts guard with IsAlive first)
         return 1;
     });
+    // Save-tagging + level-persistence hooks entity threads call at creation. No-ops until the
+    // save subsystem is wired (FLAGGED) — they gate persistence, not gameplay logic.
+    vm.register_object_method("Entity", "SetAsLevelSaving", [](NativeScriptVM&) -> int { return 0; });
 
     // ---- MessageEvents queue (the central quest poll) ----
     // IsMessagePosted/IsMessageSentTo/IsMessageSentBy return the newest matching Event
@@ -307,6 +313,22 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         if (m) v.push_handle("Event", m->id); else v.push_nil();
         return 1;
     });
+    // "Nothing happened" queries the managers poll every frame. These MUST return real
+    // falsy/empty values, not the auto-stub's truthy black-hole — otherwise, e.g.,
+    // IsEntityUnloaded sees a phantom "destroyed" message and terminates live entity threads.
+    vm.register_native("MessageEvents", "GetDestroyedMessageFromEntity", [](NativeScriptVM& v) -> int {
+        v.push_nil(); v.push_nil();   // (message, id) = (nil, nil): the entity was not destroyed
+        return 2;
+    });
+    vm.register_native("MessageEvents", "GetActivatedEntityMessages", [](NativeScriptVM& v) -> int {
+        v.push_new_table();           // empty {} — no activations (satisfies both pairs() and ~=0)
+        return 1;
+    });
+    vm.register_native("MessageEvents", "GetAllMessages", [](NativeScriptVM& v) -> int {
+        v.push_new_table();           // empty {} — nothing to iterate
+        return 1;
+    });
+
     // Producer side (engine/scripts post): PostMessage(type[, extra][, sentBy][, sentTo]).
     vm.register_native("MessageEvents", "PostMessage", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
@@ -355,20 +377,48 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         return 1;
     });
     vm.register_native("Timing", "GetTickRate", [](NativeScriptVM& v) -> int { v.push_number(60.0); return 1; });
+    // Debug.Error surfaces script/coroutine errors the managers would otherwise swallow
+    // (QuestManager.Update routes a failed coroutine.resume here). Captured to script_log.
+    vm.register_native("Debug", "Error", [](NativeScriptVM& v) -> int {
+        if (auto* g = game_of(v)) g->script_log.push_back(std::string("[Debug.Error] ") + v.arg_string(1));
+        return 0;
+    });
 
     // ---- SearchTools (entity queries) ----
     // QuestThreadBase.GetAllEntitiesWithName = StartNewSearch -> FilterWithName ->
-    // GetSearchResults. We return an EMPTY result list (no named world entities are streamed
-    // yet), so a quest's StartNewEntityThread iterates nothing and proceeds to its wait loop
-    // instead of dying on a black-hole stub. Real entity search lands with world streaming.
+    // GetSearchResults. We resolve the name filter against the world's named entities
+    // (entity_names), so a quest's StartNewEntityThread spawns a real entity thread per
+    // matching entity. FLAGGED: only a name filter is supported (no area/component filters
+    // yet); entities acquire names from Debug.CreateEntityAt + the hero + scene tagging.
     vm.register_native("SearchTools", "StartNewSearch", [](NativeScriptVM& v) -> int {
-        v.push_number(1.0);  // opaque search handle (unused until real search exists)
+        auto* g = game_of(v);
+        if (!g) { v.push_number(0.0); return 1; }
+        g->search_filters.emplace_back();               // new handle with an empty filter
+        v.push_number(static_cast<double>(g->search_filters.size()));  // 1-based handle
         return 1;
     });
-    vm.register_native("SearchTools", "FilterWithName", [](NativeScriptVM&) -> int { return 0; });
+    vm.register_native("SearchTools", "FilterWithName", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const int h = static_cast<int>(v.arg_number(1));
+        const char* name = v.arg_string(2);
+        if (g && h >= 1 && h <= static_cast<int>(g->search_filters.size()))
+            g->search_filters[static_cast<std::size_t>(h - 1)] = name ? name : "";
+        return 0;
+    });
+    // No script-filter support yet: a script filter narrows an existing set, so leaving it a
+    // no-op keeps the (name-filtered) set intact rather than dropping it.
     vm.register_native("SearchTools", "FilterWithScriptFilter", [](NativeScriptVM&) -> int { return 0; });
     vm.register_native("SearchTools", "GetSearchResults", [](NativeScriptVM& v) -> int {
-        v.push_new_table();  // empty {} — no results
+        auto* g = game_of(v);
+        const int h = static_cast<int>(v.arg_number(1));
+        std::vector<std::uint64_t> matches;
+        if (g && h >= 1 && h <= static_cast<int>(g->search_filters.size())) {
+            const std::string& want = g->search_filters[static_cast<std::size_t>(h - 1)];
+            if (!want.empty())
+                for (const auto& [uid, name] : g->entity_names)
+                    if (name == want) matches.push_back(uid);
+        }
+        v.push_handle_list("Entity", matches.data(), matches.size());
         return 1;
     });
 

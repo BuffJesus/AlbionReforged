@@ -143,6 +143,46 @@ static void test_run_real_quest() {
     F2_CHECK(completed);  // the game's quest ran its real logic to its own completion print
 }
 
+// ---- P7: the game's REAL entity threads spawn + interact on the native substrate ----
+// MyFirstQuest calls StartNewEntityThread("QuestGiver", VillagerWithQuest); with real
+// SearchTools over the world's named entities, that spawns a REAL VillagerWithQuest entity
+// thread bound to the QuestGiver entity. Running its OnInteract executes the quest's own
+// dialogue. Proves entity search + entity-thread spawning + the interaction callback — the
+// layer above bare quest coroutines. Skipped if game data is absent.
+static void test_entity_thread_spawns() {
+    const std::filesystem::path bnk_path =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    const std::filesystem::path data_root = bnk_path.parent_path().parent_path();
+    if (!std::filesystem::exists(bnk_path)) return;
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    F2_CHECK(game.boot_game_scripts(data_root) > 0);
+    F2_CHECK(game.load_quest_scripts() > 0);
+    f2::NativeScriptVM& vm = *game.script_vm;
+
+    // Spawn the named world entity the quest searches for, then load + start MyFirstQuest.
+    vm.run_source("QuestGiverEnt = Debug.CreateEntityAt('Villager','QuestGiver',0,0,0)");
+    F2_CHECK(vm.run_source("RunScript('quests/myfirstquest.lua')"));
+    vm.run_source("__q = MyFirstQuest:new(); QuestManager.AddQuestThread(__q)");
+    for (int i = 0; i < 2; ++i) vm.run_source("QuestManager.Update()");  // Update -> StartNewEntityThread
+
+    // A real VillagerWithQuest entity thread, bound to the QuestGiver entity, now exists —
+    // spawned by the quest's own StartNewEntityThread via real SearchTools.
+    vm.run_source(
+        "local vt = QuestManager.EntitiesWithQuestThread[GetIDFromEntity(QuestGiverEnt)]; "
+        "assert(vt ~= nil and vt.Entity ~= nil and type(vt.OnInteract) == 'function')");
+    F2_CHECK(vm.last_error().empty());
+
+    // Running the spawned thread's OnInteract executes the quest's own interaction dialogue.
+    game.script_log.clear();
+    vm.run_source(
+        "local vt = QuestManager.EntitiesWithQuestThread[GetIDFromEntity(QuestGiverEnt)]; vt:OnInteract()");
+    bool talked = false;
+    for (const auto& line : game.script_log)
+        if (line.find("kill this evil twin") != std::string::npos) talked = true;
+    F2_CHECK(talked);  // the spawned entity thread ran the game's own interaction dialogue
+}
+
 int main() {
     const std::array<std::uint8_t, 136> dxt1 = [] {
         std::array<std::uint8_t, 136> bytes{};
@@ -1044,6 +1084,9 @@ int main() {
 
     // ---- P6: run one of the game's OWN quests to completion (real BNK; skipped if absent) ----
     test_run_real_quest();
+
+    // ---- P7: the game's real entity threads spawn + interact (real BNK; skipped if absent) ----
+    test_entity_thread_spawns();
 
     // ---- P6: mods folder loader + Quest natives (150-bit bitset) ----
     {

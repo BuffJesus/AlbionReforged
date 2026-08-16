@@ -26,9 +26,12 @@ const std::unordered_set<std::string>& native_name_set() {
         // Native class tables the catalog missed (methods cataloged as bare globals):
         // NOTE: do NOT stub BaseObjects — it is aliased to _G so the game's managers
         // (BaseObjects.QuestManager = {...}) define real globals.
+        // AIManager is included as a stub because its script isn't in the boot set yet and its
+        // methods (SetCanRunMoveAwayFromAreaBehaviour, ...) are AI-behaviour hints the runtime
+        // doesn't implement — FLAGGED: remove once the AI system + aimanager.lua are wired.
         for (const char* n : {"GUI", "Debug", "MessageEvents", "Timing", "Gameflow",
                               "TutorialManager", "Breadcrumber", "ScriptFunction", "SearchTools",
-                              "EMessageEventType", "Platform", "ScriptEnum"})
+                              "AIManager", "EMessageEventType", "Platform", "ScriptEnum"})
             s.insert(n);
         return s;
     }();
@@ -437,8 +440,25 @@ bool NativeScriptVM::install_autostub() {
           end
           return nil
         end })
+        -- Expose a pre-creator: a native class stub as a RAW _G entry. The game's save system
+        -- replaces _G's metatable at load (saveloadsystem.lua), which would kill the mint-index
+        -- above for any class not yet cached — so the runtime pre-creates the known class
+        -- tables here as raw entries that survive the swap.
+        function __mkclassstub(cn)
+          if rawget(_G, cn) == nil then rawset(_G, cn, setmetatable({}, classmeta(cn))) end
+        end
     )LUA";
-    return run_source(kBootstrap, "=autostub");
+    if (!run_source(kBootstrap, "=autostub")) return false;
+
+    // Pre-create the known native CLASS tables as raw _G entries (survive a metatable swap by
+    // the save system). Real classes we've already registered are skipped (rawget guard).
+    std::string pre;
+    for (const char* n : kNativeClassNames) { pre += "__mkclassstub('"; pre += n; pre += "') "; }
+    for (const char* n : {"GUI", "AIManager", "TutorialManager", "Breadcrumber", "ScriptFunction",
+                          "SearchTools", "Follow", "Stats", "Player", "QuestTracker", "Inventory",
+                          "Physics", "Money"})
+    { pre += "__mkclassstub('"; pre += n; pre += "') "; }
+    return run_source(pre.c_str(), "=mkclassstubs");
 }
 
 int NativeScriptVM::arg_count() const { return state_ ? lua_gettop(cur_()) : 0; }
@@ -471,6 +491,16 @@ void NativeScriptVM::push_nil() {
 }
 void NativeScriptVM::push_new_table() {
     if (state_) lua_newtable(cur_());
+}
+void NativeScriptVM::push_handle_list(const char* tag, const std::uint64_t* ids,
+                                      std::size_t count) {
+    if (!state_) return;
+    lua_State* s = cur_();
+    lua_createtable(s, static_cast<int>(count), 0);
+    for (std::size_t i = 0; i < count; ++i) {
+        push_handle(tag, ids[i]);                       // pushes the handle onto `s`
+        lua_rawseti(s, -2, static_cast<int>(i + 1));    // t[i+1] = handle (pops it)
+    }
 }
 
 }  // namespace f2

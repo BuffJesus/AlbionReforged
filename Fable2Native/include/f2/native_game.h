@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace f2 {
@@ -68,6 +69,11 @@ struct NativeGame {
     MessageBus messages;
     std::uint64_t hero_uid = 0;
     std::unordered_map<std::uint64_t, std::string> entity_names;
+    std::unordered_set<std::uint64_t> killed_entities;  // Entity:Kill() marks; IsAlive() reads
+    // SearchTools state: one pending name-filter per open search handle (1-based). A quest's
+    // GetAllEntitiesWithName = StartNewSearch -> FilterWithName -> GetSearchResults, so we
+    // record the filter on the handle and resolve it to named entities on GetSearchResults.
+    std::vector<std::string> search_filters;
     int quest_update_ref = -2;    // luaL_ref sentinels (<0 = unset)
     int general_update_ref = -2;
     int ai_update_ref = -2;
