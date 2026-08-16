@@ -124,7 +124,10 @@ int NativeGame::boot_game_scripts(const std::filesystem::path& data_root) {
         "  local p = opts and opts.position "
         "  local r = (opts and opts.radius) or 0 "
         "  local s = (opts and opts.speed) or 2 "
-        "  if p then Navigation.__MoveTo(e, p.x, p.y, p.z, r, s) end return true end",
+        "  if p then Navigation.__MoveTo(e, p.x, p.y, p.z, r, s) end return true end "
+        // Camera pose setters take CVector3 (unpacked to the scalar primitives).
+        "function Camera.MoveTo(pos) Camera.__MoveTo(pos.x, pos.y, pos.z) end "
+        "function Camera.SetDirection(dir) Camera.__SetDirection(dir.x, dir.y, dir.z) end",
         "=stage2_control");
 
     // Wire the registered manager Update callbacks into the tick, retail Quest->General->AI
@@ -353,8 +356,10 @@ void NativeGame::tick(double delta_seconds) {
                 if (auto* t = he->get<TransformComponent>(kTypeIdTransform))
                     t->rotation[1] = player.facing_yaw();
 
-            // Camera follows the moved hero (look from right-stick or mouse).
-            if (camera_controller.mode == CameraMode::Follow) {
+            // Camera follows the moved hero (look from right-stick or mouse) — unless a script
+            // has taken direct control of the camera pose (camera_scripted), in which case the
+            // follow-cam yields so it does not stomp the scripted pose.
+            if (camera_controller.mode == CameraMode::Follow && !camera_scripted) {
                 const bool look_is_mouse = input.last_active_device == InputDevice::KeyboardMouse;
                 camera_controller.update(player.position(), input.look, look_is_mouse,
                                          static_cast<float>(simulation_step), &collision);

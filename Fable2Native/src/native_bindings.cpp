@@ -407,6 +407,63 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         return 1;
     });
 
+    // ---- Camera: scripted pose override ----
+    // Direct pose setters (grounded in camerabase.lua Camera.MoveTo/SetAngles/SetDirection/SetFOV)
+    // take the camera off the follow-cam and hold the scripted pose until ClearCameraOverride.
+    // MoveTo/SetDirection take CVector3 (a boot Lua shim unpacks them to these scalar primitives).
+    vm.register_native("Camera", "__MoveTo", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (g) {
+            g->camera.position = {static_cast<float>(v.arg_number(1)),
+                                  static_cast<float>(v.arg_number(2)),
+                                  static_cast<float>(v.arg_number(3))};
+            g->camera_scripted = true;
+        }
+        return 0;
+    });
+    vm.register_native("Camera", "SetAngles", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (g) {  // FLAGGED: assumes (yaw, pitch) radians; the exact arg convention isn't RE'd
+            g->camera.yaw = static_cast<float>(v.arg_number(1));
+            g->camera.pitch = static_cast<float>(v.arg_number(2));
+            g->camera_scripted = true;
+        }
+        return 0;
+    });
+    vm.register_native("Camera", "__SetDirection", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (g) {
+            const float x = static_cast<float>(v.arg_number(1));
+            const float y = static_cast<float>(v.arg_number(2));
+            const float z = static_cast<float>(v.arg_number(3));
+            g->camera.yaw = std::atan2(x, z);
+            g->camera.pitch = std::atan2(y, std::sqrt(x * x + z * z));
+            g->camera_scripted = true;
+        }
+        return 0;
+    });
+    vm.register_native("Camera", "GetAngles", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        v.push_number(g ? g->camera.yaw : 0.0); v.push_number(g ? g->camera.pitch : 0.0);
+        return 2;
+    });
+    vm.register_native("Camera", "SetFOV", [](NativeScriptVM&) -> int {
+        return 0;  // FLAGGED inert: no fov field flows through camera -> set_free_camera (either backend)
+    });
+    vm.register_native("Camera", "GetFOV", [](NativeScriptVM& v) -> int {
+        v.push_number(70.0);  // FLAGGED: default ~70deg; retail FOV is region-authored CameraValues data
+        return 1;
+    });
+    // CameraManager.SetCameraOverride(entity, mode, scope, params?) is the childhood cutscene entry
+    // (qc010:231/1467). FLAGGED: the closure-driven cage (params.PositionFunction/FocusFunction) is
+    // a follow-up; this records the request but does NOT gate the follow-cam, so the camera never
+    // freezes waiting on a cage we don't yet evaluate. ClearCameraOverride releases a direct override.
+    vm.register_native("CameraManager", "SetCameraOverride", [](NativeScriptVM&) -> int { return 0; });
+    vm.register_native("CameraManager", "ClearCameraOverride", [](NativeScriptVM& v) -> int {
+        if (auto* g = game_of(v)) g->camera_scripted = false;
+        return 0;
+    });
+
     // ---- MessageEvents queue (the central quest poll) ----
     // IsMessagePosted/IsMessageSentTo/IsMessageSentBy return the newest matching Event
     // (id > lastSeenId), or nil — the questmanager.lua wait idiom. Event handles carry the

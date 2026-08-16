@@ -417,6 +417,43 @@ static void test_stage2_animation() {
     F2_CHECK(bare.hero_anim.clip() == nullptr);  // explicit bind-pose fallback
 }
 
+// Stage 2 (Slice 4): scripted camera pose override + the follow-cam authority gate.
+static void test_stage2_camera() {
+    const std::filesystem::path bnk_path =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    const std::filesystem::path data_root = bnk_path.parent_path().parent_path();
+    if (!std::filesystem::exists(bnk_path)) return;
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    F2_CHECK(game.boot_game_scripts(data_root) > 0);
+    f2::NativeScriptVM& vm = *game.script_vm;
+
+    // Drive only the camera portion of the tick (managers off, empty world).
+    game.script_systems.quest.enabled = false;
+    game.script_systems.general.enabled = false;
+    game.script_systems.ai.enabled = false;
+    game.mode = f2::GameMode::InWorld;
+    game.external_input = true;
+    game.collision.build_from_scene(game.scene);
+    game.camera_controller.mode = f2::CameraMode::Follow;
+    game.player.set_position({100.0f, 0.0f, 100.0f});  // far from any follow pose
+
+    // Script takes the camera: MoveTo holds its pose, the follow-cam yields.
+    vm.run_source("Camera.MoveTo(CVector3(0,5,0))", "=t_cammove");
+    F2_CHECK(vm.last_error().empty());
+    F2_CHECK(game.camera_scripted);
+    F2_CHECK(std::fabs(game.camera.position[1] - 5.0f) < 1e-4f);
+    game.tick(1.0 / 60.0);
+    F2_CHECK(std::fabs(game.camera.position[1] - 5.0f) < 1e-4f);  // follow did NOT stomp it
+
+    // Clearing the override returns authority to the follow-cam, which reframes off the hero.
+    vm.run_source("CameraManager.ClearCameraOverride()", "=t_camclear");
+    F2_CHECK(!game.camera_scripted);
+    game.tick(1.0 / 60.0);
+    F2_CHECK(game.camera.position[1] != 5.0f ||
+             game.camera.position[0] != 0.0f);  // follow-cam moved the camera off the scripted pose
+}
+
 int main() {
     const std::array<std::uint8_t, 136> dxt1 = [] {
         std::array<std::uint8_t, 136> bytes{};
@@ -1328,6 +1365,7 @@ int main() {
     test_stage2_control();
     test_stage2_navigation();
     test_stage2_animation();
+    test_stage2_camera();
 
     // ---- P6: mods folder loader + Quest natives (150-bit bitset) ----
     {

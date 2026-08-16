@@ -89,6 +89,13 @@ struct NativeGame {
     NativePlayer player;
     CameraController camera_controller;
 
+    // When a script has taken direct control of the camera (Camera.MoveTo/SetAngles/SetDirection),
+    // the follow-cam yields so it does not stomp the scripted pose (the "camera authority" seam).
+    // Cleared by CameraManager.ClearCameraOverride. FLAGGED: CameraManager.SetCameraOverride's
+    // closure-driven cage (PositionFunction/FocusFunction) is a follow-up — it records the request
+    // but leaves the follow-cam authoritative so the camera never freezes.
+    bool camera_scripted = false;
+
     // P5 skeletal animation: the hero's locomotion player, driven each InWorld tick from the
     // hero's planar speed. hero_clips owns the baked AnimClips; hero_locomotion tags each with
     // its measured root speed for select_locomotion_clip. FLAGGED: empty until the cook emits
