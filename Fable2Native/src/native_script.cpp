@@ -138,6 +138,92 @@ bool NativeScriptVM::call_global(const char* fn_name, double dt) {
     return true;
 }
 
+bool NativeScriptVM::call_method(const char* global, const char* method, double dt) {
+    if (!state_) return false;
+    lua_State* s = L(state_);
+    lua_getglobal(s, global);                 // [tbl]
+    if (!lua_istable(s, -1)) { lua_pop(s, 1); return false; }
+    lua_getfield(s, -1, method);              // [tbl, fn]
+    if (!lua_isfunction(s, -1)) { lua_pop(s, 2); return false; }
+    lua_pushvalue(s, -2);                      // [tbl, fn, self]
+    lua_pushnumber(s, dt);                     // [tbl, fn, self, dt]
+    if (lua_pcall(s, 2, 0, 0) != 0) {          // [tbl (,err)]
+        last_error_ = lua_tostring(s, -1) ? lua_tostring(s, -1) : "runtime error";
+        lua_pop(s, 1);
+    } else {
+        last_error_.clear();
+    }
+    lua_pop(s, 1);                             // pop the manager table
+    return true;                               // found + invoked (runtime error -> last_error)
+}
+
+void NativeScriptVM::log_stub_miss(const char* name) {
+    if (name && *name) stub_misses_.emplace_back(name);
+}
+
+bool NativeScriptVM::install_autostub() {
+    if (!state_) return false;
+    lua_State* s = L(state_);
+    // Register __stub_log as a plain global native (the metatables call it on a miss).
+    const int idx = static_cast<int>(natives_.size());
+    natives_.push_back([](NativeScriptVM& vm) -> int {
+        vm.log_stub_miss(vm.arg_string(1));
+        return 0;
+    });
+    lua_pushlightuserdata(s, this);
+    lua_pushinteger(s, idx);
+    lua_pushcclosure(s, &native_trampoline, 2);
+    lua_setglobal(s, "__stub_log");
+
+    // The metatable bootstrap: a chainable black-hole NIL + a class-table __index that
+    // manufactures a cached no-op returning NIL (or false for predicates), + a _G __index
+    // that turns an unknown Capitalized global into a stub class table. Each unique miss
+    // is logged once. So the game's scripts never hit "attempt to call a nil value".
+    static const char* kBootstrap = R"LUA(
+        local seen = {}
+        local NIL
+        local nilmt = {
+          __index = function() return NIL end,
+          __call = function() return NIL end,
+          __newindex = function() end,
+          __tostring = function() return "nil" end,
+        }
+        NIL = setmetatable({}, nilmt)
+        _G.__F2_NIL = NIL
+        local function predicate(m)
+          return type(m) == "string" and (m:match("^Is") or m:match("^Has")
+            or m:match("^Find") or m:match("^Exists") or m:match("^Can") or m:match("Loading"))
+        end
+        local function classmeta(cn)
+          return { __index = function(t, m)
+            if type(m) == "string" and m:sub(1, 2) == "__" then return nil end
+            local key = cn .. "." .. tostring(m)
+            if not seen[key] then seen[key] = true; __stub_log(key) end
+            local fn
+            if predicate(m) then fn = function() return false end
+            else fn = function() return NIL end end
+            rawset(t, m, fn)
+            return fn
+          end }
+        end
+        for cn, t in pairs(_G) do
+          if type(t) == "table" and type(cn) == "string" and cn:match("^%u")
+             and getmetatable(t) == nil then
+            setmetatable(t, classmeta(cn))
+          end
+        end
+        setmetatable(_G, { __index = function(t, k)
+          if type(k) == "string" and k:match("^%u") then
+            local tbl = setmetatable({}, classmeta(k))
+            rawset(t, k, tbl)
+            return tbl
+          end
+          return nil
+        end })
+    )LUA";
+    return run_source(kBootstrap, "=autostub");
+}
+
 int NativeScriptVM::arg_count() const { return state_ ? lua_gettop(L(state_)) : 0; }
 
 double NativeScriptVM::arg_number(int index) const {

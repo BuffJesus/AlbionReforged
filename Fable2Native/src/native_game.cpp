@@ -101,13 +101,22 @@ bool NativeGame::enable_scripting() {
     // order (Quest -> General -> AI). The Lua side owns its coroutine scheduling; the
     // native tick just resumes each manager's Update each InWorld step. call_global is a
     // no-op (returns false) until a loaded manager script defines the function.
+    // Drive each manager's Lua Update in the retail order. Retail resumes the manager
+    // OBJECT's Update METHOD (Manager:Update(dt)); fall back to a free *Update global (used
+    // by simple mods/tests). The Lua side owns coroutine scheduling.
     NativeScriptVM* vm = script_vm.get();
     script_systems.quest.enabled = true;
-    script_systems.quest.update = [vm](double dt) { vm->call_global("QuestUpdate", dt); };
+    script_systems.quest.update = [vm](double dt) {
+        if (!vm->call_method("QuestManager", "Update", dt)) vm->call_global("QuestUpdate", dt);
+    };
     script_systems.general.enabled = true;
-    script_systems.general.update = [vm](double dt) { vm->call_global("GeneralUpdate", dt); };
+    script_systems.general.update = [vm](double dt) {
+        if (!vm->call_method("GeneralScriptManager", "Update", dt)) vm->call_global("GeneralUpdate", dt);
+    };
     script_systems.ai.enabled = true;
-    script_systems.ai.update = [vm](double dt) { vm->call_global("AIUpdate", dt); };
+    script_systems.ai.update = [vm](double dt) {
+        if (!vm->call_method("AIManager", "Update", dt)) vm->call_global("AIUpdate", dt);
+    };
     return true;
 }
 

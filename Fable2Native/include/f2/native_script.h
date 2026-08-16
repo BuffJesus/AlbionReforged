@@ -66,6 +66,23 @@ public:
     // (last_error set). This is how a ScriptSystems manager drives its Lua Update.
     bool call_global(const char* fn_name, double dt);
 
+    // Call `global:method(dt)` (a method on a manager table — retail resumes the manager
+    // object's Update METHOD, not a free global). Returns true if the method was found and
+    // invoked (even if it errored — see last_error); false only if the table/method is
+    // absent (so the caller can fall back).
+    bool call_method(const char* global, const char* method, double dt);
+
+    // Install the missing-native auto-stub: metatables on _G and the class tables so an
+    // unbound Class.Method resolves to a chainable no-op (returns a black-hole value, or
+    // real false for Is*/Has*/Find*/Exists predicates to avoid truthiness drift), logging
+    // each unique miss once (stub_misses()). Call AFTER the real natives are registered so
+    // it only fires for MISSING ones. Lets the game's scripts run without every native.
+    bool install_autostub();
+
+    // Record a missing-native reference (called by the auto-stub) + read the ranked list.
+    void log_stub_miss(const char* name);
+    [[nodiscard]] const std::vector<std::string>& stub_misses() const noexcept { return stub_misses_; }
+
     // --- helpers for native fns (operate on the current call's Lua stack) ---
     [[nodiscard]] int arg_count() const;
     [[nodiscard]] double arg_number(int index) const;   // 1-based; 0 if not a number
@@ -84,6 +101,7 @@ private:
     void* state_ = nullptr;                 // lua_State*
     void* user_data_ = nullptr;             // opaque game context for bound natives
     std::vector<ScriptNativeFn> natives_;   // registered fns, indexed by closure upvalue
+    std::vector<std::string> stub_misses_;  // unique missing-native worklist
     std::string last_error_;
 };
 

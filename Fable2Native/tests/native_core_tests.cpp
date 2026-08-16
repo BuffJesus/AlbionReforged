@@ -810,6 +810,39 @@ int main() {
         assert(!vm.call_global("NoSuchFunction", 0.0));
     }
 
+    // ---- P6: auto-stub (missing natives don't crash) + call_method ----
+    {
+        f2::NativeScriptVM vm;
+        vm.register_native("World", "NpcCount",
+                           [](f2::NativeScriptVM& v) -> int { v.push_number(3); return 1; });
+        assert(vm.install_autostub());
+        // Real native still works; unknown natives resolve to chainable black-hole (no
+        // error); predicates (Is*/Has*/...) return a real false to avoid truthiness drift.
+        assert(vm.run_source(
+            "assert(World.NpcCount() == 3)\n"
+            "local x = Foo.Bar()\n"                                 // unknown class -> stub table
+            "local y = World.SomethingMissing():AndChain().Deep\n"  // chainable, no crash
+            "assert(World.IsWhatever() == false)\n"                 // predicate -> false
+            "assert(Debug.IsThing() == false)\n"));
+        assert(vm.last_error().empty());
+        bool saw_foo = false, saw_missing = false;
+        for (const auto& m : vm.stub_misses()) {
+            if (m == "Foo.Bar") saw_foo = true;
+            if (m == "World.SomethingMissing") saw_missing = true;
+        }
+        assert(saw_foo && saw_missing);
+
+        // call_method drives a manager's :Update(dt) method.
+        assert(vm.run_source("Mgr = { n = 0, Update = function(self, dt) self.n = self.n + 1 end }"));
+        assert(vm.call_method("Mgr", "Update", 0.016));
+        assert(vm.run_source("assert(Mgr.n == 1)"));
+
+        // Without the auto-stub, call_method reports not-found (so the manager wiring can
+        // fall back to a free *Update global).
+        f2::NativeScriptVM plain;
+        assert(!plain.call_method("NoSuchManager", "Update", 0.0));
+    }
+
     // ---- P6: script managers wired into the NativeGame tick ----
     {
         f2::NativeGame game;
