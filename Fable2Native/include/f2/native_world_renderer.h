@@ -50,6 +50,26 @@ public:
     void render_shadow(ID3D12GraphicsCommandList* command_list, const NativeScene& scene,
                        double elapsed_seconds);
 
+    // Planar reflection RT (retail g_ReflectionSampler c13, PSHADER_WATERPATCH shader 62): the
+    // frontend owns a colour RT (kSceneColorFormat) + its own depth + a shader-readable SRV; the
+    // renderer replays OPAQUE geometry MIRRORED about the water plane into it (render_reflection),
+    // then the water PS samples it by screen-space uv. size = square RT resolution. Mirrors the
+    // set_shadow_map/render_shadow split. No-op if the scene has no water.
+    void set_reflection_map(D3D12_CPU_DESCRIPTOR_HANDLE rtv, D3D12_CPU_DESCRIPTOR_HANDLE dsv,
+                            D3D12_GPU_DESCRIPTOR_HANDLE srv, std::uint32_t size) {
+        reflection_rtv_ = rtv;
+        reflection_dsv_ = dsv;
+        reflection_srv_gpu_ = srv;
+        reflection_size_ = size;
+    }
+    // Render opaque geometry mirrored about the water plane into the reflection RT. Call before
+    // render(); the frontend transitions the reflection target RENDER_TARGET -> PIXEL_SHADER between.
+    // No-op if the scene has no water or no reflection target is bound.
+    void render_reflection(ID3D12GraphicsCommandList* command_list, const NativeScene& scene,
+                           std::uint32_t width, std::uint32_t height, double elapsed_seconds);
+    [[nodiscard]] bool has_water() const noexcept { return has_water_; }
+    [[nodiscard]] float water_plane_y() const noexcept { return water_plane_y_; }
+
     // The frontend supplies a shader-readable copy of the World depth buffer. It is copied
     // after opaque geometry and sampled by the water pass for the shoreline edge factor.
     void set_scene_depth_copy(ID3D12Resource* source, ID3D12Resource* copy,
@@ -127,6 +147,18 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE shadow_dsv_{};       // frontend-owned shadow depth DSV
     D3D12_GPU_DESCRIPTOR_HANDLE shadow_srv_gpu_{};   // frontend-owned shadow depth SRV (t4)
     std::uint32_t shadow_size_ = 0;                  // square shadow-map resolution (0 = disabled)
+    // Planar reflection pass: world PSO with a clip-plane VS variant, into a frontend-owned RT.
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> reflection_pipeline_;  // vs_reflect + ps_main
+    D3D12_CPU_DESCRIPTOR_HANDLE reflection_rtv_{};   // frontend-owned reflection colour RTV
+    D3D12_CPU_DESCRIPTOR_HANDLE reflection_dsv_{};   // frontend-owned reflection depth DSV
+    D3D12_GPU_DESCRIPTOR_HANDLE reflection_srv_gpu_{};  // frontend-owned reflection colour SRV (t5)
+    std::uint32_t reflection_size_ = 0;              // square reflection RT resolution (0 = disabled)
+    // Derived water plane (render Y) = radius-weighted mean of the water draw ranges' centres.
+    // PHASE-1 LIMITATION: multiple canals at different heights collapse to this single plane.
+    bool has_water_ = false;
+    float water_plane_y_ = 0.0f;
+    D3D12_GPU_VIRTUAL_ADDRESS reflection_constant_address_ = 0;  // 2nd cbuffer slice (reflected VP)
+    void* mapped_reflection_constants_ = nullptr;
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> textures_;
     D3D12_VERTEX_BUFFER_VIEW vertex_view_{};
     D3D12_INDEX_BUFFER_VIEW index_view_{};

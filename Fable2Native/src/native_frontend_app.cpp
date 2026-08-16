@@ -47,6 +47,7 @@ namespace {
 constexpr UINT kFrameCount = 2;
 constexpr DXGI_FORMAT kBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 constexpr UINT kShadowSize = 2048;  // sun shadow-map resolution (square)
+constexpr UINT kReflectionSize = 1024;  // planar reflection RT resolution (square, window-independent)
 constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
 constexpr UINT kUiTextureCount = 36;
 
@@ -325,6 +326,10 @@ public:
         if (shadow_map_) {
             world_renderer_.set_shadow_map(shadow_dsv_, shadow_srv_gpu_, kShadowSize);
         }
+        if (reflection_target_) {
+            world_renderer_.set_reflection_map(reflection_rtv_, reflection_dsv_,
+                                               reflection_srv_gpu_, kReflectionSize);
+        }
         // Procedural sky pass (self-contained: own root sig/PSO/LUT/descriptor heap). A
         // failure here is non-fatal — the World branch falls back to the flat sky_color clear.
         std::string sky_error;
@@ -547,11 +552,11 @@ private:
         factory->MakeWindowAssociation(window_, DXGI_MWA_NO_ALT_ENTER);
 
         D3D12_DESCRIPTOR_HEAP_DESC rtv_desc{};
-        rtv_desc.NumDescriptors = kFrameCount + 2;  // +1 MSAA resolve target, +1 HDR scene target
+        rtv_desc.NumDescriptors = kFrameCount + 3;  // +MSAA resolve, +HDR scene, +planar reflection
         rtv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (FAILED(device_->CreateDescriptorHeap(&rtv_desc, IID_PPV_ARGS(&rtv_heap_)))) return false;
         D3D12_DESCRIPTOR_HEAP_DESC dsv_desc{};
-        dsv_desc.NumDescriptors = 2;  // [0] world depth, [1] sun shadow map depth
+        dsv_desc.NumDescriptors = 3;  // [0] world depth, [1] sun shadow depth, [2] reflection depth
         dsv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
         if (FAILED(device_->CreateDescriptorHeap(&dsv_desc, IID_PPV_ARGS(&dsv_heap_)))) return false;
         dsv_handle_ = dsv_heap_->GetCPUDescriptorHandleForHeapStart();
@@ -560,10 +565,12 @@ private:
                 device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
             shadow_dsv_ = dsv_handle_;
             shadow_dsv_.ptr += dsv_stride;  // second DSV slot
+            reflection_dsv_ = dsv_handle_;
+            reflection_dsv_.ptr += static_cast<std::size_t>(dsv_stride) * 2;  // third DSV slot
         }
         D3D12_DESCRIPTOR_HEAP_DESC srv_desc{};
         srv_desc.NumDescriptors =
-            f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 5;
+            f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 6;
         srv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         srv_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device_->CreateDescriptorHeap(&srv_desc, IID_PPV_ARGS(&descriptor_heap_)))) return false;
@@ -574,6 +581,7 @@ private:
         depth_descriptor_index_ = font_descriptor_index_ + 1;
         hdr_descriptor_index_ = depth_descriptor_index_ + 1;
         shadow_descriptor_index_ = hdr_descriptor_index_ + 1;
+        reflection_descriptor_index_ = shadow_descriptor_index_ + 1;  // above material SRVs (no collision)
 
         rtv_stride_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         auto handle = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
@@ -588,9 +596,12 @@ private:
         msaa_rtv_ = handle;  // the extra RTV slot after the back buffers
         handle.ptr += rtv_stride_;
         hdr_rtv_ = handle;  // the RTV slot after MSAA, for the HDR scene target
+        handle.ptr += rtv_stride_;
+        reflection_rtv_ = handle;  // the RTV slot after HDR, for the planar reflection target
         create_depth_target();
         create_hdr_target();
         create_shadow_map();
+        create_reflection_target();
         if (FAILED(device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
                                                frames_[0].allocator.Get(), nullptr,
                                                IID_PPV_ARGS(&command_list_))) ||
@@ -767,6 +778,72 @@ private:
         device_->CreateShaderResourceView(shadow_map_.Get(), &srv, cpu);
         shadow_srv_gpu_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
         shadow_srv_gpu_.ptr += static_cast<std::size_t>(shadow_descriptor_index_) * descriptor_stride_;
+    }
+
+    // Planar reflection target (retail g_ReflectionSampler): a fixed-size square colour RT
+    // (kSceneColorFormat, matching the HDR scene so lit reflections read correctly) + its own depth.
+    // The world renderer replays opaque geometry mirrored about the water plane into it, then the
+    // water PS samples it. Colour starts in PIXEL_SHADER_RESOURCE so the first frame's PS->RT
+    // transition is valid; depth stays DEPTH_WRITE (never sampled). Window-independent like the shadow.
+    void create_reflection_target() {
+        reflection_target_.Reset();
+        reflection_depth_.Reset();
+        if (!device_) return;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        // Colour RT.
+        D3D12_RESOURCE_DESC color{};
+        color.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        color.Width = kReflectionSize;
+        color.Height = kReflectionSize;
+        color.DepthOrArraySize = 1;
+        color.MipLevels = 1;
+        color.Format = f2::kSceneColorFormat;
+        color.SampleDesc.Count = 1;
+        color.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        D3D12_CLEAR_VALUE color_clear{};
+        color_clear.Format = f2::kSceneColorFormat;
+        for (int i = 0; i < 3; ++i) color_clear.Color[i] = game_.scene.sky_horizon_color[i];
+        color_clear.Color[3] = 1.0f;
+        if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &color,
+                                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                                    &color_clear, IID_PPV_ARGS(&reflection_target_)))) {
+            reflection_target_.Reset();
+            return;
+        }
+        // Depth.
+        D3D12_RESOURCE_DESC depth = color;
+        depth.Format = DXGI_FORMAT_R32_TYPELESS;
+        depth.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        D3D12_CLEAR_VALUE depth_clear{};
+        depth_clear.Format = DXGI_FORMAT_D32_FLOAT;
+        depth_clear.DepthStencil.Depth = 0.0f;  // reversed-Z far (matches the world PSO)
+        if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &depth,
+                                                    D3D12_RESOURCE_STATE_DEPTH_WRITE, &depth_clear,
+                                                    IID_PPV_ARGS(&reflection_depth_)))) {
+            reflection_target_.Reset();
+            reflection_depth_.Reset();
+            return;
+        }
+        D3D12_RENDER_TARGET_VIEW_DESC rtv{};
+        rtv.Format = f2::kSceneColorFormat;
+        rtv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        device_->CreateRenderTargetView(reflection_target_.Get(), &rtv, reflection_rtv_);
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+        dsv.Format = DXGI_FORMAT_D32_FLOAT;
+        dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        device_->CreateDepthStencilView(reflection_depth_.Get(), &dsv, reflection_dsv_);
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Format = f2::kSceneColorFormat;
+        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels = 1;
+        auto cpu = descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
+        cpu.ptr += static_cast<std::size_t>(reflection_descriptor_index_) * descriptor_stride_;
+        device_->CreateShaderResourceView(reflection_target_.Get(), &srv, cpu);
+        reflection_srv_gpu_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
+        reflection_srv_gpu_.ptr +=
+            static_cast<std::size_t>(reflection_descriptor_index_) * descriptor_stride_;
     }
 
     // Optional HDR-compositor tuning overrides (defaults give the retail glow):
@@ -1730,6 +1807,22 @@ private:
                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                 command_list_->ResourceBarrier(1, &to_srv);
             }
+            // Planar reflection pass (retail g_ReflectionSampler): replay the opaque world MIRRORED
+            // about the water plane into the reflection RT, then transition it to a PS resource so
+            // the water pass samples it. Self-contained (own RT/viewport/clear), like the shadow pass.
+            if (reflection_target_ && world_renderer_.has_water()) {
+                const auto refl_to_rt =
+                    transition(reflection_target_.Get(),
+                               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                               D3D12_RESOURCE_STATE_RENDER_TARGET);
+                command_list_->ResourceBarrier(1, &refl_to_rt);
+                world_renderer_.render_reflection(command_list_.Get(), game_.scene, width_, height_,
+                                                  game_.elapsed_seconds);
+                const auto refl_to_srv =
+                    transition(reflection_target_.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                command_list_->ResourceBarrier(1, &refl_to_srv);
+            }
             // Rebind the same color target WITH the depth buffer so the world renderer
             // gets real occlusion (frontend states render depthless above).
             if (depth_target_) {
@@ -1926,6 +2019,12 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE shadow_dsv_{};
     D3D12_GPU_DESCRIPTOR_HANDLE shadow_srv_gpu_{};
     UINT shadow_descriptor_index_ = 0;
+    ComPtr<ID3D12Resource> reflection_target_;  // planar reflection colour RT (retail g_ReflectionSampler)
+    ComPtr<ID3D12Resource> reflection_depth_;   // its own depth (never sampled)
+    D3D12_CPU_DESCRIPTOR_HANDLE reflection_rtv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE reflection_dsv_{};
+    D3D12_GPU_DESCRIPTOR_HANDLE reflection_srv_gpu_{};
+    UINT reflection_descriptor_index_ = 0;
     float hdr_exposure_ = 1.0f;  // compositor exposure (1.0 == the old direct-to-LDR clamp)
     float hdr_bloom_threshold_ = 0.62f;  // HDR level above which bloom is extracted
     float hdr_bloom_intensity_ = 0.90f;  // bloom add strength (0 == no bloom = byte-identical)

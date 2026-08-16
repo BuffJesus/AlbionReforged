@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -42,6 +43,10 @@ struct Constants {
     // y=depth bias, z=enabled (1/0), w=strength (how dark the shadowed sun term goes).
     float light_view_projection[4][4]{};
     float shadow_params[4]{0.0f, 0.0f, 0.0f, 1.0f};
+    // Reflection-pass clip plane (xyz = world plane normal, w = -planeY). Non-zero ONLY during
+    // render_reflection so vs_reflect clips submerged geometry out of the mirror; 0 in every other
+    // pass (no SV_ClipDistance cost — the main pass uses vs_main which writes no clip distance).
+    float clip_plane[4]{0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 // b1 point-light cbuffer (level_lights_effects_re.txt §3.1). Mirrors the HLSL layout:
@@ -499,6 +504,19 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
                                 range.is_water, range.is_character, range.center, range.radius,
                                 range.max_draw_distance});
     }
+    // Derive the single reflection plane Y = radius-weighted mean of the water ranges' centres
+    // (PHASE-1: one plane; multi-height canals collapse here — see header). has_water_ gates the pass.
+    {
+        double sum_y = 0.0, sum_w = 0.0;
+        for (const auto& range : draw_ranges_) {
+            if (!range.is_water) continue;
+            const double w = static_cast<double>(range.radius) + 1e-3;
+            sum_y += static_cast<double>(range.center[1]) * w;
+            sum_w += w;
+        }
+        has_water_ = sum_w > 0.0;
+        water_plane_y_ = has_water_ ? static_cast<float>(sum_y / sum_w) : 0.0f;
+    }
     // Character (hero) meshes for the dynamic-pose path (set_character_pose).
     character_meshes_.clear();
     for (const auto& cm : geometry.character_meshes) {
@@ -507,9 +525,14 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     }
     vertex_count_ = static_cast<std::uint32_t>(geometry.vertices.size());
 
+    // TWO 256-aligned slices: slice 0 = the main pass (view_projection/eye), slice 1 = the
+    // reflection pass (mirrored VP/eye + clip plane). A single slice would race — the reflection
+    // draws and the main draws execute on the GPU AFTER submission and would both read the last
+    // CPU write. Separate slices give each pass its own constants. (The shadow pass needs no slice
+    // of its own: it reads only light_view_projection, which render() writes to the same value.)
     const auto constant_size = (sizeof(Constants) + 255u) & ~255u;
     const auto heap = upload_heap();
-    const auto description = buffer_description(constant_size);
+    const auto description = buffer_description(constant_size * 2);
     if (FAILED(device->CreateCommittedResource(
             &heap, D3D12_HEAP_FLAG_NONE, &description, D3D12_RESOURCE_STATE_GENERIC_READ,
             nullptr, IID_PPV_ARGS(&constant_buffer_))) ||
@@ -518,6 +541,9 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
         return false;
     }
     constant_address_ = constant_buffer_->GetGPUVirtualAddress();
+    reflection_constant_address_ = constant_address_ + constant_size;
+    mapped_reflection_constants_ =
+        static_cast<std::uint8_t*>(mapped_constants_) + constant_size;
 
     // b1 Lights cbuffer: upload the cooked point lights once. Static (the light set
     // is fixed for a level), so it's an upload buffer written at init and never mapped
@@ -563,6 +589,7 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     Microsoft::WRL::ComPtr<ID3DBlob> vertex_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> pixel_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> water_pixel_shader;
+    Microsoft::WRL::ComPtr<ID3DBlob> reflect_vertex_shader;  // vs_reflect (mirrored VP + clip plane)
     Microsoft::WRL::ComPtr<ID3DBlob> shader_errors;
     constexpr char shader_source[] = R"(
 cbuffer Camera : register(b0) {
@@ -577,6 +604,7 @@ cbuffer Camera : register(b0) {
     float4 sky_horizon;  // theme sky gradient bottom
     row_major float4x4 light_view_projection;  // sun ortho VP the shadow map was rendered with
     float4 shadow_params;  // x=texel size, y=depth bias, z=enabled, w=strength
+    float4 clip_plane;     // reflection pass: xyz=plane normal, w=-planeY (0 = no clip)
 };
 // Local point lights (level_lights_effects_re.txt §3.1): lamp posts, lanterns, braziers.
 cbuffer Lights : register(b1) {
@@ -595,6 +623,7 @@ Texture2D normalTex : register(t1);
 Texture2D specTex : register(t2);
 Texture2D<float> scene_depth : register(t3);
 Texture2D<float> shadow_map : register(t4);
+Texture2D reflection_tex : register(t5);  // planar reflection RT (retail g_ReflectionSampler)
 SamplerState albedo_sampler : register(s0);
 SamplerComparisonState shadow_sampler : register(s1);
 
@@ -626,6 +655,28 @@ PSInput vs_main(VSInput input) {
     output.color = input.color;
     output.uv = input.uv;
     output.probe = input.probe;
+    return output;
+}
+// Reflection-pass VS: same as vs_main but view_projection is the MIRRORED VP (built on the CPU) and
+// a clip distance drops geometry on the far side of the water plane so submerged props don't leak
+// into the reflection. ps_main consumes PSInput (SV_ClipDistance is a rasterizer system value it
+// ignores), so the reflection pass reuses ps_main for correctly-lit mirrored geometry.
+struct PSInputClip {
+    float4 position : SV_POSITION; float3 normal : NORMAL; float3 world_pos : TEXCOORD1;
+    float4 color : COLOR0; float2 uv : TEXCOORD0; float4 probe : COLOR1;
+    float clip : SV_ClipDistance0;
+};
+PSInputClip vs_reflect(VSInput input) {
+    PSInputClip output;
+    float3 world_position = input.position;  // reflection shows the static world (hero not mirrored)
+    output.position = mul(float4(world_position, 1.0), view_projection);
+    output.normal = input.normal;
+    output.world_pos = world_position;
+    output.color = input.color;
+    output.uv = input.uv;
+    output.probe = input.probe;
+    // keep geometry on the +normal side of the plane (above water): clip < 0 is discarded
+    output.clip = dot(world_position, clip_plane.xyz) + clip_plane.w;
     return output;
 }
 float4 ps_main(PSInput input) : SV_TARGET {
@@ -741,11 +792,23 @@ float4 ps_water(PSInput input) : SV_TARGET {
     // rendered night sky (sun_direction = light-travel dir; sun below horizon -> night).
     float wnight = saturate((sun_direction.y + 0.05) / 0.45);
     sky = lerp(sky, sky * 0.22 + float3(0.010, 0.018, 0.050), wnight);
+    // Planar reflection (retail PSHADER_WATERPATCH g_ReflectionSampler): when a reflection RT is
+    // bound (viewport_size.z>0.5) sample the MIRRORED opaque scene by screen-space uv, perturbed by
+    // the bump normal (retail REFLECTION_SCALE param[25]/[26] = water_params[6].yz; the screen-space
+    // conversion factor 0.02 is authored — retail perturbs a reflection tile, not screen uv). The RT
+    // is cleared to the sky so grazing/off-geometry pixels still read sky. Falls back to the analytic
+    // sky term above for scenes with no reflection target.
+    float3 reflection = sky;
+    if (viewport_size.z > 0.5) {
+        float2 refl_uv = input.position.xy / viewport_size.xy;
+        refl_uv += nxy * water_params[6].yz * 0.02;
+        reflection = reflection_tex.Sample(albedo_sampler, saturate(refl_uv)).rgb;
+    }
     float fres_reflect = saturate(fres + reflection_bias);
     float distf = saturate(length(eye_time.xyz - wp) / 75.0);
     float refl_strength = saturate(water_params[7].y);
     float refl = refl_strength * lerp(fres_reflect, 1.0, distf);
-    float3 col = watercol * (1.0 - refl_strength) + sky * refl;
+    float3 col = watercol * (1.0 - refl_strength) + reflection * refl;
     float3 L = normalize(sun_direction.xyz);             // authored light-travel direction
     float3 Ng = Nf;
     float glit = pow(saturate(dot(V, reflect(L, Ng))), water_params[9].x) *
@@ -783,12 +846,13 @@ float4 ps_water(PSInput input) : SV_TARGET {
     };
     if (FAILED(compile("vs_main", "vs_5_0", vertex_shader)) ||
         FAILED(compile("ps_main", "ps_5_0", pixel_shader)) ||
-        FAILED(compile("ps_water", "ps_5_0", water_pixel_shader))) {
+        FAILED(compile("ps_water", "ps_5_0", water_pixel_shader)) ||
+        FAILED(compile("vs_reflect", "vs_5_0", reflect_vertex_shader))) {
         error = "The native world shaders could not be compiled.";
         return false;
     }
 
-    D3D12_ROOT_PARAMETER root_parameters[7]{};
+    D3D12_ROOT_PARAMETER root_parameters[8]{};
     root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     root_parameters[0].Descriptor.ShaderRegister = 0;
     root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // PS reads sun_direction too
@@ -829,6 +893,15 @@ float4 ps_water(PSInput input) : SV_TARGET {
     root_parameters[6].DescriptorTable.NumDescriptorRanges = 1;
     root_parameters[6].DescriptorTable.pDescriptorRanges = &shadow_range;
     root_parameters[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    // t5 = planar reflection RT (PS only), sampled with the s0 linear sampler in the water pass.
+    D3D12_DESCRIPTOR_RANGE reflection_range{};
+    reflection_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    reflection_range.NumDescriptors = 1;
+    reflection_range.BaseShaderRegister = 5;
+    root_parameters[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    root_parameters[7].DescriptorTable.NumDescriptorRanges = 1;
+    root_parameters[7].DescriptorTable.pDescriptorRanges = &reflection_range;
+    root_parameters[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_STATIC_SAMPLER_DESC samplers[2]{};
     samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -847,7 +920,7 @@ float4 ps_water(PSInput input) : SV_TARGET {
     samplers[1].ShaderRegister = 1;
     samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_ROOT_SIGNATURE_DESC root_description{};
-    root_description.NumParameters = 7;
+    root_description.NumParameters = 8;
     root_description.pParameters = root_parameters;
     root_description.NumStaticSamplers = 2;
     root_description.pStaticSamplers = samplers;
@@ -918,6 +991,18 @@ float4 ps_water(PSInput input) : SV_TARGET {
     water.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     if (FAILED(device->CreateGraphicsPipelineState(&water, IID_PPV_ARGS(&water_pipeline_)))) {
         error = "The native world water pipeline could not be created.";
+        return false;
+    }
+
+    // Reflection pipeline: the opaque world PSO but with vs_reflect (mirrored VP + SV_ClipDistance).
+    // Renders opaque geometry into a separate colour RT + depth. Cull stays NONE (like the world/
+    // shadow PSOs — the cooked MDL has mixed winding, so the handedness flip from mirroring needs no
+    // FrontCounterClockwise change; if culling is ever enabled here, flip it).
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC reflection = pipeline;
+    reflection.VS = {reflect_vertex_shader->GetBufferPointer(), reflect_vertex_shader->GetBufferSize()};
+    reflection.PS = {pixel_shader->GetBufferPointer(), pixel_shader->GetBufferSize()};
+    if (FAILED(device->CreateGraphicsPipelineState(&reflection, IID_PPV_ARGS(&reflection_pipeline_)))) {
+        error = "The native world reflection pipeline could not be created.";
         return false;
     }
 
@@ -1153,6 +1238,108 @@ void NativeWorldRenderer::render_shadow(ID3D12GraphicsCommandList* command_list,
     }
 }
 
+void NativeWorldRenderer::render_reflection(ID3D12GraphicsCommandList* command_list,
+                                            const NativeScene& scene, std::uint32_t width,
+                                            std::uint32_t height, double elapsed_seconds) {
+    if (!reflection_pipeline_ || reflection_size_ == 0 || !has_water_ || width == 0 || height == 0)
+        return;
+    const float h = water_plane_y_;
+    const auto camera = compute_camera(width, height, elapsed_seconds);
+    const std::array<float, 3> eye = camera.position;
+    // Skip the pass when the camera is (near) the water plane or below it — the reflection is
+    // degenerate/invisible there and a below-water eye would mirror the sky onto itself.
+    if (eye[1] <= h + 0.01f) return;
+
+    Constants constants{};
+    // Reflected view-projection = R * VP (mirror about y=h in the code's row-vector convention):
+    // row0/row2 unchanged, row1 negated, row3 += 2h * row1.
+    const auto vp = compute_view_projection(width, height, elapsed_seconds);
+    for (int j = 0; j < 4; ++j) {
+        constants.view_projection[0][j] = vp[0 * 4 + j];
+        constants.view_projection[1][j] = -vp[1 * 4 + j];
+        constants.view_projection[2][j] = vp[2 * 4 + j];
+        constants.view_projection[3][j] = 2.0f * h * vp[1 * 4 + j] + vp[3 * 4 + j];
+    }
+    const auto sun = normalise(scene.sun_direction);
+    constants.sun_direction[0] = sun[0];
+    constants.sun_direction[1] = sun[1];
+    constants.sun_direction[2] = sun[2];
+    constants.sun_color[0] = scene.sun_color[0];
+    constants.sun_color[1] = scene.sun_color[1];
+    constants.sun_color[2] = scene.sun_color[2];
+    constants.viewport_size[0] = static_cast<float>(reflection_size_);
+    constants.viewport_size[1] = static_cast<float>(reflection_size_);
+    // Reflected eye (y mirrored about the plane) so ps_main's view-dependent spec reads correctly.
+    constants.eye_time[0] = eye[0];
+    constants.eye_time[1] = 2.0f * h - eye[1];
+    constants.eye_time[2] = eye[2];
+    constants.eye_time[3] = static_cast<float>(elapsed_seconds);
+    constants.fog_color[0] = scene.fog_color[0];
+    constants.fog_color[1] = scene.fog_color[1];
+    constants.fog_color[2] = scene.fog_color[2];
+    constants.fog_color[3] = scene.fog_max;
+    constants.fog_range[0] = scene.fog_start;
+    constants.fog_range[1] = scene.fog_end;
+    for (int i = 0; i < 3; ++i) {
+        constants.sky_zenith[i] = scene.sky_color[i];
+        constants.sky_horizon[i] = scene.sky_horizon_color[i];
+    }
+    // Shadows lit consistently with the main pass (the shadow map is already rendered this frame).
+    const bool shadows_on = shadow_size_ > 0 && sun[1] < -0.05f;
+    const auto light_vp = compute_light_view_projection(sun);
+    std::memcpy(constants.light_view_projection, light_vp.data(),
+                sizeof(constants.light_view_projection));
+    constants.shadow_params[0] = shadows_on ? 1.0f / static_cast<float>(shadow_size_) : 0.0f;
+    constants.shadow_params[1] = 0.0015f;
+    constants.shadow_params[2] = shadows_on ? 1.0f : 0.0f;
+    constants.shadow_params[3] = 0.8f;
+    // Clip plane keeps geometry on the +Y (above-water) side out of the mirror: clip = y - h >= 0.
+    constants.clip_plane[0] = 0.0f;
+    constants.clip_plane[1] = 1.0f;
+    constants.clip_plane[2] = 0.0f;
+    constants.clip_plane[3] = -h;
+    std::memcpy(mapped_reflection_constants_, &constants, sizeof(constants));
+
+    const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(reflection_size_),
+                                  static_cast<float>(reflection_size_), 0.0f, 1.0f};
+    const D3D12_RECT scissor{0, 0, static_cast<LONG>(reflection_size_),
+                             static_cast<LONG>(reflection_size_)};
+    command_list->RSSetViewports(1, &viewport);
+    command_list->RSSetScissorRects(1, &scissor);
+    command_list->OMSetRenderTargets(1, &reflection_rtv_, FALSE, &reflection_dsv_);
+    // Clear the RT to the theme horizon sky so off-geometry (grazing) reflection pixels read sky.
+    const float clear_sky[4]{scene.sky_horizon_color[0], scene.sky_horizon_color[1],
+                             scene.sky_horizon_color[2], 1.0f};
+    command_list->ClearRenderTargetView(reflection_rtv_, clear_sky, 0, nullptr);
+    command_list->ClearDepthStencilView(reflection_dsv_, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
+    command_list->SetPipelineState(reflection_pipeline_.Get());
+    command_list->SetGraphicsRootSignature(root_signature_.Get());
+    command_list->SetGraphicsRootConstantBufferView(0, reflection_constant_address_);
+    command_list->SetGraphicsRootDescriptorTable(1, texture_gpu_handle_);
+    command_list->SetGraphicsRootConstantBufferView(2, light_address_);
+    if (shadow_size_ > 0) command_list->SetGraphicsRootDescriptorTable(6, shadow_srv_gpu_);
+    command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    command_list->IASetVertexBuffers(0, 1, &vertex_view_);
+    command_list->IASetIndexBuffer(&index_view_);
+    for (const auto& range : draw_ranges_) {
+        if (range.is_water || range.is_character) continue;  // opaque static world only
+        if (range_distance_culled(range, eye)) continue;
+        auto texture_handle = texture_gpu_handle_;
+        texture_handle.ptr += static_cast<std::size_t>(range.material_index) * 3 *
+                             texture_descriptor_stride_;
+        command_list->SetGraphicsRootDescriptorTable(1, texture_handle);
+        command_list->SetGraphicsRootConstantBufferView(
+            3, water_address_ + static_cast<D3D12_GPU_VIRTUAL_ADDRESS>(range.material_index) * 256);
+        struct DrawConstants {
+            std::uint32_t is_character;
+            float character_offset[3];
+            float character_motion[4];
+        } draw_constants{0u, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f}};
+        command_list->SetGraphicsRoot32BitConstants(5, 8, &draw_constants, 0);
+        command_list->DrawIndexedInstanced(range.index_count, 1, range.first_index, 0, 0);
+    }
+}
+
 void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
                                  const NativeScene& scene, std::uint32_t width,
                                  std::uint32_t height, double elapsed_seconds) {
@@ -1175,6 +1362,11 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     constants.sun_color[3] = 0.0f;
     constants.viewport_size[0] = static_cast<float>(width);
     constants.viewport_size[1] = static_cast<float>(height);
+    // z>0.5 => a planar reflection RT is bound (water PS samples reflection_tex instead of the
+    // analytic sky). Gated on the scene actually having water. Diagnostic: FABLE2NATIVE_NO_REFLECT
+    // forces the analytic-sky fallback for an A/B against the planar reflection.
+    static const bool no_reflect = std::getenv("FABLE2NATIVE_NO_REFLECT") != nullptr;
+    constants.viewport_size[2] = (!no_reflect && reflection_size_ > 0 && has_water_) ? 1.0f : 0.0f;
     constants.eye_time[0] = eye[0];
     constants.eye_time[1] = eye[1];
     constants.eye_time[2] = eye[2];
@@ -1224,6 +1416,9 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     }
     if (shadow_size_ > 0) {
         command_list->SetGraphicsRootDescriptorTable(6, shadow_srv_gpu_);  // t4 shadow map
+    }
+    if (reflection_size_ > 0 && has_water_) {
+        command_list->SetGraphicsRootDescriptorTable(7, reflection_srv_gpu_);  // t5 reflection RT
     }
     command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     command_list->IASetVertexBuffers(0, 1, &vertex_view_);
