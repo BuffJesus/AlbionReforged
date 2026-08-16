@@ -76,6 +76,17 @@ struct Geometry {
         float max_draw_distance = 0.0f;
     };
     std::vector<DrawRange> draw_ranges;
+    // Per character (hero) mesh: its vertex sub-range in the (upload-heap) vertex buffer + the
+    // instance transform. set_character_pose() rewrites these vertices in place each frame from the
+    // AnimationPlayer's model-space skinned positions. See docs/RENDERER_INTERFACE.md §2.
+    struct CharacterMesh {
+        std::uint32_t base_vertex = 0;
+        std::uint32_t vertex_count = 0;
+        std::array<float, 3> rotation{};
+        float scale = 1.0f;
+        std::array<float, 3> position{};
+    };
+    std::vector<CharacterMesh> character_meshes;
 };
 
 D3D12_HEAP_PROPERTIES upload_heap() {
@@ -221,6 +232,11 @@ Geometry make_geometry(const NativeScene& scene) {
         const bool is_water = mesh.material < scene.materials.size() &&
                               scene.materials[mesh.material].name == "water";
         const bool is_character = mesh.name.rfind("hero", 0) == 0;
+        if (is_character) {
+            geometry.character_meshes.push_back(
+                {base, static_cast<std::uint32_t>(mesh.vertices.size()), instance.rotation,
+                 instance.scale, instance.position});
+        }
         std::array<float, 3> center{0.0f, 0.0f, 0.0f};
         float radius = 0.0f;
         if (have_bounds) {
@@ -483,6 +499,13 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
                                 range.is_water, range.is_character, range.center, range.radius,
                                 range.max_draw_distance});
     }
+    // Character (hero) meshes for the dynamic-pose path (set_character_pose).
+    character_meshes_.clear();
+    for (const auto& cm : geometry.character_meshes) {
+        character_meshes_.push_back({cm.base_vertex, cm.vertex_count, cm.rotation, cm.scale,
+                                     cm.position});
+    }
+    vertex_count_ = static_cast<std::uint32_t>(geometry.vertices.size());
 
     const auto constant_size = (sizeof(Constants) + 255u) & ~255u;
     const auto heap = upload_heap();
@@ -1080,6 +1103,25 @@ std::array<float, 16> NativeWorldRenderer::compute_light_view_projection(
     at(2, 2) = forward[2] * inv_depth; at(3, 2) = (-edf - near_plane) * inv_depth;
     at(3, 3) = 1.0f;  // ortho: w = 1
     return m;
+}
+
+void NativeWorldRenderer::set_character_pose(
+    std::size_t mesh_index, const std::vector<std::array<float, 3>>& model_positions) {
+    if (mesh_index >= character_meshes_.size() || !vertex_buffer_) return;
+    const auto& cm = character_meshes_[mesh_index];
+    if (model_positions.size() != cm.vertex_count) return;                 // must match the mesh
+    if (static_cast<std::uint64_t>(cm.base_vertex) + cm.vertex_count > vertex_count_) return;
+    void* mapped = nullptr;
+    const D3D12_RANGE no_read{0, 0};  // we only write
+    if (FAILED(vertex_buffer_->Map(0, &no_read, &mapped)) || !mapped) return;
+    auto* verts = static_cast<Vertex*>(mapped);
+    for (std::uint32_t i = 0; i < cm.vertex_count; ++i) {
+        // AnimationPlayer gives MODEL-space skinned positions; apply the hero instance transform
+        // (same as the bind-pose bake) to get world space, then overwrite the position in place.
+        verts[cm.base_vertex + i].position =
+            place_vertex(model_positions[i], cm.rotation, cm.scale, cm.position);
+    }
+    vertex_buffer_->Unmap(0, nullptr);
 }
 
 void NativeWorldRenderer::render_shadow(ID3D12GraphicsCommandList* command_list,

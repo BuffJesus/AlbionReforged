@@ -64,6 +64,14 @@ struct Geometry {
         float max_draw_distance = 0.0f;  // 0 = never cull
     };
     std::vector<DrawRange> draw_ranges;
+    struct CharacterMesh {
+        std::uint32_t base_vertex = 0;
+        std::uint32_t vertex_count = 0;
+        std::array<float, 3> rotation{};
+        float scale = 1.0f;
+        std::array<float, 3> position{};
+    };
+    std::vector<CharacterMesh> character_meshes;
 };
 
 std::array<float, 3> subtract(const std::array<float, 3>& a,
@@ -169,6 +177,11 @@ Geometry make_geometry(const NativeScene& scene) {
         const bool is_water = mesh.material < scene.materials.size() &&
                               scene.materials[mesh.material].name == "water";
         const bool is_character = mesh.name.rfind("hero", 0) == 0;
+        if (is_character) {
+            geometry.character_meshes.push_back(
+                {base, static_cast<std::uint32_t>(mesh.vertices.size()), instance.rotation,
+                 instance.scale, instance.position});
+        }
         std::array<float, 3> center{0.0f, 0.0f, 0.0f};
         float radius = 0.0f;
         if (have_bounds) {
@@ -912,6 +925,12 @@ bool NativeVulkanWorldRenderer::initialise(VkPhysicalDevice physical_device,
                                 range.is_water, range.is_character, range.center, range.radius,
                                 range.max_draw_distance});
     }
+    character_meshes_.clear();
+    for (const auto& cm : geometry.character_meshes) {
+        character_meshes_.push_back({cm.base_vertex, cm.vertex_count, cm.rotation, cm.scale,
+                                     cm.position});
+    }
+    vertex_count_ = static_cast<std::uint32_t>(geometry.vertices.size());
 
     std::vector<std::uint32_t> vertex_code;
     std::vector<std::uint32_t> fragment_code;
@@ -1327,6 +1346,23 @@ void NativeVulkanWorldRenderer::render_pass(VkCommandBuffer command_buffer,
                            sizeof(push_constants), &push_constants);
         vkCmdDrawIndexed(command_buffer, range.index_count, 1, range.first_index, 0, 0);
     }
+}
+
+void NativeVulkanWorldRenderer::set_character_pose(
+    std::size_t mesh_index, const std::vector<std::array<float, 3>>& model_positions) {
+    if (mesh_index >= character_meshes_.size() || vertex_memory_ == VK_NULL_HANDLE) return;
+    const auto& cm = character_meshes_[mesh_index];
+    if (model_positions.size() != cm.vertex_count) return;
+    if (static_cast<std::uint64_t>(cm.base_vertex) + cm.vertex_count > vertex_count_) return;
+    void* mapped = nullptr;
+    if (vkMapMemory(device_, vertex_memory_, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS || !mapped)
+        return;
+    auto* verts = static_cast<Vertex*>(mapped);
+    for (std::uint32_t i = 0; i < cm.vertex_count; ++i) {
+        verts[cm.base_vertex + i].position =
+            place_vertex(model_positions[i], cm.rotation, cm.scale, cm.position);
+    }
+    vkUnmapMemory(device_, vertex_memory_);
 }
 
 void NativeVulkanWorldRenderer::render(VkCommandBuffer command_buffer,

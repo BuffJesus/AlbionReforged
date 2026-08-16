@@ -91,6 +91,17 @@ public:
         character_motion_phase_ = phase;
         character_motion_strength_ = strength;
     }
+    // Dynamic-mesh (hero skinning) display path (docs/RENDERER_INTERFACE.md §2). Rewrites character
+    // mesh `mesh_index`'s vertices in the upload-heap vertex buffer from AnimationPlayer::skin()'s
+    // MODEL-space skinned positions (the renderer applies the hero instance transform -> world).
+    // model_positions.size() must equal the mesh's vertex_count. No-op if unused (static bind pose).
+    // Positions only — normals stay at bind (lighting on the animated hero is approximate for now).
+    void set_character_pose(std::size_t mesh_index,
+                            const std::vector<std::array<float, 3>>& model_positions);
+    [[nodiscard]] std::size_t character_mesh_count() const noexcept { return character_meshes_.size(); }
+    [[nodiscard]] std::uint32_t character_mesh_vertex_count(std::size_t i) const noexcept {
+        return i < character_meshes_.size() ? character_meshes_[i].vertex_count : 0u;
+    }
     [[nodiscard]] const std::array<float, 3>& scene_center() const noexcept { return scene_center_; }
     [[nodiscard]] float scene_radius() const noexcept { return scene_radius_; }
 
@@ -147,6 +158,16 @@ private:
     };
     std::vector<DrawRange> draw_ranges_;
     std::array<float, 3> camera_eye_{0.0f, 0.0f, 0.0f};  // last frame's eye, for shadow-pass culling
+    // Character (hero) meshes for the dynamic-pose path — vertex sub-range + instance transform.
+    struct CharacterMesh {
+        std::uint32_t base_vertex = 0;
+        std::uint32_t vertex_count = 0;
+        std::array<float, 3> rotation{};
+        float scale = 1.0f;
+        std::array<float, 3> position{};
+    };
+    std::vector<CharacterMesh> character_meshes_;
+    std::uint32_t vertex_count_ = 0;  // total vertices in the buffer (bounds-check pose writes)
     void* mapped_constants_ = nullptr;
     D3D12_GPU_DESCRIPTOR_HANDLE texture_gpu_handle_{};
     std::uint32_t texture_descriptor_stride_ = 0;
