@@ -28,8 +28,22 @@ whole feature is retail-faithful for the town. **Both backends built + screensho
   2048², an engine constant not in GDB) + the opaque-material shadow-buffer term for shadow-receiving material
   permutations (`Fable2AssetBrowser/source/build/shader_bank_extract.exe` pulls programs from ShadersRelease.sbk).
   Depth bias kept small (retail's GDB 0 suits its screen-space resolve, not our projected map).
-- **★ NEXT:** same-old retail-fidelity list — sun disc/beams/glare (needs a level that authors them; chapter2slums
-  authors none), HDR-range lighting, sunlight balance. GhidraMCP is live on port 8089 (GUI launched this session).
+### THEME-AUTHORED AMBIENT (same session, commit 382af8f) — the #1 daytime brightness gap
+The native world PS hardcoded a made-up **bright cool-blue** hemisphere ambient (`{0.18,0.20,0.24}→{0.55,0.58,0.62}`),
+which read far too bright/flat vs the AssetBrowser oracle (dark/moody town). Replaced with the theme's **authored**
+ambient from `environmentthemes.gdb` (same FNV-1/GDB method): `AmbientColour` (flat) from the **Lighting** sub-record
+(0x0B152C5D) + `SkyColourFinalBounceTop/Bottom` (hemisphere sky-bounce) from the **LightingPreprocessor** sub-record
+(0x43217304 — NOT Lighting). Town 0x72d66d23: flat `{0.124,0.039,0.014}` warm-dark + bounce top `{0.20,0.29,0.50}` /
+bottom `{0.38,0.39,0.43}`. New opt-in F2SCENE opcodes `ambient`/`sky_bounce` (cook_levels.py → native_scene → both
+cbuffers → both shaders); PS uses `ambient_flat + lerp(bounce_bottom, bounce_top, 0.5+0.5*N.y)`, per-prop `.lmp`
+probes still override. Screenshot-verified both backends: town noticeably darker/moodier toward the oracle,
+D3D12==Vulkan. Memory `fable2-theme-ambient-lighting`. ⚠ Values solid; the exact combination formula (flat + hemi
+add) is inferred from field names — no formula oracle (AB doesn't consume these fields; retail does it via ramp
+tf4 + c67/c68/c28 sky math, not ported).
+
+- **★ NEXT:** more authored theme data now that the GDB method is proven (`AmbientNormalMapDarkeningColour`, the
+  `LightingPreprocessor` fields); then sun disc/beams/glare (needs a level that authors them; chapter2slums authors
+  none), HDR-range lighting. GhidraMCP is live on port 8089 (GUI launched this session).
 
 > **CROSS-TRACK (2026-08-16): decomp/native → recomp leverage is consolidated in
 > [DECOMP_TO_RECOMP.md](DECOMP_TO_RECOMP.md).** Highest-leverage recomp action = the BLACK-WORLD
