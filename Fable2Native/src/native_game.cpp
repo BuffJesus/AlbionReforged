@@ -40,6 +40,37 @@ bool NativeGame::enable_scripting() {
         vm.push_number(g ? static_cast<double>(g->world.npcs.size()) : 0.0);
         return 1;
     });
+    // --- action natives (drive the gameplay systems from script) ---
+    script_vm->register_native("Player", "SetPosition", [](NativeScriptVM& vm) -> int {
+        if (auto* g = static_cast<NativeGame*>(vm.user_data())) {
+            g->player.set_position({static_cast<float>(vm.arg_number(1)),
+                                    static_cast<float>(vm.arg_number(2)),
+                                    static_cast<float>(vm.arg_number(3))});
+        }
+        return 0;
+    });
+    script_vm->register_native("Game", "SetChapter", [](NativeScriptVM& vm) -> int {
+        if (auto* g = static_cast<NativeGame*>(vm.user_data()))
+            g->game_state.header.chapter = static_cast<std::uint32_t>(vm.arg_number(1));
+        return 0;
+    });
+    // World.DamageNpc(index, amount) -> killed? (applies the Health.Modify verb)
+    script_vm->register_native("World", "DamageNpc", [](NativeScriptVM& vm) -> int {
+        auto* g = static_cast<NativeGame*>(vm.user_data());
+        const int i = static_cast<int>(vm.arg_number(1));
+        const float amount = static_cast<float>(vm.arg_number(2));
+        bool killed = false;
+        if (g && i >= 0 && i < static_cast<int>(g->world.npcs.size())) {
+            NativeEntity* e = g->world.entities.find(g->world.npcs[static_cast<std::size_t>(i)].entity_uid);
+            auto* h = e ? e->get<HealthComponent>(kTypeIdHealth) : nullptr;
+            if (h) {
+                killed = h->modify(-amount);
+                if (killed) g->world.npcs[static_cast<std::size_t>(i)].controller.alive = false;
+            }
+        }
+        vm.push_bool(killed);
+        return 1;
+    });
 
     // Wire the three managers to their Lua Update entry points, in the retail-recovered
     // order (Quest -> General -> AI). The Lua side owns its coroutine scheduling; the

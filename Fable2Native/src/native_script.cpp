@@ -6,6 +6,9 @@ extern "C" {
 #include "lualib.h"
 }
 
+#include <fstream>
+#include <iterator>
+
 namespace f2 {
 
 namespace {
@@ -88,6 +91,16 @@ bool NativeScriptVM::run_source(const char* source, const char* chunk_name) {
 
 bool NativeScriptVM::run_bytecode(const void* data, std::size_t size, const char* chunk_name) {
     return load_and_run_(data, size, chunk_name);
+}
+
+bool NativeScriptVM::run_file(const char* path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        last_error_ = std::string("cannot open '") + path + "'";
+        return false;
+    }
+    std::vector<char> buf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    return load_and_run_(buf.data(), buf.size(), path);
 }
 
 bool NativeScriptVM::call_global(const char* fn_name, double dt) {

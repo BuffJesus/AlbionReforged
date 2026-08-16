@@ -53,6 +53,10 @@ public:
     bool run_source(const char* source, const char* chunk_name = "=chunk");
     bool run_bytecode(const void* data, std::size_t size, const char* chunk_name = "=bytecode");
 
+    // Load + run a file (Lua source OR compiled LuaQ — auto-detected). The basis for
+    // mod scripts and the game's own script files. Returns false + sets last_error().
+    bool run_file(const char* path);
+
     // Call a global function `fn_name(dt)`. Returns false if it is missing or errors
     // (last_error set). This is how a ScriptSystems manager drives its Lua Update.
     bool call_global(const char* fn_name, double dt);

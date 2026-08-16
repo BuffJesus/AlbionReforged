@@ -828,6 +828,38 @@ int main() {
         assert(game.script_log.size() == before);
     }
 
+    // ---- P6: a mod-style Lua FILE drives the gameplay systems via action natives ----
+    {
+        f2::NativeScene ms;
+        f2::NativeMesh ground; f2::NativeVertex mv;
+        const float quad[4][2] = {{-20, -20}, {20, -20}, {20, 20}, {-20, 20}};
+        for (const auto& c : quad) { mv.position = {c[0], 0.0f, c[1]}; ground.vertices.push_back(mv); }
+        ground.indices = {0, 1, 2, 0, 2, 3}; ms.meshes.push_back(ground);
+        f2::NativeMesh nm; nm.name = "npc0_0"; ms.meshes.push_back(nm);
+        f2::NativeInstance mgi; mgi.mesh = 0; ms.instances.push_back(mgi);
+        f2::NativeInstance mni; mni.mesh = 1; mni.position = {3.0f, 0.0f, 0.0f}; ms.instances.push_back(mni);
+
+        f2::NativeGame game; game.scene = ms; game.prepare_world();
+        assert(game.enable_scripting());
+
+        const auto mod_path = std::filesystem::temp_directory_path() / "f2native_mod.lua";
+        std::ofstream(mod_path)
+            << "Player.SetPosition(11, 0, 22)\n"
+            << "Game.SetChapter(5)\n"
+            << "assert(World.NpcCount() == 1)\n"
+            << "assert(World.DamageNpc(0, 30) == false)\n";  // 70-30=40, survives
+        assert(game.script_vm->run_file(mod_path.string().c_str()));
+
+        assert(approx(game.player.position()[0], 11.0f) && approx(game.player.position()[2], 22.0f));
+        assert(game.game_state.header.chapter == 5);
+        auto* mnpc = game.world.entities.find(game.world.npcs[0].entity_uid);
+        assert(approx(mnpc->get<f2::HealthComponent>(f2::kTypeIdHealth)->health, 40.0f));
+        std::filesystem::remove(mod_path);
+
+        // Missing file is reported, not crashed.
+        assert(!game.script_vm->run_file("does_not_exist.lua") && !game.script_vm->last_error().empty());
+    }
+
     // ---- Integration: full NativeGame InWorld tick (movement+NPC+combat+save) ----
     {
         f2::NativeScene s;
