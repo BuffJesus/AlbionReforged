@@ -1,0 +1,53 @@
+# Native world-renderer interface (environment ↔ gameplay coordination)
+
+The world renderer (`native_world_renderer.cpp` + `native_vulkan_world_renderer.cpp`, both
+backends, parity-disciplined) is owned by the **environment/rendering session**. The **gameplay
+session** consumes it (feeds data, sets flags). This doc is the contract so the two sessions don't
+collide in the renderer files.
+
+## 1. Per-instance draw-distance culling — ✅ SHIPPED (commit e0aa3ba)
+
+The renderer draws one range per instance, so distance culling is per-instance.
+
+**Interface (gameplay sets, renderer applies):**
+- `NativeInstance.max_draw_distance` (world units; **0 = never cull**, default → existing scenes
+  byte-identical). Or emit it as the optional trailing token on the F2SCENE line:
+  `instance <mesh> <px py pz> <rx ry rz> <scale> [max_draw_distance]`.
+- The cook should set it from the entity's **DrawDistance** GDB field (grounded values from the
+  gameplay session: `MaxDrawDistance=200`, `BillboardDistance=70`).
+
+**Renderer side (done):** `make_geometry` bakes each range's world-space bounding sphere
+(`center`+`radius`); both draw loops (opaque/water + shadow) skip a range when
+`dist(eye, center) - radius > max_draw_distance`. Camera eye cached (`camera_eye_`) so the shadow
+pass (runs before `render()`) culls consistently (a culled instance casts no shadow either).
+Verified both backends: aggressive `dist=1` culls the whole town except huge-radius backdrop;
+default renders the full town.
+
+## 2. Dynamic-mesh path for hero skinning — ⏳ DESIGN, blocked on anim-sampler RE
+
+Runtime hero animation needs the character mesh's vertices to change per frame. The cook already
+bakes a **static idle pose**; per-frame playback needs the skinned vertices each frame. The renderer
+bakes all geometry into one static vertex buffer today, and the hero is an `is_character` range with
+only a rigid `character_offset` + bob applied in the VS.
+
+**Decision needed from the gameplay session (the data shape) before I build:**
+- **Option A — CPU-skinned vertices (recommended for one hero):** gameplay computes the skinned
+  character vertices on CPU (bone matrices from the RE'd anim sampler × the MDL skin weights) and
+  pushes them each frame. Renderer provides `set_character_vertices(range_index, span<Vertex>)` and
+  carves the character range into a **dynamic (upload-heap) vertex buffer** re-uploaded per frame.
+  No vertex-format change; simplest; flexible. Cost: a few-thousand-vertex upload per frame (fine
+  for one hero).
+- **Option B — GPU skinning:** renderer skins in the VS from bone matrices. Needs the cook to add
+  **bone IDs + weights** to the native `Vertex` (the 28-byte skinned MDL stride carries them,
+  `world_shading_model_re.txt §1`) + a bone-matrix cbuffer/SSBO + `set_bone_matrices(span<mat4>)`.
+  More renderer plumbing + a vertex-format change, but no per-frame vertex upload.
+
+**Renderer side I'll build once the shape is chosen** (both backends, additive): the dynamic buffer
+or bone-matrix upload + the setter, wired into the existing character range. **Blocked only on:**
+(1) the anim-sampler RE (bone matrices — the gameplay session's research agent, `anim_havok §F.2`),
+and (2) the A/B choice above. Ping me with the choice + the data shape and I'll land it.
+
+## Coordination rules
+- Only the environment session edits `native_world_renderer.cpp` / `native_vulkan_world_renderer.cpp`
+  / `native_scene.h` renderer structs. Gameplay sets the interface fields + feeds data.
+- Every renderer change is D3D12 + Vulkan in the same commit (parity is non-negotiable).
