@@ -23,7 +23,23 @@ pass (runs before `render()`) culls consistently (a culled instance casts no sha
 Verified both backends: aggressive `dist=1` culls the whole town except huge-radius backdrop;
 default renders the full town.
 
-## 2. Dynamic-mesh path for hero skinning — ⏳ READY TO BUILD (anim math shipped: P5 b188043)
+## 2. Dynamic-mesh path for hero skinning — ✅ RENDERER CHANNEL SHIPPED (48a1c11); awaits consumer
+
+**BUILT 2026-08-16 (both backends):** `set_character_pose(mesh_index, model_positions)` on both world
+renderers. The vertex buffer is upload-heap/host-visible, so each hero mesh's vertices are rewritten
+IN PLACE (no separate buffer / index rebase / draw change). `make_geometry` captures each `hero*`
+mesh's vertex sub-range + instance transform; `set_character_pose` writes
+`place_vertex(model_pos, hero xform)` — the SAME transform as the bind bake (so bind input reproduces
+the bake; `AnimationPlayer::skin()` output animates it). `character_mesh_count()` /
+`character_mesh_vertex_count(i)` expose the contract. Positions-only (normals stay at bind → animated-
+hero lighting is approximate for now). No-op if unused. Correct-by-construction; end-to-end animation
+awaits the **consumer**: gameplay per frame does `animPlayer.update(dt); animPlayer.skin(heroBind,
+positions); worldRenderer.set_character_pose(0, positions);` — which needs the **hero
+SkinnedVertex/AnimClip cook** (gameplay's pipeline, via `fable_pose.py`). Ping me when it lands to wire
++ verify on screen; I can also add normal-skinning + multi-mesh once a real hero scene exists.
+
+--- (original design, resolved + now built) ---
+### (was) READY TO BUILD (anim math shipped: P5 b188043)
 
 **UPDATE 2026-08-16:** the gameplay session shipped the skinning MATH (`native_animation.h/.cpp`,
 `AnimationPlayer` + LBS, grounded in `anim_runtime_sampler_re.txt`/`anim_pose_re.txt`). It's a
