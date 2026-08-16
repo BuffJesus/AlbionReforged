@@ -29,6 +29,16 @@ class NativeCollisionWorld; // native_physics.h
 struct NpcAgent {
     std::uint64_t entity_uid = 0;
     NpcController controller;
+
+    // Stage 2 scripted navigation (Navigation.MoveToPosition/StopMoving/GetCurrentSpeed). When
+    // has_goal, update_npcs drives the controller toward `goal` at `goal_speed` (wu/s) until it
+    // arrives within `arrive_radius`, instead of the default player-follow stand-in. last_speed
+    // is the planar speed of the last step (GetCurrentSpeed readback).
+    bool has_goal = false;
+    std::array<float, 3> goal{0.0f, 0.0f, 0.0f};
+    float arrive_radius = 0.6f;
+    float goal_speed = 0.0f;
+    float last_speed = 0.0f;
 };
 
 struct NativeWorld {

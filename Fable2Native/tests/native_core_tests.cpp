@@ -330,6 +330,46 @@ static void test_stage2_control() {
     F2_CHECK(vm.last_error().empty());
 }
 
+// Stage 2 (Slice 2): Navigation.* scripted movement — nav goal motor + ENavigationSpeed enum.
+static void test_stage2_navigation() {
+    const std::filesystem::path bnk_path =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    const std::filesystem::path data_root = bnk_path.parent_path().parent_path();
+    if (!std::filesystem::exists(bnk_path)) return;
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    F2_CHECK(game.boot_game_scripts(data_root) > 0);
+    F2_CHECK(game.load_quest_scripts() > 0);  // loads navigationspeedenum (ENavigationSpeed)
+    f2::NativeScriptVM& vm = *game.script_vm;
+
+    // ENavigationSpeed is a real enum table (not black-holed).
+    vm.run_source("assert(ENavigationSpeed and ENavigationSpeed.NAV_SPEED_WALK == 2 "
+                  "and ENavigationSpeed.NAV_SPEED_RUN == 5)", "=t_navenum");
+    F2_CHECK(vm.last_error().empty());
+
+    // Give a spawned NPC a nav goal via the public native; an agent is created on demand.
+    vm.run_source(
+        "__nav = Debug.CreateEntityAt('CreatureVillager','Bob', 0,0,0); "
+        "Navigation.MoveToPosition(__nav, { position = CVector3(5,0,0), radius = 1, "
+        "  speed = ENavigationSpeed.NAV_SPEED_RUN })", "=t_navgo");
+    F2_CHECK(vm.last_error().empty());
+    F2_CHECK(game.world.npcs.size() == 1 && game.world.npcs[0].has_goal);
+
+    // Drive the motor directly (no gameflow) until it arrives at the goal.
+    game.collision.build_from_scene(game.scene);  // empty scene: planar move only, no walls
+    for (int i = 0; i < 400 && game.world.npcs[0].has_goal; ++i)
+        game.world.update_npcs(game.collision, game.player.position(), 1.0f / 60.0f);
+    F2_CHECK(!game.world.npcs[0].has_goal);  // arrived -> goal cleared
+    F2_CHECK(std::fabs(game.world.npcs[0].controller.position()[0] - 5.0f) < 1.5f);
+    vm.run_source("assert(Navigation.GetCurrentSpeed(__nav) < 0.5)", "=t_navspeed");  // stopped
+    F2_CHECK(vm.last_error().empty());
+
+    // StopMoving clears an active goal.
+    vm.run_source("Navigation.MoveToPosition(__nav, {position=CVector3(20,0,0), radius=1}); "
+                  "Navigation.StopMoving(__nav)", "=t_navstop");
+    F2_CHECK(!game.world.npcs[0].has_goal);
+}
+
 int main() {
     const std::array<std::uint8_t, 136> dxt1 = [] {
         std::array<std::uint8_t, 136> bytes{};
@@ -1239,6 +1279,7 @@ int main() {
     test_gameflow_starts_childhood();
     test_cook_scripts_package();
     test_stage2_control();
+    test_stage2_navigation();
 
     // ---- P6: mods folder loader + Quest natives (150-bit bitset) ----
     {

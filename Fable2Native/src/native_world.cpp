@@ -95,8 +95,19 @@ NativeWorld::MeleeResult NativeWorld::melee_attack(const NativeCollisionWorld& c
 void NativeWorld::update_npcs(const NativeCollisionWorld& collision,
                               const std::array<float, 3>& target, float dt) {
     for (NpcAgent& agent : npcs) {
-        // LOD centre = the player: NPCs far from the player go inactive (skip tick).
-        agent.controller.update(collision, target, target, lod_radius, dt);
+        if (agent.has_goal) {
+            // Scripted nav goal (Navigation.MoveTo*): drive toward the goal at the selected
+            // speed tier, overriding the default player-follow stand-in, until arrival.
+            if (agent.goal_speed > 0.0f) agent.controller.movement.walk_speed = agent.goal_speed;
+            agent.controller.movement.arrive_radius = agent.arrive_radius;
+            if (agent.controller.move_to(collision, agent.goal, dt)) agent.has_goal = false;
+        } else {
+            // LOD centre = the player: NPCs far from the player go inactive (skip tick).
+            agent.controller.update(collision, target, target, lod_radius, dt);
+        }
+        // last-step planar speed for Navigation.GetCurrentSpeed.
+        const auto& vel = agent.controller.controller.velocity;
+        agent.last_speed = std::sqrt(vel[0] * vel[0] + vel[2] * vel[2]);
         // Write the resolved position back to the entity transform so sync_to_scene
         // moves the drawn instance (the master tick's entity->render bridge).
         NativeEntity* e = entities.find(agent.entity_uid);

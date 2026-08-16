@@ -117,7 +117,14 @@ int NativeGame::boot_game_scripts(const std::filesystem::path& data_root) {
         "function Physics.TeleportToPosition(e,pos) Physics.__Teleport(e, pos.x, pos.y, pos.z) end "
         "function Physics.SetFacingVector(e,vec) Physics.__SetFacing(e, vec.x, vec.y, vec.z) end "
         "function Physics.GetFacingVector(e) return CVector3(Physics.__GetFacingRaw(e)) end "
-        "function Physics.GetVelocity(e) return CVector3(Physics.__GetVelocityRaw(e)) end",
+        "function Physics.GetVelocity(e) return CVector3(Physics.__GetVelocityRaw(e)) end "
+        // Navigation.MoveToPosition(entity, {position=CVector3, radius, speed=ENavigationSpeed}).
+        // speed defaults to WALK (tier 2); the game usually sets NPC speed separately (FLAGGED).
+        "function Navigation.MoveToPosition(e, opts) "
+        "  local p = opts and opts.position "
+        "  local r = (opts and opts.radius) or 0 "
+        "  local s = (opts and opts.speed) or 2 "
+        "  if p then Navigation.__MoveTo(e, p.x, p.y, p.z, r, s) end return true end",
         "=stage2_control");
 
     // Wire the registered manager Update callbacks into the tick, retail Quest->General->AI
@@ -159,7 +166,8 @@ int NativeGame::load_quest_scripts() {
     // doesn't load (the engine loads them on another path): saveload (permanents helpers) and
     // utils (CreateEnum, used by quest modules at load time).
     for (const char* dep : {"miscellaneous/saveload/saveloadsystem.lua",
-                            "miscellaneous/utils.lua"}) {
+                            "miscellaneous/utils.lua",
+                            "miscellaneous/navigationspeedenum.lua"}) {  // ENavigationSpeed tiers
         std::vector<std::uint8_t> b = script_bnk->extract(dep);
         if (!b.empty()) script_vm->run_bytecode(b.data(), b.size(), (std::string("=") + dep).c_str());
     }

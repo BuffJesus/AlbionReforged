@@ -177,6 +177,40 @@ TransformComponent* entity_transform(NativeGame& g, std::uint64_t uid) {
     NativeEntity* e = g.world.entities.find(uid);
     return e ? e->get<TransformComponent>(kTypeIdTransform) : nullptr;
 }
+
+NpcAgent* find_agent(NativeGame& g, std::uint64_t uid) {
+    for (NpcAgent& a : g.world.npcs)
+        if (a.entity_uid == uid) return &a;
+    return nullptr;
+}
+
+// A script that navigates an entity (Navigation.MoveTo*) lazily gets a nav agent: a controller
+// seeded from the entity's current transform. This lets script-created entities (Debug.
+// CreateEntityAt'd allies/dog) move, not just the baked-instance NPCs from spawn_from_scene.
+NpcAgent& ensure_agent(NativeGame& g, std::uint64_t uid) {
+    if (NpcAgent* a = find_agent(g, uid)) return *a;
+    NpcAgent agent;
+    agent.entity_uid = uid;
+    if (TransformComponent* t = entity_transform(g, uid)) agent.controller.set_position(t->position);
+    g.world.npcs.push_back(agent);
+    return g.world.npcs.back();
+}
+
+// Map an ENavigationSpeed tier (0..8) to a ground speed (wu/s). GROUNDED anchors: WALK=0.77,
+// RUN=4.20 (measured clip root speeds, anim_runtime_sampler_re.txt §B). FLAGGED: the other
+// tiers are an engineering interpolation (the retail per-tier speeds aren't RE'd).
+float speed_for_nav_tier(int tier) {
+    switch (tier) {
+        case 0: return 0.0f;   // NAV_SPEED_HALT
+        case 1: return 0.40f;  // SLOW_WALK  (FLAGGED)
+        case 2: return 0.77f;  // WALK       (GROUNDED)
+        case 3: return 1.20f;  // FAST_WALK  (FLAGGED)
+        case 4: return 2.50f;  // SLOW_RUN   (FLAGGED)
+        case 5: return 4.20f;  // RUN        (GROUNDED)
+        case 6: return 5.00f;  // FAST_RUN   (FLAGGED)
+        default: return 6.00f; // SPRINT / MAX (FLAGGED)
+    }
+}
 }  // namespace
 
 void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
@@ -338,6 +372,39 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         if (g && v.arg_handle(1) == g->hero_uid) vel = g->player.controller.velocity;
         v.push_number(vel[0]); v.push_number(vel[1]); v.push_number(vel[2]);
         return 3;
+    });
+
+    // ---- Navigation: scripted path movement (NpcAgent nav goal motor) ----
+    // Navigation.MoveToPosition(entity, {position, radius, speed}) is the public native; the boot
+    // Lua shim unpacks the opts table + CVector3 and calls __MoveTo(e, x,y,z, radius, tier). The
+    // agent is created on demand (ensure_agent) so script-spawned allies/dog move too. Grounded:
+    // aibase.lua:631-633 (MoveToPosition), behaviourfollow.lua:248/260 (StopMoving/GetCurrentSpeed).
+    vm.register_native("Navigation", "__MoveTo", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (!g) return 0;
+        NpcAgent& a = ensure_agent(*g, v.arg_handle(1));
+        a.goal = {static_cast<float>(v.arg_number(2)), static_cast<float>(v.arg_number(3)),
+                  static_cast<float>(v.arg_number(4))};
+        const float radius = static_cast<float>(v.arg_number(5));
+        a.arrive_radius = radius >= 1.0f ? radius : 0.6f;  // MOVE_TO_POS_BODGE_DIST default (FLAGGED)
+        a.goal_speed = speed_for_nav_tier(static_cast<int>(v.arg_number(6)));
+        a.has_goal = true;
+        return 0;
+    });
+    vm.register_native("Navigation", "StopMoving", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (g) if (NpcAgent* a = find_agent(*g, v.arg_handle(1))) a->has_goal = false;
+        return 0;
+    });
+    vm.register_native("Navigation", "GetCurrentSpeed", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        NpcAgent* a = g ? find_agent(*g, v.arg_handle(1)) : nullptr;
+        v.push_number(a ? static_cast<double>(a->last_speed) : 0.0);
+        return 1;
+    });
+    vm.register_native("Navigation", "GetMovementPaused", [](NativeScriptVM& v) -> int {
+        v.push_bool(false);  // FLAGGED: no movement-pause system; behaviours gate on this
+        return 1;
     });
 
     // ---- MessageEvents queue (the central quest poll) ----
