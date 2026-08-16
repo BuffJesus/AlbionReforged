@@ -28,22 +28,25 @@ whole feature is retail-faithful for the town. **Both backends built + screensho
   2048², an engine constant not in GDB) + the opaque-material shadow-buffer term for shadow-receiving material
   permutations (`Fable2AssetBrowser/source/build/shader_bank_extract.exe` pulls programs from ShadersRelease.sbk).
   Depth bias kept small (retail's GDB 0 suits its screen-space resolve, not our projected map).
-### THEME-AUTHORED AMBIENT (same session, commit 382af8f) — the #1 daytime brightness gap
-The native world PS hardcoded a made-up **bright cool-blue** hemisphere ambient (`{0.18,0.20,0.24}→{0.55,0.58,0.62}`),
-which read far too bright/flat vs the AssetBrowser oracle (dark/moody town). Replaced with the theme's **authored**
-ambient from `environmentthemes.gdb` (same FNV-1/GDB method): `AmbientColour` (flat) from the **Lighting** sub-record
-(0x0B152C5D) + `SkyColourFinalBounceTop/Bottom` (hemisphere sky-bounce) from the **LightingPreprocessor** sub-record
-(0x43217304 — NOT Lighting). Town 0x72d66d23: flat `{0.124,0.039,0.014}` warm-dark + bounce top `{0.20,0.29,0.50}` /
-bottom `{0.38,0.39,0.43}`. New opt-in F2SCENE opcodes `ambient`/`sky_bounce` (cook_levels.py → native_scene → both
-cbuffers → both shaders); PS uses `ambient_flat + lerp(bounce_bottom, bounce_top, 0.5+0.5*N.y)`, per-prop `.lmp`
-probes still override. Screenshot-verified both backends: town noticeably darker/moodier toward the oracle,
-D3D12==Vulkan. Memory `fable2-theme-ambient-lighting`. ⚠ Values solid; the exact combination formula (flat + hemi
-add) is inferred from field names — no formula oracle (AB doesn't consume these fields; retail does it via ramp
-tf4 + c67/c68/c28 sky math, not ported).
+### ⚠ AMBIENT + FOG/MIST — SHIPPED THEN REVERTED (ungrounded formulas)
+Two follow-ups this session (theme-ambient hemisphere 382af8f; exp-fog+ground-mist ea8b033) were **REVERTED**
+(857d584, 93fea7c) because their FORMULAS/constants came from the AssetBrowser *preview* code + inference, NOT the
+decomp — USER rule this session: *only data supported by the decomp, no AB-preview tuning, no guessing.* The theme
+GDB **VALUES** were fine (AmbientColour/SkyColourFinalBounce, Fogging Near/Far dist+density, GroundMist.Strength=1.0);
+only the runtime application was invented. Decomp ground-truth (from `shader_bank_extract.exe` on `data/Shaders/
+Shaders.sbk`):
+- **Unprobed ambient = `g_GlobalAmbient`** (single float4, PS c20 `g_GlobalAmbientAndBrightness`, AMB1 permutation).
+  `SkyColourFinalBounce` is a **LightingPreprocessor GI-bake input**, NOT a runtime hemisphere. (Probed props already
+  use the grounded SH probe, `prop_ambient_shader_re.txt` — untouched.)
+- **Distance fog = atmospheric scattering** (`g_Extinction` c5 / `g_InScattering` c4 / `g_AtmosphericParameters`
+  c64×5 / `g_AtmosphericFactors` c28); **mist = texture-driven** (`g_MistDensitySampler` c11 / `g_MistHeightSampler`
+  c12 / `g_MistParameters` c72×5), material `MIST0`/`MIST1` PS suffix, `PSHADER_LANDSCAPE_BACKGROUND_MIST_RENDER`
+  (shader[11]) + `PSHADER_MIST_EVOLVE_DENSITY`.
 
-- **★ NEXT:** more authored theme data now that the GDB method is proven (`AmbientNormalMapDarkeningColour`, the
-  `LightingPreprocessor` fields); then sun disc/beams/glare (needs a level that authors them; chapter2slums authors
-  none), HDR-range lighting. GhidraMCP is live on port 8089 (GUI launched this session).
+- **★ NEXT (reground the RIGHT way):** disassemble the `MIST1` material PS + shader[11] mist PS + an `AMB1` PS + the
+  atmosphere shader from Shaders.sbk (`shader_bank_extract <sbk> --shader <i>`) into a `ghidra_out/*_re.txt` spec
+  (like `prop_ambient_shader_re.txt`), pin the constant VALUES (theme/globals GDB), THEN implement from that only.
+  Memories `fable2-env-fog-mist`, `fable2-theme-ambient-lighting`. GhidraMCP live on port 8089.
 
 > **CROSS-TRACK (2026-08-16): decomp/native → recomp leverage is consolidated in
 > [DECOMP_TO_RECOMP.md](DECOMP_TO_RECOMP.md).** Highest-leverage recomp action = the BLACK-WORLD
