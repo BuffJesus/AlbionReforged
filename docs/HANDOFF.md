@@ -20,11 +20,14 @@ whole feature is retail-faithful for the town. **Both backends built + screensho
   (`UseScreenSpaceShadowmap`; material/water PS sample it at `tf8`), **NOT cascaded**.
 - **Applied:** `native_world_renderer.cpp` + `native_vulkan_world_renderer.cpp` `shadow_params[3]` 0.7 → **0.8**
   (cited). Memory: `fable2-shadow-params-gdb`.
-- ⚠ Correction: memory `fable2-blackworld-compositor-exposure`'s "dominant material PS 98B4F32B/D613E8F33B9FB891"
-  is actually the **water** main-view PS (fresnel/refl/refr/glitter) — the opaque-building shadow term is still
-  un-dumped. **RESIDUAL (not data-pinned):** shadow-map RESOLUTION (native uses 2048², an engine constant not in
-  GDB) + the opaque-material shadow-buffer term (would need shader-bank disasm or the Render ShadowBuffers pass
-  decomp). Depth bias kept small (retail's 0 suits its screen-space resolve, not our projected map).
+- Shader identity (settled from DXBC): the dumped ucode `D613E8F33B9FB891` / key `98B4F32B94897A9C` IS the
+  dominant two-sided opaque MATERIAL PS (SV_IsFrontFace + alpha-test + tf4/tf5 BRDF ramps; `world_shading` §5) —
+  so its `tf8`=spec mask, `c139`=spec scale/bias, and it does NOT sample a shadow buffer. The water shadow term
+  (tf8-as-shadow, c139 ShadowScaleBias `{0.95,0.05}`) is a SEPARATE shader (water program 57, ModelPreview port),
+  which is what proves the `scale+bias=1` form. **RESIDUAL (not data-pinned):** shadow-map RESOLUTION (native
+  2048², an engine constant not in GDB) + the opaque-material shadow-buffer term for shadow-receiving material
+  permutations (`Fable2AssetBrowser/source/build/shader_bank_extract.exe` pulls programs from ShadersRelease.sbk).
+  Depth bias kept small (retail's GDB 0 suits its screen-space resolve, not our projected map).
 - **★ NEXT:** same-old retail-fidelity list — sun disc/beams/glare (needs a level that authors them; chapter2slums
   authors none), HDR-range lighting, sunlight balance. GhidraMCP is live on port 8089 (GUI launched this session).
 
