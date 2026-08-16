@@ -341,6 +341,18 @@ void NativeGame::tick(double delta_seconds) {
             player.update(collision, input, camera_controller.yaw,
                           static_cast<float>(simulation_step));
 
+            // Skeletal animation: pick the locomotion clip whose root speed matches the hero's
+            // planar speed and advance the player. FLAGGED: no-op bind pose until the cook emits
+            // hero_locomotion clips (select returns nullptr on empty; update guards a null clip).
+            if (!hero_locomotion.empty())
+                hero_anim.set_clip(select_locomotion_clip(player.planar_speed(), hero_locomotion));
+            hero_anim.update(static_cast<float>(simulation_step));
+            // Publish the hero heading into its entity transform (rotation[1]=yaw). The visible
+            // facing forward to the renderer is Stage 3 (avoids double-rotation vs the baked yaw).
+            if (NativeEntity* he = world.entities.find(hero_uid))
+                if (auto* t = he->get<TransformComponent>(kTypeIdTransform))
+                    t->rotation[1] = player.facing_yaw();
+
             // Camera follows the moved hero (look from right-stick or mouse).
             if (camera_controller.mode == CameraMode::Follow) {
                 const bool look_is_mouse = input.last_active_device == InputDevice::KeyboardMouse;

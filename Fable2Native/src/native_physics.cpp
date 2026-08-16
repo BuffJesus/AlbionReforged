@@ -311,8 +311,17 @@ std::array<float, 3> NativeCollisionWorld::slide_move(const std::array<float, 3>
 
 void CharacterController::move(const NativeCollisionWorld& world,
                                const std::array<float, 2>& desired_planar_velocity, float dt) {
+    const std::array<float, 3> start = position;
     std::array<float, 3> delta{desired_planar_velocity[0] * dt, 0.0f, desired_planar_velocity[1] * dt};
     position = world.slide_move(position, delta, config.capsule_radius, config.capsule_height);
+
+    // Record the ACTUAL horizontal velocity from the resolved (post-slide) move, so consumers —
+    // locomotion-clip selection (planar_speed) and Physics.GetVelocity — see real planar speed.
+    // Previously only velocity[1] (gravity) was tracked; velocity[0]/[2] stayed 0.
+    if (dt > 0.0f) {
+        velocity[0] = (position[0] - start[0]) / dt;
+        velocity[2] = (position[2] - start[2]) / dt;
+    }
 
     const float gy = world.sample_ground(position[0], position[2], position[1]);
     if (!std::isnan(gy) && position[1] - gy <= config.ground_clamp && gy <= position[1] + 0.01f) {

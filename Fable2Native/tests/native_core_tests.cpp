@@ -370,6 +370,53 @@ static void test_stage2_navigation() {
     F2_CHECK(!game.world.npcs[0].has_goal);
 }
 
+// Stage 2 (Slice 3): the live locomotion AnimationPlayer, driven by the tick from hero speed.
+static f2::AnimClip make_loco_clip(std::uint32_t hash) {
+    f2::AnimClip c;
+    c.hash = hash;
+    c.bone_count = 1;
+    c.frame_count = 2;
+    c.fps = 30.0f;
+    c.skin.assign(2, std::array<float, 12>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0});  // identity 3x4
+    return c;
+}
+static void test_stage2_animation() {
+    // Synthetic idle/walk/run clips — the cook doesn't emit runtime clips yet, so this proves the
+    // live driver + selection integration in tick() headlessly (measured hashes/speeds).
+    f2::NativeGame game;
+    game.hero_clips.push_back(make_loco_clip(0x1B78A889));  // idle
+    game.hero_clips.push_back(make_loco_clip(0x02EE1AA7));  // walk
+    game.hero_clips.push_back(make_loco_clip(0x8C7D7F7E));  // run
+    game.hero_locomotion = {{&game.hero_clips[0], 0.0f},
+                            {&game.hero_clips[1], 0.77f},
+                            {&game.hero_clips[2], 4.20f}};
+    game.mode = f2::GameMode::InWorld;
+    game.external_input = true;
+    game.collision.build_from_scene(game.scene);  // empty: planar move only
+
+    // At rest the driver selects the idle clip (root speed 0).
+    game.input = f2::InputState{};
+    game.tick(1.0 / 60.0);
+    F2_CHECK(game.hero_anim.clip() == &game.hero_clips[0]);
+
+    // Moving forward: planar speed rises -> a faster (non-idle) clip; the player advances.
+    for (int i = 0; i < 30; ++i) {
+        game.input = f2::InputState{};
+        game.input.move = {0.0f, 1.0f};
+        game.tick(1.0 / 60.0);
+    }
+    F2_CHECK(game.hero_anim.clip() != nullptr && game.hero_anim.clip() != &game.hero_clips[0]);
+    F2_CHECK(game.hero_anim.time() >= 0.0f);
+
+    // Stub-flag safety: with NO clips the driver holds bind pose and does not crash.
+    f2::NativeGame bare;
+    bare.mode = f2::GameMode::InWorld;
+    bare.external_input = true;
+    bare.collision.build_from_scene(bare.scene);
+    bare.tick(1.0 / 60.0);
+    F2_CHECK(bare.hero_anim.clip() == nullptr);  // explicit bind-pose fallback
+}
+
 int main() {
     const std::array<std::uint8_t, 136> dxt1 = [] {
         std::array<std::uint8_t, 136> bytes{};
@@ -1280,6 +1327,7 @@ int main() {
     test_cook_scripts_package();
     test_stage2_control();
     test_stage2_navigation();
+    test_stage2_animation();
 
     // ---- P6: mods folder loader + Quest natives (150-bit bitset) ----
     {

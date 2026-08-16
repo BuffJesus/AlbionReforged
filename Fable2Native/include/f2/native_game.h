@@ -8,6 +8,7 @@
 #include "native_physics.h"
 #include "native_camera.h"
 #include "native_player.h"
+#include "native_animation.h"
 #include "native_save.h"
 #include "native_script.h"
 #include "native_bnk.h"
@@ -87,6 +88,16 @@ struct NativeGame {
     NativeCollisionWorld collision;
     NativePlayer player;
     CameraController camera_controller;
+
+    // P5 skeletal animation: the hero's locomotion player, driven each InWorld tick from the
+    // hero's planar speed. hero_clips owns the baked AnimClips; hero_locomotion tags each with
+    // its measured root speed for select_locomotion_clip. FLAGGED: empty until the cook emits
+    // runtime AnimClip data — with no clips the player holds bind pose (no crash), so this is the
+    // live driver, not yet a visible animation (the app pose-forward to both renderers is Stage 3,
+    // and it is gated on this clip data + avoids double-rotation vs the baked instance yaw).
+    AnimationPlayer hero_anim;
+    std::vector<AnimClip> hero_clips;
+    std::vector<LocomotionClip> hero_locomotion;
 
     // Persisted game-flow state (chapter header + 150-bit quest completion + hero pos).
     NativeGameState game_state;
