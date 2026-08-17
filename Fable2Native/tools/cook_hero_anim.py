@@ -61,7 +61,14 @@ from cook_levels import _bnk_name_index, _resolve  # noqa: E402
 #     only-locomotion events, straight forward root motion at ~2.35 wu/s (25-frame stride) matching
 #     the hero rig — a genuine forward RUN (the human run gait is marked by FOOT_PLANT, not a
 #     "FootstepRun" event; found via the same data-backed method — tools/anim_clip_events.py).
-CLIPS = ["id_1B78A889", "id_AD8C7C90", "id_12457E19"]
+#
+# ★ DEFINITIVE (verified byte-for-byte from globals.gdb, not events/root-motion inference): a
+# locomotion slot NAME resolves to a bank key0 via the GDB — fnv1(slotName) is a GDB FIELD-NAME
+# hash on the creature's anim-set record, and that type-4 field's raw u32 value IS the bank key0
+# (AnimBank.cpp scan_gdb_animation_fields). The hero-human anim set = GDB record 0x576283C7:
+#   Idle -> id_4B706EF5, Walk -> id_49220AA3, Run -> id_4AB9BC89 (also Jog id_80D8CCD6, Sprint
+#   id_D29B2DD4, WalkFootstep id_EE74243E). The earlier root-motion picks above were STILL wrong.
+CLIPS = ["id_4B706EF5", "id_49220AA3", "id_4AB9BC89"]  # idle, walk, run (GDB-resolved)
 
 
 def bake_clip_frame(info, data_file, clip, frame, inv_bind, lk):
@@ -81,8 +88,12 @@ def bake_clip_frame(info, data_file, clip, frame, inv_bind, lk):
         if mb < 0:
             continue
         aq[mb] = pose.bone_quats[tr * 4:tr * 4 + 4]
-        if info.bones[mb].parent_id < 0:
-            at[mb] = pose.bone_trans[tr * 3:tr * 3 + 3]
+        # IN-PLACE bake: deliberately do NOT apply the root bone's translation
+        # (pose.bone_trans for parent_id<0). The retail hero locomotion clips carry forward ROOT
+        # MOTION (walk/run translate the root); baking it in would make the skinned mesh drift
+        # forward then snap back on loop. Instead the root translation is CONSUMED as world motion
+        # by the character controller (measured_root_speed -> the hero's move speed), so the clip
+        # cycles in place and the body moves — feet track the ground (anim_runtime_sampler §C).
 
     locals_ = [fable_pose._lmat(info.bone_transforms[i], aq[i], at[i]) for i in range(info.bone_count)]
     W = fable_pose._worlds(info, locals_)
@@ -121,8 +132,10 @@ def cook(header_bnk: Path, body_bnk: Path, hero_model: str, f2tool: Path, out_pa
     dec = A.AnimDecoder(data_file, log=lambda *a: None)
 
     def measured_root_speed(clip, h):
-        """Net horizontal root translation / duration (wu/s) — DATA-derived from the clip's own
-        root-track trajectory, not hardcoded (anim_runtime_sampler_re.txt §B metric)."""
+        """Net root translation / duration (wu/s) — DATA-derived from the clip's own root-track
+        trajectory. Uses the full 3D net displacement (the retail hero locomotion clips translate
+        the root along anim-Y = forward, NOT X/Z), which is the speed the controller consumes as
+        world motion for the in-place-baked clip (anim_runtime_sampler_re.txt §B metric)."""
         pts = []
         for f in range(h.frame_count):
             p = dec.sample_frame(clip, f)
@@ -131,7 +144,8 @@ def cook(header_bnk: Path, body_bnk: Path, hero_model: str, f2tool: Path, out_pa
             pts.append(p.bone_trans[0:3])
         if len(pts) < 2:
             return 0.0
-        net = math.hypot(pts[-1][0] - pts[0][0], pts[-1][2] - pts[0][2])
+        d = [pts[-1][k] - pts[0][k] for k in range(3)]
+        net = math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
         dur = h.frame_count / (clip.fps or 30.0)
         return net / dur if dur > 0 else 0.0
 
