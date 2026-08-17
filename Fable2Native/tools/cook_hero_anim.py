@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fable_mdl_format as mdl  # noqa: E402
 import fable_anim_format as A  # noqa: E402
 import fable_pose  # noqa: E402
+import gdb_anim_slots  # noqa: E402
 from cook_levels import _bnk_name_index, _resolve  # noqa: E402
 
 # Locomotion clips, identified DATA-BACKED from the anim bank itself (no name-hash guessing).
@@ -62,13 +63,13 @@ from cook_levels import _bnk_name_index, _resolve  # noqa: E402
 #     the hero rig — a genuine forward RUN (the human run gait is marked by FOOT_PLANT, not a
 #     "FootstepRun" event; found via the same data-backed method — tools/anim_clip_events.py).
 #
-# ★ DEFINITIVE (verified byte-for-byte from globals.gdb, not events/root-motion inference): a
-# locomotion slot NAME resolves to a bank key0 via the GDB — fnv1(slotName) is a GDB FIELD-NAME
-# hash on the creature's anim-set record, and that type-4 field's raw u32 value IS the bank key0
-# (AnimBank.cpp scan_gdb_animation_fields). The hero-human anim set = GDB record 0x576283C7:
-#   Idle -> id_4B706EF5, Walk -> id_49220AA3, Run -> id_4AB9BC89 (also Jog id_80D8CCD6, Sprint
-#   id_D29B2DD4, WalkFootstep id_EE74243E). The earlier root-motion picks above were STILL wrong.
-CLIPS = ["id_4B706EF5", "id_49220AA3", "id_4AB9BC89"]  # idle, walk, run (GDB-resolved)
+# ★ DEFINITIVE (data-backed, read from globals.gdb — no hardcoded hashes): a locomotion slot NAME
+# resolves to a bank key0 via the GDB — fnv1(slotName) is a GDB FIELD-NAME hash on the creature's
+# anim-set record, and that type-4 field's raw u32 value IS the bank key0 (gdb_anim_slots.py, a
+# faithful reimpl of AnimBank.cpp scan_gdb_animation_fields, verified byte-for-byte). The hero-human
+# anim set is GDB record 0x576283C7. The runtime treats the clips in idle/walk/run order.
+HERO_ANIM_RECORD = 0x576283C7
+LOCO_SLOTS = ["Idle", "Walk", "Run"]  # order == runtime idle/walk/run tiers
 
 
 def bake_clip_frame(info, data_file, clip, frame, inv_bind, lk):
@@ -104,8 +105,26 @@ def bake_clip_frame(info, data_file, clip, frame, inv_bind, lk):
     return out  # bone_count lists of 12 floats
 
 
-def cook(header_bnk: Path, body_bnk: Path, hero_model: str, f2tool: Path, out_path: Path):
+def cook(header_bnk: Path, body_bnk: Path, hero_model: str, f2tool: Path, out_path: Path,
+         gdb_path: Path, anim_record: int, slots):
     clips_toc, data_file = fable_pose.load_anim_bank(header_bnk.parent.parent)
+
+    # Resolve the locomotion clips DATA-BACKED from the GDB anim-set record (slot name ->
+    # fnv1 -> field -> key0). No hardcoded clip hashes.
+    gdb = gdb_anim_slots.GdbView(gdb_path.read_bytes())
+    if not gdb.ok:
+        raise SystemExit(f"cannot parse GDB: {gdb_path}")
+    resolved = gdb_anim_slots.resolve_slots(gdb, anim_record, slots)
+    clip_names = []
+    for slot in slots:
+        cid = resolved[slot]
+        if cid is None:
+            print(f"  slot '{slot}' not on record 0x{anim_record:08X} (skipped)", file=sys.stderr)
+            continue
+        print(f"  slot '{slot}' -> {cid}")
+        clip_names.append(cid)
+    if not clip_names:
+        raise SystemExit(f"no locomotion slots resolved on GDB record 0x{anim_record:08X}")
 
     hidx = _bnk_name_index(header_bnk)
     gidx = _bnk_name_index(body_bnk)
@@ -150,7 +169,7 @@ def cook(header_bnk: Path, body_bnk: Path, hero_model: str, f2tool: Path, out_pa
         return net / dur if dur > 0 else 0.0
 
     baked = []
-    for name in CLIPS:
+    for name in clip_names:
         clip = by_name.get(name)
         if clip is None:
             print(f"  clip missing: {name} (skipped)", file=sys.stderr)
@@ -167,7 +186,7 @@ def cook(header_bnk: Path, body_bnk: Path, hero_model: str, f2tool: Path, out_pa
         raise SystemExit("no locomotion clips baked")
 
     # Reference: idle@0 posed positions per geom (runtime convention self-test).
-    idle_clip = by_name.get(CLIPS[0])  # CLIPS[0] = the idle clip id
+    idle_clip = by_name.get(clip_names[0])  # clip_names[0] = the resolved idle clip id
     ref = []
     for g in geoms:
         posed = fable_pose.pose_skinned_mesh(info, data_file, idle_clip, 0, g, inv_bind, lk) \
@@ -215,6 +234,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--body-bnk", type=Path, default=None)
     p.add_argument("--hero-model",
                    default=r"Art\Characters\Heros\Child Male\dotXSI\CH_HeroChild_Male\CH_HeroChild_Male.mdl")
+    p.add_argument("--gdb", type=Path, default=None, help="globals.gdb (anim-set records)")
+    p.add_argument("--anim-record", default=None,
+                   help="GDB anim-set record hash (hex); default = hero-human 0x576283C7")
+    p.add_argument("--slots", nargs="+", default=None,
+                   help="locomotion slot names in idle/walk/run order (default Idle Walk Run)")
     p.add_argument("--f2tool", type=Path,
                    default=Path(__file__).resolve().parents[2] / "Fable2AssetBrowser" / "source" / "build" / "f2tool.exe")
     return p
@@ -224,7 +248,10 @@ def main(argv=None) -> None:
     args = build_parser().parse_args(argv)
     header = args.header_bnk or (args.game_root / "data" / "Globals" / "globals_model_headers.bnk")
     body = args.body_bnk or (args.game_root / "data" / "Globals" / "globals_models.bnk")
-    cook(header, body, args.hero_model, args.f2tool, args.out)
+    gdb = args.gdb or (args.game_root / "data" / "Globals" / "globals.gdb")
+    record = int(args.anim_record, 16) if args.anim_record else HERO_ANIM_RECORD
+    slots = args.slots or LOCO_SLOTS
+    cook(header, body, args.hero_model, args.f2tool, args.out, gdb, record, slots)
 
 
 if __name__ == "__main__":
