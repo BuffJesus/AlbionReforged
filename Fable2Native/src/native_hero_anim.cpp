@@ -1,5 +1,6 @@
 #include "f2/native_hero_anim.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -99,6 +100,24 @@ HeroAnimData load_hero_anim(const std::string& path) {
 
     out.ok = !c.bad;
     return out;
+}
+
+void compute_hero_pose(const AnimationPlayer& player,
+                       const std::vector<std::vector<SkinnedVertex>>& geom_bind, float delta_yaw,
+                       std::vector<std::vector<std::array<float, 3>>>& out) {
+    out.resize(geom_bind.size());
+    const float cs = std::cos(delta_yaw), sn = std::sin(delta_yaw);
+    std::vector<std::array<float, 3>> skinned;
+    for (std::size_t gi = 0; gi < geom_bind.size(); ++gi) {
+        player.skin(geom_bind[gi], skinned);  // MDL-space posed positions
+        std::vector<std::array<float, 3>>& o = out[gi];
+        o.resize(skinned.size());
+        for (std::size_t v = 0; v < skinned.size(); ++v) {
+            const float rx = skinned[v][0], ry = skinned[v][2], rz = skinned[v][1];  // {x,z,y} swap
+            // Y-rotate by delta_yaw (place_vertex convention) -> renderer's baked hero_yaw = facing.
+            o[v] = {rx * cs + rz * sn, ry, -rx * sn + rz * cs};
+        }
+    }
 }
 
 }  // namespace f2

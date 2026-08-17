@@ -105,6 +105,14 @@ struct NativeGame {
     AnimationPlayer hero_anim;
     std::vector<AnimClip> hero_clips;
     std::vector<LocomotionClip> hero_locomotion;
+    // Per-hero-geom bind SkinnedVertex data (parallel to the renderer's character meshes). The app
+    // skins each with hero_anim's current pose and forwards it via set_character_pose.
+    std::vector<std::vector<SkinnedVertex>> hero_bind;
+
+    // Load a cooked hero animation package (tools/cook_hero_anim.py) into hero_clips/hero_locomotion/
+    // hero_bind. Returns false if absent/corrupt (the fake-bob fallback stays). Opt-in: the app
+    // calls it on world entry with <game_dir>/cooked/hero.heroanim.
+    bool load_hero_anim_package(const std::filesystem::path& path);
 
     // Persisted game-flow state (chapter header + 150-bit quest completion + hero pos).
     NativeGameState game_state;

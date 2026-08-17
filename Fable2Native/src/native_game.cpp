@@ -1,6 +1,7 @@
 #include "f2/native_game.h"
 
 #include "f2/native_bindings.h"
+#include "f2/native_hero_anim.h"
 
 #include <algorithm>
 #include <cmath>
@@ -306,6 +307,17 @@ void NativeGame::prepare_world() {
     player.set_position(start);
     camera_controller.yaw = scene.hero_yaw;
     camera_controller.pitch = -0.3f;
+}
+
+bool NativeGame::load_hero_anim_package(const std::filesystem::path& path) {
+    HeroAnimData d = load_hero_anim(path.string());
+    if (!d.ok) return false;
+    hero_clips = std::move(d.clips);
+    hero_bind = std::move(d.geom_bind);
+    hero_locomotion.clear();
+    for (std::size_t i = 0; i < hero_clips.size(); ++i)
+        hero_locomotion.push_back({&hero_clips[i], d.root_speeds[i]});
+    return true;
 }
 
 void NativeGame::tick(double delta_seconds) {

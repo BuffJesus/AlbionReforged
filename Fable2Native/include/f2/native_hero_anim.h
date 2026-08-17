@@ -28,4 +28,14 @@ struct HeroAnimData {
 // clips[i] with root_speeds[i] after taking ownership.
 HeroAnimData load_hero_anim(const std::string& path);
 
+// Compute the per-geom render-space hero pose to feed set_character_pose (shared by BOTH backends
+// so the two apps can't drift). For each geom: skin its bind vertices with `player`'s current pose,
+// swap MDL {x,y,z} -> render {x,z,y} (the cook_levels F2SCENE emit convention), then Y-rotate by
+// `delta_yaw` using the renderer's place_vertex convention (x'=x*cy+z*sy, z'=-x*sy+z*cy) so the
+// renderer's baked hero_yaw composes to the live heading (delta_yaw = facing_yaw - baked hero_yaw).
+// out[gi] aligns with character mesh gi; `out` is resized.
+void compute_hero_pose(const AnimationPlayer& player,
+                       const std::vector<std::vector<SkinnedVertex>>& geom_bind, float delta_yaw,
+                       std::vector<std::vector<std::array<float, 3>>>& out);
+
 }  // namespace f2

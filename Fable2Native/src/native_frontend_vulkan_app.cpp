@@ -1,6 +1,7 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 
 #include "f2/native_game.h"
+#include "f2/native_hero_anim.h"
 #include "f2/native_audio.h"
 #include "f2/native_font.h"
 #include "f2/frontend_scene_builder.h"
@@ -235,6 +236,12 @@ public:
             if (game_.scene.materials.empty()) game_.scene.materials.push_back({"cli_texture"});
             game_.scene.materials[0].albedo = texture->string();
             for (auto& mesh : game_.scene.meshes) mesh.material = 0;
+        }
+        // Cooked hero skeletal animation (tools/cook_hero_anim.py); fake bob is the fallback.
+        if (const auto ha = command_line_path(L"--hero-anim")) {
+            game_.load_hero_anim_package(*ha);
+        } else if (source_) {
+            game_.load_hero_anim_package(source_->data_root / "cooked" / "hero.heroanim");
         }
         video_root_ = command_line_path(L"--video-root").value_or(std::filesystem::path{});
         if (const auto requested_ui_root = command_line_path(L"--ui-root")) {
@@ -1727,6 +1734,20 @@ private:
 
     // Match the D3D12 inspection control: IJKL moves hero draw ranges, U/O adjusts height,
     // and Shift boosts. The static world buffers remain untouched.
+    // Skin the cooked hero clips + forward the pose (both backends share f2::compute_hero_pose).
+    // Returns true if a cooked pose was forwarded; false leaves the caller's fake-bob fallback.
+    bool forward_hero_pose() {
+        if (game_.hero_bind.empty() || game_.hero_anim.clip() == nullptr) return false;
+        const float dyaw = game_.player.facing_yaw() - game_.scene.hero_yaw;
+        f2::compute_hero_pose(game_.hero_anim, game_.hero_bind, dyaw, hero_pose_scratch_);
+        const std::size_t ng = world_renderer_.character_mesh_count();
+        for (std::size_t gi = 0; gi < hero_pose_scratch_.size() && gi < ng; ++gi)
+            world_renderer_.set_character_pose(gi, hero_pose_scratch_[gi]);
+        character_motion_strength_ = 0.0f;
+        world_renderer_.set_character_motion(0.0f, 0.0f);  // the skinned pose replaces the bob
+        return true;
+    }
+
     void update_character_controller(double delta) {
         if (game_.frontend.state() != f2::FrontendState::World || !scene_has_hero()) {
             character_offset_ = {0.0f, 0.0f, 0.0f};
@@ -1742,12 +1763,14 @@ private:
             const auto& p = game_.player.position();
             const auto& hs = game_.scene.hero_start;
             character_offset_ = {p[0] - hs[0], p[1] - hs[1], p[2] - hs[2]};
+            world_renderer_.set_character_offset(character_offset_);
+            // Cooked skeletal pose (both backends): see the D3D12 app / f2::compute_hero_pose.
+            if (forward_hero_pose()) return;
             const float move_mag = std::sqrt(game_.input.move[0] * game_.input.move[0] +
                                              game_.input.move[1] * game_.input.move[1]);
             character_motion_strength_ = move_mag > 0.05f ? 1.0f : 0.0f;
             if (character_motion_strength_ > 0.0f)
                 character_motion_phase_ += static_cast<float>(delta) * 6.0f;
-            world_renderer_.set_character_offset(character_offset_);
             world_renderer_.set_character_motion(character_motion_phase_, character_motion_strength_);
             return;
         }
@@ -2358,6 +2381,7 @@ private:
     bool mouse_captured_now_ = false;
     std::array<float, 3> character_offset_{0.0f, 0.0f, 0.0f};
     float character_motion_phase_ = 0.0f;
+    std::vector<std::vector<std::array<float, 3>>> hero_pose_scratch_;  // per-geom skinned pose
     float character_motion_strength_ = 0.0f;
     f2::NativeGame game_;
     f2::NativeInputRouter input_;

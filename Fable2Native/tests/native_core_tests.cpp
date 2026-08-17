@@ -491,6 +491,28 @@ static void test_stage3_hero_anim() {
         loco.push_back({&d.clips[i], d.root_speeds[i]});
     F2_CHECK(f2::select_locomotion_clip(0.0f, loco) == &d.clips[0]);  // idle
     F2_CHECK(f2::select_locomotion_clip(4.2f, loco) == &d.clips[2]);  // run
+
+    // The app-forward math (compute_hero_pose): at delta_yaw=0 the render pose is the reference
+    // with the {x,z,y} render swap; a +90deg delta additionally Y-rotates (place_vertex convention).
+    std::vector<std::vector<std::array<float, 3>>> pose0, pose90;
+    f2::compute_hero_pose(player, d.geom_bind, 0.0f, pose0);
+    f2::compute_hero_pose(player, d.geom_bind, 1.5707963f, pose90);
+    F2_CHECK(pose0.size() == d.geom_bind.size());
+    float swap_err = 0.0f, rot_err = 0.0f;
+    for (std::size_t g = 0; g < d.ref_pose.size(); ++g)
+        for (std::size_t v = 0; v < d.ref_pose[g].size(); ++v) {
+            const auto& r = d.ref_pose[g][v];
+            const std::array<float, 3> sw{r[0], r[2], r[1]};       // MDL {x,y,z} -> render {x,z,y}
+            const std::array<float, 3> rot{sw[2], sw[1], -sw[0]};  // +90deg: {x,y,z}->{z,y,-x}
+            for (int k = 0; k < 3; ++k) {
+                const float e0 = std::fabs(pose0[g][v][k] - sw[k]);
+                const float e9 = std::fabs(pose90[g][v][k] - rot[k]);
+                if (e0 > swap_err) swap_err = e0;
+                if (e9 > rot_err) rot_err = e9;
+            }
+        }
+    F2_CHECK(swap_err < 1e-4f);  // render swap correct
+    F2_CHECK(rot_err < 1e-3f);   // Y-rotation matches place_vertex convention
 }
 
 int main() {
