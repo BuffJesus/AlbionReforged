@@ -361,11 +361,19 @@ void NativeGame::tick(double delta_seconds) {
             // set_clip resets the playback time, so calling it every step would pin the clip to
             // frame 0 and freeze the animation. FLAGGED: no-op bind pose until the cook emits
             // hero_locomotion clips (select returns nullptr on empty; update guards a null clip).
+            float anim_rate = 1.0f;
             if (!hero_locomotion.empty()) {
-                const AnimClip* want = select_locomotion_clip(player.planar_speed(), hero_locomotion);
+                const float sp = player.planar_speed();
+                const AnimClip* want = select_locomotion_clip(sp, hero_locomotion);
                 if (want != hero_anim.clip()) hero_anim.set_clip(want);
+                // Scale playback so the clip's foot speed ~= ground speed (anim_runtime_sampler
+                // §C: avoid foot-slide). rate = ground_speed / clip_root_speed; idle (root ~0)
+                // plays at 1x. Clamped so a large speed/clip mismatch can't look frantic/frozen.
+                for (const LocomotionClip& lc : hero_locomotion)
+                    if (lc.clip == want && lc.root_speed > 0.01f)
+                        anim_rate = std::clamp(sp / lc.root_speed, 0.25f, 4.0f);
             }
-            hero_anim.update(static_cast<float>(simulation_step));
+            hero_anim.update(static_cast<float>(simulation_step) * anim_rate);
             // Publish the hero heading into its entity transform (rotation[1]=yaw). The visible
             // facing forward to the renderer is Stage 3 (avoids double-rotation vs the baked yaw).
             if (NativeEntity* he = world.entities.find(hero_uid))

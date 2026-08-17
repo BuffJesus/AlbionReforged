@@ -16,8 +16,13 @@
 namespace f2 {
 
 struct PlayerMovementConfig {
-    float walk_speed = 2.5f;  // ENGINEERING (retail = anim root motion, P5)
-    float run_speed  = 6.0f;  // ENGINEERING
+    // GROUNDED: retail hero locomotion IS animation root motion (p2_feel_constants: no code speed
+    // literal), and these are the MEASURED intrinsic root speeds of the child hero's walk/run
+    // clips (anim_runtime_sampler_re.txt §B, net-root-translation). Moving at the clip's own root
+    // speed makes the feet track the ground (no foot-slide) at playback rate 1.0. FLAGGED: the
+    // walk<->run THRESHOLD + the in-between blend remain an engineering choice (§C).
+    float walk_speed = 0.77f;  // GROUNDED: walk clip id_02EE1AA7 root speed (wu/s)
+    float run_speed  = 4.20f;  // GROUNDED: run clip id_8C7D7F7E root speed (wu/s)
 };
 
 class NativePlayer {
