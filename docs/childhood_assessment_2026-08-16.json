@@ -1,0 +1,543 @@
+{
+  "summary": "Decomp-backed gap analysis: what QC010_Childhood actually requires vs what Fable2Native has, and a phased no-guessing recreation plan for the childhood level",
+  "agentCount": 8,
+  "logs": [
+    "Understand: 4/4 readers, 48 items",
+    "Synthesis: verdict-readiness 35% ; 12 gaps, 7 phases"
+  ],
+  "result": {
+    "gap_and_plan": {
+      "verdict": "No — Fable2Native cannot recreate a PLAYABLE childhood level today; it can recreate the childhood STAGE (a fully-lit, walkable Bowerstone Slums the child hero can be controlled through), but not the childhood EXPERIENCE. The render/cook substrate is genuinely feature-complete and hero control/camera/locomotion/nav/quest-sequencing are READY, but every system that turns the QC010 script from \"silently sequencing\" into \"visible beats\" — dialogue/text, interactive cutscenes, scripted actions, named quest entities, triggers, layer load-state, and Rose actually following you — is MISSING or STUBBED. The quest thread already reaches and runs QC010_Childhood; it just plays into black-hole stubs, so the sequence advances while nothing shows.",
+      "readiness_pct": 35,
+      "gap_analysis": [
+        {
+          "requirement": "Renderable stage: terrain + splat ground + static/GDB props + water + baked SH + point lights + sky/sun theme",
+          "status": "READY",
+          "have": "cook_levels.py cooks chapter2slums to a feature-complete F2SCENE rendered on both D3D12 and Vulkan (terrain heightfield, splat composite, ~84 meshes/5496 engine_level instances + ~1800 .save props, water bodies + sea vista, 897 .lmp SH probes, capped point lights, .genv per-level theme).",
+          "need": "Nothing for the stage itself; it is the one column that is done.",
+          "decomp_backed": "Fully data-backed: terrain_mesh_re.txt, lmp_lightmap_probes_re.txt, water_system_re.txt, ehf_vista_re.txt, fable2-genv-theme-solved. Verified rendering."
+        },
+        {
+          "requirement": "Child hero placed + controllable + animated + follow-camera + navigation motor",
+          "status": "READY",
+          "have": "Hero glued (CH_HeroChild_Male) at the decomp-validated PlayerStart; camera-relative control -> collide-and-slide; locomotion clips selected by planar speed with data-backed walk/run root speeds; follow-cam; Physics.__Teleport/__SetFacing real for hero; Navigation.__MoveTo drives a lazy nav agent at ENavigationSpeed tiers.",
+          "need": "Hero start position is HARDCODED in the cooker, not read live from the .gdb; some nav-speed tiers are FLAGGED interpolation. Neither blocks a playable stage.",
+          "decomp_backed": "Grounded: npc_spawn_re.txt (PlayerStart validated); nav speeds partially measured (WALK 0.77 / RUN 4.20), rest FLAGGED."
+        },
+        {
+          "requirement": "Quest sequencing: QuestManager coroutine scheduler + message-bus waits + gameflow reaching QC010",
+          "status": "READY",
+          "have": "Real message-bus (IsMessagePosted/SentTo/SentBy, PostMessage, Event getters), Quest->General->AI tick order, SearchTools name filter; start_new_game -> Gameflow -> StartQuest('QC010_Childhood') verified by test. ~160 scripts load, 0 hard misses.",
+          "need": "SearchTools supports NAME filter only (no area/component); several gameflow stand-ins (Orchestra/PlutoPermanents/AddQuestToPermanentsTables) are FLAGGED no-ops that let flow advance without real work. Sequence runs; presentation does not.",
+          "decomp_backed": "Grounded: native_bindings.cpp message bus + native_game.cpp tick wiring; test asserts QC010 start."
+        },
+        {
+          "requirement": "Dialogue / text: babel GetText + GUI.Display*Box (hold-A prompts, quest questions, narration, subtitles, gold/warrant counters)",
+          "status": "MISSING",
+          "have": "ZERO registered natives. Every DisplayInfoBox/DisplayMessageBox/GetText/SaySimLine/SetNarratorTag/GUI.SetCounter call falls into the auto-stub (returns nil, shows nothing, gathers no choice).",
+          "need": "Register a GUI native class (Display*Box, hold-A DBS_QUEST_ACCEPTANCE + MessageEvents.IsMessagePosted round-trip, SetCounter/RemoveCounter) + a native text-box renderer, plus a GetText(tag) weak-override feeding cooked UTF-16 strings. This is the #1 leverage gap — without it every childhood beat (music-box wish, buy-box, go-to-castle, gold counter) is blank.",
+          "decomp_backed": "Decomp DONE (fable2-babel-text-system: GetText=sub_822F3D08, FNV-1 hash, red-black tree). book.babel bulk text compression codec still unknown -> the override path (feed cooked strings) is the FLAGGED-safe route; a from-file authoring flow stays FLAGGED until the codec is cracked."
+        },
+        {
+          "requirement": "Interactive cutscenes + camera-override cages + scripted Action animations (poo cold-open, Murgo pitch, Theresa, Rose wish, Lucien/study, gun cam)",
+          "status": "STUBBED",
+          "have": "Direct scripted camera pose (Camera.__MoveTo/SetAngles) is real and the follow-cam yields to it. But CameraManager.SetCameraOverride is registered INERT (records request, does not cage/evaluate the closure), no ICS/GroupMind/letterbox/PlayFullCutscene natives exist, and no Action.SetCurrentAction/PLAY_ANIMATION native exists (all auto-stub).",
+          "need": "A native ICS beat-runner (evaluate PositionFunction/FocusFunction cages per frame, CSE_SAY_LINE via the text system, MoveToNextElement) + an Action native that plays a named clip on an entity/hero. Given the childhood's bounded beat set, a bespoke native re-impl is lighter than porting the retail director queue.",
+          "decomp_backed": "Decomp DONE (cutscene_ics_system.txt director enqueue/stop/query, ICSDisplay letterbox bytes, InteractiveCutscenes.gdb). One gap: §7-a director per-frame TICK fn un-isolated -> FLAGGED if driving the retail queue; the native re-impl sidesteps it. IC asset content (QC010_TheresaRose etc.) lives in cutscene/anim banks, referenced by name only -> FLAGGED until decoded."
+        },
+        {
+          "requirement": "Named quest entities + markers (Rose, Murgo, Theresa, Lucien, Garth, Jeeves, guards, dog; QC010_*Marker, hero circle, wish/objective markers)",
+          "status": "MISSING",
+          "have": "The 56+ QC010/QC030 named entities + all markers exist in chapter2slums.save with GUIDs+transforms, decodable via the already-validated SimpleTransformComponent(0x619F96CF)->Position/Rotation chain. The cook only extracts creature-spawn markers + PlayerStart; everything else is discarded. F2SCENE/NativeScene has no field to carry a named entity or marker.",
+          "need": "New F2SCENE records + a NativeScene entity/marker table (name -> transform), a cooker path to emit named markers/entities, and runtime GetEntityWithName/GetPositionOfEntity backed by it. ENV-SESSION boundary: schema + cook change is co-owned with the environment session.",
+          "decomp_backed": "Transform chain fully RE'd (npc_spawn_re.txt); the DATA is decodable now. Only the schema+cook plumbing is missing (no RE gap)."
+        },
+        {
+          "requirement": "Trigger / region volumes (arch, crowd, circle, corridor, banister, study triggers gating every beat)",
+          "status": "MISSING",
+          "have": "MessageEvents bus + IsDistanceBetweenThings* substrate exists (entity-thread triggers can poll distance). But no trigger-volume geometry/extent/region-membership is decoded or carried; the childhood's *Trigger entities have no representation.",
+          "need": "For a first pass, distance-radius trigger stand-ins keyed off cooked marker positions (works because trigger entity-threads already poll IsDistance*). Faithful box/sphere/corridor volumes need the on-disk volume-shape record RE'd first.",
+          "decomp_backed": "PARTIAL: quest_system.txt names the trigger natives + GenericTrigger threads, but the on-disk volume EXTENT record is NOT yet RE'd -> exact volumes stay FLAGGED; distance-radius approximation is data-backed via marker positions."
+        },
+        {
+          "requirement": "NPC scripted motion: Rose follows/leads the hero with a visible animated body; guard/Garth/Jeeves script-walks",
+          "status": "PARTIAL",
+          "have": "Nav motor is READY (Navigation.__MoveTo moves an entity to a goal). A script CAN command an entity to a point.",
+          "need": "(1) Follow.FollowEntity/StopFollowing + Navigation.MoveToEntity natives NOT registered (feed Rose's goal = hero pos each tick — bounded, does not need the full DECIDE brain). (2) Non-hero velocity readback is FLAGGED zero. (3) CRITICAL: cooked NPCs are BAKED STATIC bind-pose instances, not animated character meshes -> even a moving agent has no visible animated body. That last part is ENV-SESSION owned (character-mesh cook).",
+          "decomp_backed": "Grounded: npc_ai_brain_system.txt (Follow.FollowEntity 0x825E33D0, Navigation.MoveToPosition 0x821B9DF0). Childhood confirmed to use entity-thread Follow/Nav, NOT the villager schedule brain (G2 gap non-critical). Animated-mesh NPC cook = FLAGGED coordination boundary."
+        },
+        {
+          "requirement": "Entity creature instantiation from GDB (Debug.CreateEntityAt resolves an archetype -> mesh + components + AI; the dog companion, spawned crowd)",
+          "status": "STUBBED",
+          "have": "Debug.CreateEntityAt returns a usable handle with a TransformComponent + name, so spawn+move+name scripts work. Native ECS (TransformComponent/HealthComponent) exists.",
+          "need": "The `class` arg is stored as a NAME, never resolved to a GDB archetype -> spawned entity has no mesh/AI/appearance (invisible). Need either the retail entity_build_components_from_record chain ported, or a minimal name->cooked-mesh lookup for the childhood's finite cast + dog.",
+          "decomp_backed": "Decomp DONE (gdb_instantiation_re.txt Q1 CLOSED; npc_archetype_binding_re.txt cook-ready). Runtime resolution is a pure implementation gap; a minimal name->mesh map is data-backed via the cook."
+        },
+        {
+          "requirement": "Layer load-state / conditional geometry (34 named layers; InitiallyOff quest layers activated at specific steps)",
+          "status": "MISSING",
+          "have": "Nothing: the cook enumerates ALL entities regardless of layer, so InitiallyOff quest-conditional + morality/story-variant geometry is cooked as if always present (only a one-off Spire-variant dedup exists). Layers.Activate/DeactivateLayer is an auto-stub table.",
+          "need": "Cook load-state per entity + a NativeScene layer table + runtime Layers.Activate/Deactivate toggling instance visibility. Also a fresh-start layer trace to know which layers should be present at New Game.",
+          "decomp_backed": "PARTIAL: load-state fields are IN the .save (AlwaysOn/InitiallyOn/InitiallyOff visible) but the fresh-start semantics + which steps QC010 activates which layer need a qc010 ActivateLayer trace -> FLAGGED until traced."
+        },
+        {
+          "requirement": "Level streaming handoff (LoadAndWaitForLevel 'Albion' + FairfaxCastleGardens for the castle/study/fall)",
+          "status": "PARTIAL",
+          "have": "Scenes DO load and render, but the handoff is APP-DRIVEN (menu / --scene CLI). NativeGame::load_scene works.",
+          "need": "LoadLevel is auto-stubbed -> a quest cannot stream/change levels. Need to couple the LoadLevel native to NativeGame::load_scene (level name -> cooked F2SCENE path). Also FairfaxCastleGardens must be cooked (only chapter2slums is proven). Beats 7-10 (castle, Jeeves, study, Lucien, fall) are gated on this.",
+          "decomp_backed": "Coupling is an implementation choice; the second level cook is an ENV-SESSION task. Fall_m/f.bik reuses the existing native video path (cheap). FairfaxCastleGardens cook = FLAGGED not-yet-done."
+        },
+        {
+          "requirement": "Sub-quest core loop (earn 5 gold: QC020 photo, QC030 beetle, QC040 dog, QC045 letter, QC050 warrants, QC055 wino) + gold economy/counter",
+          "status": "MISSING",
+          "have": "Inventory/Money/QuestTracker/GUI are all auto-stub tables; sub-quest internal minigame mechanics were only header-inspected.",
+          "need": "Depends on the whole dialogue+interactable+trigger+entity stack above, PLUS each sub-quest's internal beats (Rex-fight for the dog, warrant pickups, booze theft) enumerated from the sibling files. This is the deepest, latest content.",
+          "decomp_backed": "PARTIAL: sibling files (qc050_wanted.lua warrants confirmed) exist but internal mechanics + per-sub-quest Rose ordering (RoseStateTypes) are NOT exhaustively traced -> FLAGGED for later phases."
+        }
+      ],
+      "phases": [
+        {
+          "title": "Phase 0 — Walkable childhood stage (ships today, no new RE)",
+          "goal": "The child hero spawns at the real PlayerStart in a fully-lit Bowerstone Slums and can be walked/run around it with a working follow-camera. A 'set-dressed diorama' that is genuinely the childhood location.",
+          "work": "Confirm the current cook + both renderers on chapter2slums with --hero; verify hero control/locomotion/nav on the cooked collision. Capture a stub_misses() ranked list from an actual --game-scripts childhood run to quantify which MISSING/STUBBED natives QC010 hits most (this drives Phase ordering).",
+          "grounding": "All READY per gap analysis: cook is feature-complete + rendering-verified; hero control Stages 2/3 DONE; QuestManager reaches QC010 (test-verified). No stubs required beyond capturing the miss list.",
+          "blocked_on": "Nothing. cook_levels.py + renderer are ENV-session-owned but already shipped for chapter2slums."
+        },
+        {
+          "title": "Phase 1 — Text is visible (highest leverage)",
+          "goal": "Every childhood text beat renders: hold-A prompts (buy-box, wish, go-to-castle), quest questions, narration, subtitles, and the gold/warrant counters. This alone converts 'silent sequencing' into a readable opening.",
+          "work": "Implement a GetText(tag) weak-override feeding cooked UTF-16 strings; register a real GUI native class: DisplayInfoBox/DisplayInfoBoxParams (DBS_QUEST_ACCEPTANCE hold-A) + MessageEvents.IsMessagePosted round-trip, RemoveDisplayBox, SetCounter/RemoveCounter, SaySimLine, SetNarratorTag; build a native text-box + counter renderer on the existing native UI stack.",
+          "grounding": "Decomp DONE (fable2-babel-text-system). FLAGGED: book.babel bulk-text compression codec is unknown, so strings must be COOKED/overridden, not parsed from file, until the codec is cracked — a from-file custom-text flow stays FLAGGED.",
+          "blocked_on": "Native text-box renderer sits on the native UI renderer (ENV/frontend-shared), but the frontend UI stack already exists (ImGui-free NativeUiRenderer) so this is in-track."
+        },
+        {
+          "title": "Phase 2 — Named entities + markers + distance triggers in the cook",
+          "goal": "GetEntityWithName / GetPositionOfEntity return the real transforms for Rose, Murgo, Lucien, the hero circle, and every QC010_*Marker, so the quest can place cameras/entities at authored positions and distance-based triggers fire.",
+          "work": "Extend F2SCENE + NativeScene with an entity/marker table (name -> transform); add a cooker path emitting named markers/entities via the validated 0x619F96CF chain; back GetEntityWithName/GetPositionOfEntity with it; approximate *Trigger volumes as distance-radius checks keyed off cooked marker positions (the trigger entity-threads already poll IsDistance*).",
+          "grounding": "Transform chain fully RE'd (npc_spawn_re.txt) — data-backed, no guessing. FLAGGED: faithful box/sphere/corridor trigger EXTENTS are NOT yet RE'd, so volumes stay distance-radius approximations until the on-disk volume-shape record is reversed.",
+          "blocked_on": "ENV-SESSION coordination: F2SCENE schema + cook_levels.py are co-owned. New record types must be agreed with the environment session (this is the explicit schema-ceiling boundary)."
+        },
+        {
+          "title": "Phase 3 — Cutscene staging: camera cages + scripted Action anims + ICS beats",
+          "goal": "The opening's staged beats play with real framing and animation: bird-poo cold-open, Murgo pitch, Theresa saturated cutscene, the wish DOF close-up, and the study/gun sequence — cameras cage, hero/NPCs play their scripted clips, SaySimLine drives subtitles (Phase 1).",
+          "work": "Make CameraManager.SetCameraOverride real (evaluate PositionFunction/FocusFunction cages per frame + gate the follow-cam); register an Action native (SetCurrentAction/FinishAllActions playing a named clip on hero/entity from the cooked anim package); build a bespoke native ICS beat-runner (CSE_SAY_LINE -> text, MoveToNextElement, letterbox).",
+          "grounding": "Decomp DONE (cutscene_ics_system.txt). FLAGGED: §7-a director TICK fn un-isolated -> the native re-impl of the bounded childhood beat set sidesteps it; IC asset CONTENT (QC010_TheresaRose, LucienCircle, RoseWishSequence) is name-only in anim/cutscene banks -> stays FLAGGED until those banks are decoded (camera closures + text carry the beat in the meantime).",
+          "blocked_on": "Anim clip playback needs cooked Action clips per entity (ENV/cook-side anim packages); hero locomotion package already proves the path."
+        },
+        {
+          "title": "Phase 4 — Rose follows + GDB entity resolution + animated NPC bodies",
+          "goal": "Rose visibly follows/leads the hero (the emotional core), guard/Garth/Jeeves script-walk, and CreateEntityAt spawns (the dog companion) render as real meshes.",
+          "work": "Register Follow.FollowEntity/StopFollowing + Navigation.MoveToEntity (feed goal = hero pos each tick onto the READY nav motor); fix non-hero velocity readback; add a minimal CreateEntityAt class-name -> cooked-mesh+components lookup (or port entity_build_components_from_record). ENV-side: cook story NPCs (Rose/Theresa/Lucien) + generator NPCs as ANIMATED character-mesh instances, not static bind-pose.",
+          "grounding": "Decomp DONE (npc_ai_brain_system.txt Follow/Nav verbs; gdb_instantiation_re.txt + npc_archetype_binding_re.txt cook-ready). Childhood confirmed entity-thread Follow-driven, not schedule-brain (data-backed). FLAGGED: full DECIDE brain intentionally NOT ported (out of scope).",
+          "blocked_on": "ENV-SESSION: animated character-mesh cook for NPCs is the environment session's cook responsibility (current NPC cook is static bind-pose)."
+        },
+        {
+          "title": "Phase 5 — Layers, level streaming, and Fairfax Castle handoff",
+          "goal": "Quest-conditional geometry appears/hides correctly, and the quest itself streams to FairfaxCastleGardens for the study/Lucien/fall, ending with Fall_m/f.bik and the adult conversion.",
+          "work": "Cook load-state per entity + NativeScene layer table + runtime Layers.Activate/Deactivate toggling instance visibility; couple the LoadLevel native to NativeGame::load_scene (level name -> F2SCENE path); cook FairfaxCastleGardens; wire the fall .bik through the existing native video path + Age.SetAgeGroup(ADULT) + adult re-conversion.",
+          "grounding": "Load-state fields are IN the .save (data-backed). .bik reuse is proven (fable2native-frontend-architecture video path). FLAGGED: fresh-start layer semantics need a qc010 ActivateLayer trace; FairfaxCastleGardens cook not yet done.",
+          "blocked_on": "ENV-SESSION: second-level cook (FairfaxCastleGardens) + layer-state cook are environment-session tasks."
+        },
+        {
+          "title": "Phase 6 — Sub-quest core loop (earn-5-gold) + endings",
+          "goal": "The full playable loop: 6 gold sub-quests (photo, beetle, dog-rescue, letter, warrants, wino), gold economy + GUI counter, music-box purchase, wish, sleep->morning, good/evil resolution branch.",
+          "work": "Register Inventory/Money/QuestTracker as real; enumerate each sibling sub-quest's internal minigame beats + text tags; implement the Rose RoseStateTypes ordering; the ChildhoodResolutionEvil diary-layer branch.",
+          "grounding": "Sits on Phases 1-5. FLAGGED: sub-quest INTERNAL mechanics (QC040 Rex-fight, QC050 warrant stealth, QC055 booze theft) + the exact per-sub-quest Rose ordering + the good/evil decision points are NOT exhaustively traced — each sibling file needs its own read before implementation. Kept FLAGGED-stub until traced.",
+          "blocked_on": "Depends on the whole stack above; deepest content, correctly last."
+        }
+      ],
+      "biggest_blockers": [
+        "DIALOGUE/TEXT is the single highest-leverage gap: ZERO GUI/GetText natives registered, so every hold-A prompt, quest question, subtitle, narration and gold/warrant counter renders blank — the childhood is dialogue-heavy and currently sequences silently. Decomp is done; it is a pure implementation task (Phase 1).",
+        "F2SCENE/NativeScene SCHEMA CEILING: the format has no struct for a named entity, marker, trigger volume, region, layer, or interactable, so even though ALL the marker/entity transforms are decodable from the .save, there is nowhere to put them. This forces a schema+cook change co-owned with the ENV session before Rose/Lucien/the hero-circle can be located.",
+        "CUTSCENE STAGING is entirely absent: CameraManager.SetCameraOverride is inert, no Action-anim native, no ICS beat-runner — so the poo cold-open, Theresa, wish close-up and study/gun sequence have no visible staging even though the sequence advances.",
+        "ANIMATED NPC BODIES: cooked NPCs are static bind-pose instances, so even with Follow/Nav wired, Rose leading the hero has no visible animated body — an ENV-session character-mesh cook dependency.",
+        "SECOND LEVEL + STREAMING: LoadLevel is auto-stubbed and FairfaxCastleGardens is not cooked, so beats 7-10 (castle, Jeeves, study, Lucien shooting, fall) cannot be reached in-quest yet.",
+        "GDB ARCHETYPE RESOLUTION: Debug.CreateEntityAt stores class as a name and never resolves a mesh/AI, so the dog companion and any spawned cast are invisible transform-only handles."
+      ],
+      "no_guessing_notes": "The plan stays data-backed wherever a decomp spec or cooked datum exists: the stage (terrain/props/water/lighting/theme), hero PlayerStart, quest sequencing reaching QC010, the marker/entity transform chain (0x619F96CF, npc_spawn_re.txt), GetText (fable2-babel-text-system), ICS director (cutscene_ics_system.txt), Follow/Nav verbs (npc_ai_brain_system.txt), and GDB instantiation (gdb_instantiation_re.txt) are all RE'd to spec — these phases are implementation, not reverse-engineering. What MUST remain FLAGGED-stub until RE closes: (1) trigger-volume EXTENTS (only distance-radius approximations are data-backed; the on-disk box/sphere/corridor volume record is un-RE'd), (2) layer fresh-start + per-step ActivateLayer semantics (need a qc010 ActivateLayer trace), (3) IC/cutscene + Action ASSET CONTENT (QC010_TheresaRose, LucienCircle, RoseWishSequence, Fall_m/f.bik, scripted clips) — referenced by name only, live in cutscene/anim banks not yet decoded, so cameras+text carry the beat until then, (4) sub-quest INTERNAL minigame mechanics + per-sub-quest Rose ordering + good/evil decision points (sibling files only header-inspected), (5) book.babel bulk-text compression codec (unknown) — sidestepped by the GetText override feeding COOKED strings, but a from-file authoring flow stays FLAGGED. The ENV-session boundary is explicit: F2SCENE schema, cook_levels.py, the FairfaxCastleGardens/second-level cook, animated character-mesh NPC cook, and layer-state cook are co-owned/owned by the environment session; this track owns the runtime natives (GUI/GetText/Action/Follow/ICS/CameraManager/LoadLevel coupling) and the quest-driven behavior. No numeric camera/marker coordinates are invented — they come from the cooked .lev/.save, so Phase 2 (cook the markers) must precede any beat that places a camera or entity.\""
+    },
+    "verification": [
+      {
+        "lens": "Adversarial audit for GUESSING and hidden RE gaps: cross-checked every READY/PARTIAL status and every phase against qc010_childhood.lua (10,303 lines) and the decomp specs in ghidra_out/ (cutscene_ics_system.txt, npc_archetype_binding_re.txt, quest_system.txt, frontend_language_subtitles.txt, npc_spawn_re.txt). Measured the actual native/API call frequencies in the real quest rather than trusting the plan's beat inventory.",
+        "verdict": "NEEDS_FIXES",
+        "problems": [
+          {
+            "item": "Phase 3 / cutscene 'STUBBED' + 'bounded beat set, bespoke native re-impl is lighter'",
+            "issue": "GUESSING about scope. The real qc010_childhood.lua has 135 PlayCutscene calls referencing ~129 DISTINCT named cutscene assets (QC010_MurgoBuy, QC010_Rose, QC010_LucienCircle, QC010_MurgoWaitTargeted...). This is not a 'bounded beat set' — it is a large authored cutscene graph. Worse, the plan's own decomp (cutscene_ics_system.txt) confirms the staging CONTENT is undecoded: §7-a the per-frame director TICK is 'not isolated statically … HIGHEST-VALUE gap for the port'; camera keyframes live in un-decoded .cam assets + InteractiveCutscenes.gdb (§7-c data format not dumped); say-line/conversation binding is GAP §7-d. So 'cameras + text carry the beat in the meantime' is a stub presented as a workable staging plan — with the tick, .cam data, and ICS gdb all un-RE'd, there is NOTHING to drive per-frame framing for 129 assets.",
+            "fix": "Re-status cutscene staging from STUBBED to a hard RE gate, not an implementation task. Before claiming any beat renders, close §7-a (isolate the director TICK) and RE the .cam keyframe + InteractiveCutscenes.gdb formats. Re-scope Phase 3 to a SMALL, explicitly-enumerated proof set (e.g. 2-3 assets whose closures you have actually read), and state that the other ~126 remain unstageable until asset banks are decoded. Drop the 'lighter than the retail queue' claim — 129 assets is not lighter."
+          },
+          {
+            "item": "Trigger volumes — Phase 2 'distance-radius approximation is data-backed / fine for a first pass'",
+            "issue": "Optimistic hand-wave over an unsolved gap. The quest uses IsSpecificTriggerEntityInsideTriggerVolume + SetToTriggerOnSpecificEntity (real point-in-volume membership on a specific entity), and separately calls Trigger.GetBoundingRadius to DRIVE the objective breadcrumb UI. The plan admits the on-disk box/sphere/corridor extent record is un-RE'd, then proposes distance-radius stand-ins — but the childhood's corridor/arch/banister triggers are explicitly non-radial (a corridor is not a circle), so a radius approximation will mis-fire the very beats it gates. The plan calls this 'data-backed via marker positions' — the marker POSITION is data-backed; the VOLUME is guessed.",
+            "fix": "Label the trigger approximation as an explicit fidelity compromise that WILL misfire on non-radial volumes, not as 'data-backed'. Gate faithful triggers on RE'ing the on-disk volume-extent record (currently un-RE'd per the plan's own §note). Do not present distance-radius as sufficient for the corridor/arch/banister beats."
+          },
+          {
+            "item": "Phase ordering — Phase 6 'sub-quest core loop, correctly last' + main-quest spine presented as reachable in Phases 0-5",
+            "issue": "Hidden dependency inversion. QC010 directly reads Gameflow.ChildhoodVars.BeetleHunterCompleted / WinoCompleted / BulliesAndDogCompleted / PoseForPictureCompleted / WantedCompleted and GoldNeeded=5 to advance its OWN progression (lines 176-198, 321, 923-1059, 3026). The main-quest spine is interleaved with sub-quest completion flags — you cannot walk the childhood 'experience' past the music-box gate without the 6 sub-quests supplying gold/flags. So deferring ALL sub-quests to a final Phase 6 means Phases 1-5 produce a quest that sequences into a permanent GoldNeeded wall. The plan's 'deepest content, correctly last' framing hides that the spine is BLOCKED without it.",
+            "fix": "Acknowledge the main quest gates on sub-quest flags. Either (a) move a minimal gold-flag satisfaction path earlier (debug-set the completion flags, which the script itself supports via ChildhoodVars.DEBUG_MODE / SkipTo* — grounded in the file) so Phases 1-5 can traverse the spine, or (b) re-label Phases 1-5 as 'opening beats only, blocks at music-box gate' rather than a path to a playable childhood."
+          },
+          {
+            "item": "Omitted system: particles / Prop.FX (not mentioned anywhere in the plan)",
+            "issue": "Missing requirement entirely. The quest fires 26 particle/FX cues by name: FX_Bird_Poo_Splat (the poo cold-open the plan lists as a marquee beat), FX_HeroCircle_Symbol / _Red (the visible core of the Lucien-circle climax), FX_Musicbox_Disappear (the wish payoff), FX_Torch_Fire, FX_Pot_Steam_01, FX_Steam_Blast. The plan enumerates the poo cold-open and wish close-up as target beats but never lists the particle system as a requirement — so those beats would render with no visible effect even after Phases 1-5. This is a whole subsystem silently dropped.",
+            "fix": "Add a particle/Prop.FX requirement row + phase. The bird-poo, hero-circle symbol, and music-box-disappear beats the plan markets cannot be 'visible' without it; either RE particle_bank.bnk playback (decoded per memory, no writer/runtime) or explicitly scope those beats out."
+          },
+          {
+            "item": "Omitted system: SoundTools.PlayMusic / audio cues",
+            "issue": "8 PlayMusic calls drive the childhood's musical beats (the music-box theme is literally the emotional core). The plan claims a native video/audio path exists (Phase 5 .bik reuse) but never lists in-quest music/SFX cueing as a requirement or dependency. Presented-as-complete plan silently lacks the quest-driven audio surface.",
+            "fix": "Add a SoundTools/quest-audio requirement. At minimum flag PlayMusic as auto-stubbed and needed for the music-box beats, rather than omitting it."
+          },
+          {
+            "item": "GetEntityWithName 'MISSING, pure schema+cook plumbing, no RE gap' (Phase 2 / biggest_blockers)",
+            "issue": "Understated scope masquerading as 'no RE gap'. GetEntityWithName is called 103 times and is typed (…, name, 'object'|'marker') — the third arg selects a CATEGORY the plan's schema (name->transform table) doesn't model. Many lookups feed Trigger.*, PlayCutscene focus entities, and UpdateObjectiveEntity, i.e. the returned handle must be a live entity with components, not just a transform. The plan's 'name -> transform' table returns a poseable point, not an entity that Trigger/Follow/Action can operate on. Calling this 'no RE gap, pure plumbing' hides that a name->transform table is insufficient for how the handle is actually used downstream.",
+            "fix": "Distinguish name->transform (markers) from name->live-entity (objects that receive Trigger/Follow/Action/PlayCutscene). The latter needs the entity to exist as a runtime object with components, which depends on GDB archetype resolution (the plan's own STUBBED row) — so GetEntityWithName is NOT independent of the archetype-resolution gap it is listed separately from."
+          },
+          {
+            "item": "'~160 scripts load, 0 hard misses' + 'test asserts QC010 start' as evidence the sequencing is READY",
+            "issue": "Stub-passes-as-green risk. The plan itself says QC010 'plays into black-hole stubs, so the sequence advances while nothing shows' and that Orchestra/PlutoPermanents/AddQuestToPermanentsTables are 'FLAGGED no-ops that let flow advance without real work.' A test that asserts 'QC010 started' against a script whose every side-effect native is an auto-stub proves the SCHEDULER runs, not that the quest is correctly sequencing — a no-op that returns nil will 'advance' a coroutine past a beat that should have BLOCKED on a real wait (e.g. IsInteractiveCutsceneWaitingForMe, IsSpecificTriggerEntityInsideTriggerVolume). '0 hard misses' counts load failures, not semantic correctness.",
+            "fix": "Downgrade sequencing from unqualified READY to 'scheduler READY; per-beat wait-condition correctness UNVERIFIED until the wait natives (IsInteractiveCutsceneWaitingForMe, trigger membership, StartScriptControlledMovement completion) return real values.' A stubbed wait that returns nil can silently skip or deadlock a beat; the passing test does not exclude this."
+          },
+          {
+            "item": "Rose follow 'PARTIAL, Nav motor READY, feed goal=hero pos each tick, does not need the full DECIDE brain'",
+            "issue": "Oversimplified. RoseQuestState is referenced 177 times with a RoseStateTypes state machine (RoseNoFollow, RoseCreep, RoseBeckonsToCrowd, RoseArrivedAtMurgo, RoseCallingTrigger, RoseCirclePrompt...) plus StartScriptControlledMovement (15 calls) and StopFollowing/FollowEntity interleaving. Rose's behavior is a large scripted state machine with beckon/creep/interact animations, not 'goal = hero pos each tick.' The plan reduces the emotional-core NPC to a naive follow motor, which will not reproduce the beckon/lead/creep/smash beats (QC010_ROSE_SMASH, QC010_RoseBeckonsToCrowd).",
+            "fix": "Scope Rose as a scripted state machine (RoseStateTypes) requiring per-state scripted-movement + named animation clips (QC010_ROSE_IDLE/INTERACT/SMASH), not a follow motor. Those clips live in un-decoded anim banks (plan's own FLAG) — so visible Rose behavior is gated on anim-bank decode, reinforcing that Phase 4 depends on the ENV animated-mesh + clip cook it lists as out-of-track."
+          },
+          {
+            "item": "readiness_pct: 35 and verdict 'stage READY, experience missing'",
+            "issue": "The 35% headline is optimistic given the corrected evidence: cutscene staging (135 calls) is RE-gated not implementation-gated, particles + music are omitted subsystems, the main spine is blocked on deferred sub-quests, trigger volumes are un-RE'd, and named-entity lookup needs live entities (GDB resolution) not transforms. Of the twelve requirement rows, the ones that make the childhood an 'experience' (dialogue, cutscene, entities, triggers, NPC bodies, sub-quests, layers) are all MISSING/STUBBED/PARTIAL and several carry undisclosed RE gaps. 35% credits implementation-readiness to rows that are actually RE-blocked.",
+            "fix": "Lower the readiness for the 'experience' to reflect that cutscene TICK/.cam/ICS-gdb, trigger-volume extents, anim clips, and particle playback are all un-RE'd (not just unimplemented). The STAGE is ~done; the playable experience is closer to RE-frontier than to 'wire it up.' Keep the honest stage/experience split but stop labeling RE-gated rows as pure implementation."
+          }
+        ]
+      },
+      {
+        "lens": "Adversarial audit of FEASIBILITY and the gameplay-track ↔ environment-session boundary: for each phase, is it achievable WITHOUT editing env-session-owned files (native_scene.h/cpp F2SCENE schema, both world renderers, native_world.frag, cook_levels.py), and are both-backends (D3D12 + Vulkan) parity implications acknowledged? Verified against the actual repo on branch agent/native-gameplay-core.",
+        "verdict": "NEEDS_FIXES",
+        "problems": [
+          {
+            "item": "Boundary model overall (which files each track owns)",
+            "issue": "The plan's core boundary claim is CORRECT and verified: the runtime natives (GUI/GetText/Action/Follow/ICS/CameraManager/LoadLevel) live in gameplay-track files (native_bindings.cpp, native_script.cpp, native_game.cpp) — I confirmed CameraManager.SetCameraOverride at native_bindings.cpp:461 returns 0 (inert as claimed), and GUI/Follow/Layers/Inventory/Money/QuestTracker are all in kSupplementClassNames auto-stubs at native_script.cpp:29-33. The env-session gitStatus (native_scene.h/cpp, both world renderers, native_world.frag, cook_levels.py) matches exactly the files the plan flags as co-owned. So the boundary is real and the plan is honest about it. No fix to the model itself.",
+            "fix": "None — the split is accurate. The fixes below are about phases that UNDER-state or SILENTLY cross that boundary."
+          },
+          {
+            "item": "Phase 1 (Text visible) — 'blocked_on: in-track' claim",
+            "issue": "MOSTLY SOUND but slightly overstated as fully in-track. GetText override + GUI natives are pure gameplay-track (native_bindings/native_script). The native text-box renderer sits on NativeUiRenderer, which has BOTH a D3D12 (native_ui_renderer.cpp) and a Vulkan (native_vulkan_ui_renderer.cpp) implementation — confirmed both exist in the tree. Any NEW draw primitive the text/counter box needs (that the frontend UI stack doesn't already expose) must be added to BOTH backends. The plan says 'the frontend UI stack already exists' but does not assert the required primitives are already present.",
+            "fix": "Add an explicit sub-check to Phase 1: 'confirm the existing NativeUiRenderer text+quad primitives cover Display*Box/counter needs on BOTH D3D12 and Vulkan; if a new primitive is required it is a two-backend change (env/frontend-shared), not pure in-track.' Do NOT treat the renderer as free."
+          },
+          {
+            "item": "Phase 2 (Named entities + markers + triggers) — labelled co-owned, but the label under-states the schema+two-file cook dependency",
+            "issue": "Verified HARD-BLOCKED on env-session, and the plan says so — but the mechanism is worse than 'co-owned schema.' NativeScene (native_scene.h) has NO field for a named entity/marker/trigger/region/layer (I read all 189 lines: instances are anonymous mesh+transform+SH+draw-distance only). load_native_scene/save_native_scene (native_scene.cpp, an env-session file) define the text F2SCENE format both sides must agree on. AND runtime SearchTools.GetSearchResults (native_bindings.cpp:605) resolves only against entity_names, populated ONLY from Debug.CreateEntityAt + the hero (native_game.cpp:237). So Phase 2 requires THREE coordinated edits: (a) schema field in native_scene.h + reader/writer in native_scene.cpp [ENV], (b) cook emit in cook_levels.py [ENV], (c) spawn_from_scene populating entity_names [in-track]. The plan collapses (a)+(b) into 'schema+cook' and is right that nothing in this phase can be done alone.",
+            "fix": "Re-label Phase 2 blocked_on from 'co-owned' to 'HARD-BLOCKED: gated on env-session landing (a) a named-entity/marker record in the F2SCENE schema (native_scene.h + load/save in native_scene.cpp) and (b) the cook emit (cook_levels.py) BEFORE the in-track spawn_from_scene→entity_names wiring can resolve anything. This track cannot start Phase 2's payoff without those two env deliverables merged.'"
+          },
+          {
+            "item": "Phase 4 (animated NPC bodies) — correctly flagged, but parity implication of the render channel is missing",
+            "issue": "The animated-character-mesh NPC cook is correctly flagged ENV-owned. But the plan does not state that CONSUMING an animated/skinned instance is itself a two-backend renderer change. Both native_world_renderer.cpp (D3D12) and native_vulkan_world_renderer.cpp (Vulkan) independently loop scene.instances (lines 201 and 145 respectively) as static rigid transforms — there is no skinning path in EITHER. An animated NPC body needs a skinned-render channel added to BOTH renderers (env-session files) plus possibly native_world.frag. This is a heavier env dependency than 'the cook bakes animated meshes.'",
+            "fix": "Expand Phase 4 blocked_on: 'ENV-SESSION owns BOTH the animated-mesh cook AND the skinned render channel in both world renderers (D3D12 + Vulkan) — neither renderer has a skinning path today; both loop instances as rigid transforms. Rose-follows-visibly is gated on that two-backend render work, not just the cook.'"
+          },
+          {
+            "item": "Phase 5 (Layers + streaming) — layer visibility toggle silently depends on a two-backend renderer change",
+            "issue": "'runtime Layers.Activate/Deactivate toggling instance visibility' is presented as in-track runtime work, but there is NO per-instance visibility flag in NativeInstance (verified: native_scene.h:46-62 has mesh/position/rotation/scale/SH/draw-distance only) and NEITHER renderer honors any 'visible'/'layer' field (both just draw every instance in scene.instances). Toggling visibility therefore requires: a new NativeInstance field [ENV schema], cook writing layer/load-state per instance [ENV cook], AND both renderers skipping hidden instances [ENV, two backends]. The plan labels the cook side ENV but implies the runtime toggle is free — it is not; it crosses into both env renderers.",
+            "fix": "Correct Phase 5: add to blocked_on that 'toggling instance visibility needs a per-instance layer/visibility field in the schema (native_scene.h) + honoring it in BOTH world renderers (D3D12 + Vulkan) — currently every instance is drawn unconditionally. That is env-session two-backend work, not a pure runtime native.' LoadLevel→NativeGame::load_scene coupling IS in-track (verified load_scene exists at native_game.cpp:280); keep that part in-track."
+          },
+          {
+            "item": "Both-backends (D3D12 + Vulkan) parity — acknowledged for the stage, NOT carried into the gameplay phases",
+            "issue": "The plan acknowledges dual-backend only for Phase 0's already-shipped stage. Every phase that touches rendering (text box P1, named-marker debug draw if any, animated NPC P4, layer visibility P5) has a latent 'must land on BOTH backends' cost that is never stated as a phase-level risk. The repo confirms strict two-backend duplication: separate D3D12 and Vulkan world renderers AND ui renderers AND sky/cloud/tonemap renderers all exist as parallel files. Any new visual behavior is double the work and a parity-drift risk.",
+            "fix": "Add a cross-cutting note to the phase plan: 'Any phase introducing a new visual (text/counter box, layer visibility, skinned NPC, marker debug draw) is a TWO-BACKEND change (native_*_renderer.cpp + native_vulkan_*_renderer.cpp, and possibly native_world.frag) and must ship at parity on both D3D12 and Vulkan — screenshot-verified per the existing native_shot.ps1 convention. This roughly doubles the render-side effort and is env-session-owned.'"
+          },
+          {
+            "item": "Phase 3 (cutscene staging) — feasibility is in-track and sound; one soft flag on Action-clip cook",
+            "issue": "CameraManager.SetCameraOverride, the ICS beat-runner, and Camera.__MoveTo are all gameplay-track natives (verified inert override exists to replace). This phase is genuinely in-track EXCEPT the Action-anim playback: 'plays a named clip on hero/entity from the cooked anim package.' The hero locomotion package path exists (native_hero_anim / load_hero_anim, native_game.cpp:312), so hero clips are proven; but per-entity NPC action clips depend on the same NPC anim cook flagged in Phase 4. The plan flags IC/Action ASSET CONTENT as name-only-until-decoded, which is correct.",
+            "fix": "Minor: cross-reference Phase 3's Action-native to Phase 4's NPC anim cook dependency — playing a named clip on a NON-hero entity inherits Phase 4's env-owned NPC-anim-cook + skinned-render dependency. Hero-only scripted actions (poo cold-open on the hero) are in-track now; NPC scripted actions are not."
+          },
+          {
+            "item": "Readiness % and Phase 0 feasibility",
+            "issue": "SOUND. Phase 0 (walkable lit stage + hero control) is genuinely achievable today with no env edits — the stage is shipped and hero control/nav/quest-reaches-QC010 are in-track and test-cited. The 35% readiness and the 'stage not experience' verdict are well-calibrated. The stub-miss-ranking work item is a smart, zero-boundary in-track task. No fix.",
+            "fix": "None — keep Phase 0 as the in-track anchor. Recommend it explicitly ship independently of any env-session coordination so this track has a deliverable that never blocks."
+          }
+        ]
+      },
+      {
+        "lens": "Adversarial re-scan of qc010_childhood.lua (10,303 lines) for required runtime systems/beats the gap_analysis omitted or mis-scoped. Confirmed each item against concrete line evidence in the script; mapped each to the phase where it belongs.",
+        "verdict": "NEEDS_FIXES",
+        "problems": [
+          {
+            "item": "Diegetic music + SFX system (SoundTools.PlayMusic / PlaySound / SE_* cues)",
+            "issue": "Pervasive and load-bearing across beats — MUSIC_QC010_BIRD_POO (l.1858), MUSIC_QC010_LUCIENS_GUN (l.1561), MUSIC_QC010_MUSIC_BOX_WAIT (l.2171), SE_CHILDHOOD_BIRD_POO_SPLAT (l.1893), torch-fire FX audio. The gap_analysis lists ZERO audio requirement; it only mentions .bik video reuse. Every staged beat cues score/SFX; without it the opening plays silent even after text/camera land.",
+            "fix": "Add an explicit 'quest audio' requirement. Register SoundTools.PlayMusic/StopMusic + a one-shot SFX native backed by the existing XAudio2/native-audio path (already proven for GUI/frontend). Slot into Phase 3 (cutscene staging) — the poo/gun/music-box beats need their cues alongside camera+text — with the bank decode of MUSIC_/SE_ tags FLAGGED like the anim banks."
+          },
+          {
+            "item": "Screen fade + fade-lock (GUI.FadeScreenOut/FadeScreenIn/LockScreenFade/UnlockScreenFade)",
+            "issue": "Used at every level transition and around sleep/wake (l.391-403, 835-849, 1152, 1202-1210). Completely absent from the gap_analysis. Without it, level-stream handoffs and the sleep→morning cut pop instantly with no cover, and the retail beats explicitly fade-out-lock BEFORE LoadAndWaitForLevel then fade-in after.",
+            "fix": "Add FadeScreenOut/In + Lock/UnlockScreenFade as a Phase 5 requirement (co-requisite of the LoadLevel→load_scene coupling): fade must wrap the stream. Cheap native (full-screen quad alpha ramp) on the existing NativeUiRenderer."
+          },
+          {
+            "item": "Breadcrumb objective trail (Breadcrumber.* + BreadcrumbToShack / BreadcrumbTrailToExit)",
+            "issue": "A distinct particle-trail navigation-guidance system (l.419, 1215-1218, 1848-1852) that guides the lost child to the shack/exit. The gap_analysis folds QuestTracker into an auto-stub bucket and never mentions the breadcrumb trail at all — yet it is THE wayfinding mechanic for a child who has no map.",
+            "fix": "Add Breadcrumber (SetParticleAlphaMultiplier + trail-to-marker) as its own requirement. Slot into Phase 2 (needs cooked marker positions to draw the trail toward) and render as a particle/line on the native renderer. QuestTracker (Register/Unlock/SetAsActive/SetAsPrimary/SetAsCompleted/IsActive, l.375-377,193,1333) should also be broken out of the auto-stub bucket into Phase 2 as a real objective-state store, since GoToCastle/completion gating reads it."
+          },
+          {
+            "item": "Time-of-day control + sleep→morning beat (Timing.SetTimeOfDay / SetTimeAsStopped / Wait; Bedroll SleepLoop)",
+            "issue": "SetTimeOfDay(17) (l.7748), SetTimeOfDay calls at l.580,2811,5666,7978, SetTimeAsStopped (l.1341), and the Bedroll thread plays SleepLoop/SleepOutOf then wakes at ToD 17 (l.7728-7748, WakeHeroUp l.1506). The gap_analysis never lists time-of-day manipulation or the sleep/wake beat, though ToD drives the .genv theme the stage already renders — so a beat changing ToD would desync the (static) sky/sun.",
+            "fix": "Add a Timing/ToD requirement. Couple SetTimeOfDay to the .genv theme selection so a runtime ToD change re-picks sky/sun/ambient (the theme resolve is data-backed per fable2-genv-theme-solved). Sleep→morning belongs in Phase 3 (scripted hero anim + fade + ToD set). Note explicitly that the current stage bakes ONE ToD — dynamic ToD is a new requirement."
+          },
+          {
+            "item": "Child↔adult swap is Player.ChangePlayerEntityType (+ AddInitialItems + AppearanceModifier), not Age.SetAgeGroup alone",
+            "issue": "The plan's Phase 5 says 'Age.SetAgeGroup(ADULT) + adult re-conversion'. The actual transition (l.1348-1372) is Player.ChangePlayerEntityType(hero,'CreatureHero'/'CreatureHeroFemale') swapping the whole player entity type, THEN Inventory.AddInitialItems + AppearanceModifierManager.AddInitialItems. Age.SetAgeGroup (l.2071) is only the final OnExit stamp. The child spawn itself is ChangePlayerEntityType('CreatureHeroChild') at l.455-465, gendered.",
+            "fix": "Correct Phase 5: the transition = a gendered player-entity-type swap requiring a name->cooked-mesh resolution for CreatureHero/CreatureHeroFemale/CreatureHeroChild (ties directly to the Phase 4 GDB-archetype-resolution gap) plus AddInitialItems (inventory+appearance). This makes the child↔adult transition depend on Phase 4, not a standalone late step."
+          },
+          {
+            "item": "Player-capability gating layer unlocked at the transition (~10 subsystem toggles)",
+            "issue": "At child-start/transition the script toggles SetExperienceSpendingAsEnabled, ExperienceOrb.SetAsEnabled, SetMapScreenAsEnabled, SetPauseMenuInfoPageAsEnabled, Vaulting.SetAsEnabled, SetFastTravelStopActivationAsEnabled, SetSafetyModeSuggestable, Health.SetAsInvulnerable, AmbientPopulationManager.SetCrimeEnabled (l.1378-1427). None appear in the gap_analysis. These are the gates that make the child a restricted-capability hero (invulnerable, no XP spend, no map) — omitting them means the child plays with adult capabilities.",
+            "fix": "Add a 'player capability gates' requirement. These can be cheap boolean-state natives feeding the existing hero/HUD/gameplay flags. Slot the child-restriction set into Phase 0/1 (so the walkable child is correctly limited) and the adult-unlock set into Phase 5."
+          },
+          {
+            "item": "AutoSaveGame on chapter start (save-on-transition — the user's explicit question)",
+            "issue": "The user asked specifically about save-on-chapter-transition. It EXISTS: AutoSaveGame(true,true) at l.438, gated on not-E3Demo. The gap_analysis has no save/autosave requirement anywhere. A childhood recreation that reaches the '5 gold' stage without persisting has no checkpoint.",
+            "fix": "Add an AutoSaveGame requirement. Even a minimal 'write quest+scene state to a save slot' native belongs in Phase 5 (alongside the transition/streaming), or a no-op FLAGGED stub earlier. Call out that real save/load persistence is otherwise untracked in the plan."
+          },
+          {
+            "item": "Structured Action clips: LOOP/OutOf/Priority action trees on the HERO (not just NPCs)",
+            "issue": "The plan's Phase 3 'Action native' is under-specified. Real actions are structured tables: PLAY_ANIMATION with LoopAction/OutOfAction/NumLoops/Priority (poo: HeroReactsToPoo->HeroWarmingUpLoop->OutOf, l.1861-1888; SleepLoop/SleepOutOf l.7728-7735), applied to QuestManager.HeroEntity via Action.SetCurrentAction/FinishAllActions. The plan frames anim playback as mostly an NPC/ENV animated-mesh concern, but these are HERO clips the already-rigged hero can play now.",
+            "fix": "Re-scope the Action native to support the full action-tree schema (Type/Anim/LoopAction/OutOfAction/NumLoops/Priority) and note that hero scripted anims are achievable in Phase 3 WITHOUT the ENV animated-NPC-mesh dependency (hero is already animated). This de-risks the poo cold-open and sleep beats from the animated-NPC blocker."
+          },
+          {
+            "item": "Dog lifecycle: GetDog/CreateDog/PutEntityInLimbo/DogWhimper (not just CreateEntityAt invisibility)",
+            "issue": "The dog is more than a spawn: it is persisted across the music-box skip via PutEntityInLimbo + re-CreateDog (l.209-216), has DogWhimper (l.1509-1510) and a QC010_DogSleeps state (l.5860,6150). The gap_analysis reduces the dog to a CreateEntityAt archetype-resolution gap and misses the limbo/persist/whimper lifecycle and dog-specific natives (GetDog/CreateDog).",
+            "fix": "Add GetDog/CreateDog/PutEntityInLimbo + DogWhimper to the Phase 4 entity work as explicit natives, and note the entity-limbo (park/rehydrate) mechanic is reused broadly (SkipTo* paths) so it is not dog-only."
+          },
+          {
+            "item": "World-interaction state gating: LockAllDoors / SetTargetableAllBeds / Targeted.SetAsTargetable",
+            "issue": "The child's reachable space is shaped by LockAllDoors(l.246) and bed-targetability (l.285-322,1375, Targeted.SetAsTargetable l.277,311,574,1123). None in the gap_analysis. Without door-lock state the child can wander out of the authored childhood bounds; without bed-targetability the sleep beat can't be initiated.",
+            "fix": "Add a 'world-interaction state' requirement (door lock flags + targetable flags on cooked props). Slot into Phase 2 (rides on the named-entity/marker cook — doors and beds are named cooked entities whose flags the quest flips)."
+          },
+          {
+            "item": "Interactive-cutscene RULE flags + IC arbitration (AddScriptRules / CUTSCENE_RULE_NO_HERO_MOVE / IsPerformingAnyInteractiveCutscene / StopAnyInteractiveCutscene)",
+            "issue": "The plan's ICS beat-runner omits the per-cutscene rule flags set inline — AddScriptRules with CUTSCENE_RULE_NO_HERO_MOVE (l.1255-1262) locks hero input during a beat, and the Murgo buy interaction arbitrates with IsPerformingAnyInteractiveCutscene/StopAnyInteractiveCutscene (l.6988-6993). Without rule flags the hero can walk out of a playing cutscene.",
+            "fix": "Extend the Phase 3 ICS beat-runner requirement to include cutscene rule flags (hero-move lock etc.) and IC start/stop arbitration (only one IC at a time). Data-backed by cutscene_ics_system.txt already cited."
+          },
+          {
+            "item": "Localised / gendered full-motion video mid-quest (PlayLocalisedMovie / PlayLocalisedMovieWithGenderedVoice / PlayMovie), not just Fall_*.bik",
+            "issue": "The plan cites only Fall_m/f.bik as 'cheap video reuse'. The script also plays NewBeginnings.bik (l.1245), a generic PlayMovie (l.821), and uses PlayLocalisedMovie + PlayLocalisedMovieWithGenderedVoice (l.1228,1244) — i.e. locale- and gender-selected video/voice variants, which the existing native video path may not yet select by locale/gender.",
+            "fix": "Broaden the video requirement to gendered/localised movie selection (map gender+locale -> .bik + voice track). Small addition to the existing native video path; slot in Phase 5 with the fall/adult transition."
+          },
+          {
+            "item": "Mis-framed mechanics in the review's own question: 'shooting range' and 'warrant chase' do not exist as described",
+            "issue": "The prompt (and implicitly the plan's mental model) references a 'shooting range' and a 'warrant chase'. Evidence: the only gun is Lucien's ObjectInventoryPistol_Flintlock_Master fired in the STUDY CUTSCENE (l.1547-1574,1842) — there is no hero shooting-range minigame. Warrants (QC050) are a COLLECTION loop with a WantedWarrantCounter and fleeing NPCs via SetCanFlee (l.3501,3528,171), not a chase the hero runs.",
+            "fix": "Correct Phase 6's sub-quest framing: QC050 = warrant PICKUP + counter + SetCanFlee fleeing NPCs (stealth/collect), and the 'gun' beat = a non-interactive study cutscene (Lucien shoots), belonging in Phase 3 not Phase 6. Removing the phantom 'shooting-range minigame' avoids scoping a system that isn't in the script."
+          },
+          {
+            "item": "Dual-ledger gold + second counter, and RoseState follow/lead ordering",
+            "issue": "Gold is tracked in BOTH Gameflow.ChildhoodVars.Gold AND Money.Set/Get (l.138-139,148-149,156-157) and PayForBox costs exactly 5; there is a SECOND counter WantedWarrantCounter (l.171). Rose's follow/lead is driven by RequestRoseState/InvalidateRoseState + RoseStateTypes (l.107-131) — a state machine, not a raw FollowEntity call. The gap_analysis treats gold as one generic MISSING item and reduces Rose to Follow.FollowEntity.",
+            "fix": "In Phase 2/4: model gold as dual-ledger (quest var + Money) with the exact PayForBox=5 economy and TWO GUI counters; model Rose via the RequestRoseState/RoseStateTypes state machine feeding the nav motor, not a bare FollowEntity, since her follow/lead/wait/by-fire poses switch per beat (SetHeroByFire l.2086)."
+          }
+        ]
+      }
+    ],
+    "reader_open_questions": [
+      "[QC010_Childhood — Bowerstone Slums opening, full ordered beat reconstruction (qc010_childhood.lua + sibling QC020–QC055 sub-quests)] The Rose thread's full START-phase state machine (lines ~2261-5540) that hands out each sub-quest's approach/accept was only sampled at its entry and its wish climax; the exact per-sub-quest ordering the sister enforces (which of QC020/030/040/045/050/055 is offered first and any branching) is data-driven via RequestRoseState/RoseStateTypes and was not exhaustively traced.",
+      "[QC010_Childhood — Bowerstone Slums opening, full ordered beat reconstruction (qc010_childhood.lua + sibling QC020–QC055 sub-quests)] Sub-quest INTERNAL beats (e.g. QC040 Rex-fight mechanics to earn the dog, QC050 warrant stealth/pickpocket, QC055 Magpie booze theft) live in the sibling files and were only header-inspected — each needs its own read to enumerate their minigame mechanics and text tags.",
+      "[QC010_Childhood — Bowerstone Slums opening, full ordered beat reconstruction (qc010_childhood.lua + sibling QC020–QC055 sub-quests)] Concrete numeric camera positions and marker coordinates are baked in the script but the marker world-positions themselves come from the cooked level (Albion/FairfaxCastleGardens) .lev data, not the Lua — needed to actually place cameras/entities.",
+      "[QC010_Childhood — Bowerstone Slums opening, full ordered beat reconstruction (qc010_childhood.lua + sibling QC020–QC055 sub-quests)] 'good vs evil' childhood-resolution branching (ChildhoodResolutionEvil, QC010_RoseDiaryLayer_Slums vs _Posh, evil/nice Rose gold states) affects the ending art but the decision points that set it were not fully traced.",
+      "[QC010_Childhood — Bowerstone Slums opening, full ordered beat reconstruction (qc010_childhood.lua + sibling QC020–QC055 sub-quests)] The exact IC cutscene assets (QC010_MurgoPitch1, QC010_TheresaRose, QC010_LucienCircle, QC010_RoseWishSequence, Fall_m/f.bik) are referenced by name only; their animation/camera content is in the cutscene/anim banks, not this script.",
+      "[Fable2Native childhood level (chapter2slums / Bowerstone Slums): what the cook provides vs. what the QC010 quest needs from level data] Generator->archetype binding: which CreatureVillager* archetype each MarkerCreatureGeneratorSpawnPoint spawns is decided at runtime by the nearby *_Generator CreatureGeneratorComponent (0xA2371C5A payload); the static cook places a fixed child set at every marker (npc_spawn_re.txt GAP-P1).",
+      "[Fable2Native childhood level (chapter2slums / Bowerstone Slums): what the cook provides vs. what the QC010 quest needs from level data] Trigger-volume geometry: the .save/.gdb encoding of a trigger/region volume's extent (box/sphere/corridor) is not yet RE'd -- quest_system.txt names the trigger natives but not the on-disk volume shape record.",
+      "[Fable2Native childhood level (chapter2slums / Bowerstone Slums): what the cook provides vs. what the QC010 quest needs from level data] Layer load-state semantics: does a New Game start with only AlwaysOn+InitiallyOn layers, and does QC010 activate InitiallyOff layers (QC010_RoseDiaryLayer_Slums, Spire story layers) via Layers.ActivateLayer at specific quest steps? Needs a qc010_childhood.lua ActivateLayer trace to know which layers should be present at fresh start.",
+      "[Fable2Native childhood level (chapter2slums / Bowerstone Slums): what the cook provides vs. what the QC010 quest needs from level data] Whether the childhood level should render at the town PlayerStart at all on a truly fresh New Game, or whether QC010 opens with the Fairfax-castle intro/Rose cutscene at a different start marker (QC010_HeroCastleStartMarker / QC010_FCGStartFromBWSSlums appear in the quest) before the hero is placed in the slums.",
+      "[Fable2Native runtime — childhood-driving capability inventory (the capability column)] Rose-leads-hero specifically: is there a retail Follow/Breadcrumber behaviour the childhood binds to Rose that we could wire to the existing Navigation.__MoveTo motor (feeding her goal from the hero position each tick), independent of the full DECIDE brain? The nav motor is READY; only the goal-driver and a visible character mesh (env session's cook) are missing.",
+      "[Fable2Native runtime — childhood-driving capability inventory (the capability column)] Dialogue is the highest-leverage MISSING gap: does the childhood use DisplayMessageBox/ShowMenuBox (native GUI boxes taking text tags) — in which case a GetText(tag) native + a native text-box renderer is the minimum viable path — and is the babel/GetText resolver (sub_82374980) decode far enough along to feed real strings?",
+      "[Fable2Native runtime — childhood-driving capability inventory (the capability column)] Level-load coupling: should the quest's LoadLevel native call into NativeGame::load_scene (mapping a level name -> cooked F2SCENE path) so quests can drive level transitions, or is app-driven scene selection intentional for now? Currently a quest cannot stream/change levels.",
+      "[Fable2Native runtime — childhood-driving capability inventory (the capability column)] GDB archetype resolution for Debug.CreateEntityAt: how much of the retail entity_build_components_from_record chain (memory fable2-modding-systems-analysis) is needed to make a spawned 'CreatureCrummi' actually render + get AI, vs. a minimal name->cooked-mesh lookup?",
+      "[Fable2Native runtime — childhood-driving capability inventory (the capability column)] stub_misses() ranked list from an actual --game-scripts childhood run would quantitatively rank which MISSING/STUBBED natives the childhood hits most — worth capturing to prioritize the dialogue/interactable/Action gaps.",
+      "[Fable2Native — supporting systems the childhood (QC010_Childhood) needs: decomp-status + implementation-gap assessment] cutscene_ics_system.txt §7-a: the full-cutscene DIRECTOR per-frame TICK/UPDATE fn is the one un-isolated decomp item (enqueue/stop/query are mapped) — needed if implementing the retail director queue rather than a native re-impl of ICS beats.",
+      "[Fable2Native — supporting systems the childhood (QC010_Childhood) needs: decomp-status + implementation-gap assessment] npc_ai_brain_system.txt G2: the day-clock->job-phase villager schedule interpreter is un-isolated, but it is NOT on the childhood critical path (childhood NPCs are entity-thread/GroupMind driven, not schedule-driven) — confirm no childhood NPC relies on ambient villager routines.",
+      "[Fable2Native — supporting systems the childhood (QC010_Childhood) needs: decomp-status + implementation-gap assessment] book.babel bulk-text COMPRESSION codec is still unknown; the GetText weak-override path sidesteps it, but a from-file custom-text authoring flow would need it cracked — is the plan to override GetText in the native VM (feed cooked UTF-16 strings) rather than parse book.babel at all?",
+      "[Fable2Native — supporting systems the childhood (QC010_Childhood) needs: decomp-status + implementation-gap assessment] Does the env session's cook_levels.py already emit the childhood's named story NPCs (Rose/Theresa/Lucien) as character-mesh instances, or only ambient generator NPCs? Runtime CreateEntityAt->GDB-archetype resolution is stubbed, so story NPCs may need cook-side placement — coordination boundary with the environment session.",
+      "[Fable2Native — supporting systems the childhood (QC010_Childhood) needs: decomp-status + implementation-gap assessment] Is the intent to re-implement ICS/cutscene beats natively (evaluate SetCameraOverride cages + PLAY_ANIMATION + text) as bespoke native systems, or to drive the retail director/GroupMind objects? The specs support either; the native re-impl is lighter for the childhood's bounded set of beats."
+    ]
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Understand"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Synthesize"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 3,
+      "title": "Verify"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "read:childhood-quest-beats",
+      "phaseIndex": 1,
+      "phaseTitle": "Understand",
+      "agentId": "a8a1069ef672cd51d",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1786933556661,
+      "queuedAt": 1786933556646,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "QC010_Childhood — Bowerstone Slums opening, full ordered be…",
+      "promptPreview": "CURRENT STATE (this project, Fable2Native = the standalone native Fable II PC port):\n- Gameflow reaches QC010_Childhood: New Game -> gameflow advances GAMEFLOW_START -> DebugQC010 ->\n  StartQuest(\"QC010_Childhood\") which loads + runs from the BNK (Stage 1). ~160 game scripts load,\n  0 missing natives (auto-stub swallows the long tail). Quests currently \"run through stubs\"\n  (waits/cutscenes/level-…",
+      "lastProgressAt": 1786933780928,
+      "tokens": 130015,
+      "toolCalls": 25,
+      "durationMs": 224267,
+      "resultPreview": "{\"area\":\"QC010_Childhood — Bowerstone Slums opening, full ordered beat reconstruction (qc010_childhood.lua + sibling QC020–QC055 sub-quests)\",\"summary\":\"qc010_childhood.lua is the master quest thread (10,303 lines) for the Fable II childhood. It orchestrates ~30 entity sub-threads and 6 sibling sub-quest files. The reconstructed sequence: (1) fade-in + hero converted to CreatureHeroChild, given ch…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "read:level-cook-state",
+      "phaseIndex": 1,
+      "phaseTitle": "Understand",
+      "agentId": "a40be7318615c4f78",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1786933556662,
+      "queuedAt": 1786933556647,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Fable2Native childhood level (chapter2slums / Bowerstone Sl…",
+      "promptPreview": "CURRENT STATE (this project, Fable2Native = the standalone native Fable II PC port):\n- Gameflow reaches QC010_Childhood: New Game -> gameflow advances GAMEFLOW_START -> DebugQC010 ->\n  StartQuest(\"QC010_Childhood\") which loads + runs from the BNK (Stage 1). ~160 game scripts load,\n  0 missing natives (auto-stub swallows the long tail). Quests currently \"run through stubs\"\n  (waits/cutscenes/level-…",
+      "lastProgressAt": 1786933757474,
+      "tokens": 142134,
+      "toolCalls": 22,
+      "durationMs": 200812,
+      "resultPreview": "{\"area\":\"Fable2Native childhood level (chapter2slums / Bowerstone Slums): what the cook provides vs. what the QC010 quest needs from level data\",\"summary\":\"cook_levels.py cooks chapter2slums into an F2SCENE that is FEATURE-COMPLETE as a RENDERABLE STAGE: terrain heightfield + splat-composited ground, static engine_level props (type-2/21) + ~1800 .gdb/.save entity props, buildings, water bodies, se…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "read:native-capabilities",
+      "phaseIndex": 1,
+      "phaseTitle": "Understand",
+      "agentId": "ad073f6403b964d19",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1786933556663,
+      "queuedAt": 1786933556647,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Fable2Native runtime — childhood-driving capability invento…",
+      "promptPreview": "CURRENT STATE (this project, Fable2Native = the standalone native Fable II PC port):\n- Gameflow reaches QC010_Childhood: New Game -> gameflow advances GAMEFLOW_START -> DebugQC010 ->\n  StartQuest(\"QC010_Childhood\") which loads + runs from the BNK (Stage 1). ~160 game scripts load,\n  0 missing natives (auto-stub swallows the long tail). Quests currently \"run through stubs\"\n  (waits/cutscenes/level-…",
+      "lastProgressAt": 1786933689382,
+      "tokens": 86017,
+      "toolCalls": 13,
+      "durationMs": 132719,
+      "resultPreview": "{\"area\":\"Fable2Native runtime — childhood-driving capability inventory (the capability column)\",\"summary\":\"Honest audit of what the Fable2Native runtime can ALREADY drive for the QC010_Childhood chapter, distinguishing \\\"registered + real native\\\" from \\\"auto-stub swallows it (runs but no-ops)\\\". Verdict: the SCRIPT SUBSTRATE is solid (managers tick, quest sequencing via the message bus is REAL, g…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "read:supporting-systems",
+      "phaseIndex": 1,
+      "phaseTitle": "Understand",
+      "agentId": "ace087baf393c533a",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1786933556663,
+      "queuedAt": 1786933556647,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Fable2Native — supporting systems the childhood (QC010_Chil…",
+      "promptPreview": "CURRENT STATE (this project, Fable2Native = the standalone native Fable II PC port):\n- Gameflow reaches QC010_Childhood: New Game -> gameflow advances GAMEFLOW_START -> DebugQC010 ->\n  StartQuest(\"QC010_Childhood\") which loads + runs from the BNK (Stage 1). ~160 game scripts load,\n  0 missing natives (auto-stub swallows the long tail). Quests currently \"run through stubs\"\n  (waits/cutscenes/level-…",
+      "lastProgressAt": 1786933741109,
+      "tokens": 124335,
+      "toolCalls": 23,
+      "durationMs": 184446,
+      "resultPreview": "{\"area\":\"Fable2Native — supporting systems the childhood (QC010_Childhood) needs: decomp-status + implementation-gap assessment\",\"summary\":\"All five supporting systems are decomp-RE'd to spec level; the gap is IMPLEMENTATION in Fable2Native, not decompilation. The childhood quest (qc010_childhood.lua) does NOT drive NPCs through the AI brain/behaviour system directly — it uses per-NPC ENTITY THREA…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "synthesize",
+      "phaseIndex": 2,
+      "phaseTitle": "Synthesize",
+      "agentId": "a9aeaf7618e5f314f",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1786933780945,
+      "queuedAt": 1786933780929,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "No — Fable2Native cannot recreate a PLAYABLE childhood leve…",
+      "promptPreview": "You are assessing whether Fable2Native can recreate the Fable II CHILDHOOD LEVEL (Bowerstone Slums / QC010_Childhood) NOW, and producing the decomp-backed, no-guessing phased plan to do it. Build a requirement-vs-capability GAP ANALYSIS (childhood beats + systems from the readers vs the native capability + level-cook + supporting-system status), then a PHASED recreation plan where each phase is sh…",
+      "lastProgressAt": 1786933920663,
+      "tokens": 67920,
+      "toolCalls": 5,
+      "durationMs": 139718,
+      "resultPreview": "{\"verdict\":\"No — Fable2Native cannot recreate a PLAYABLE childhood level today; it can recreate the childhood STAGE (a fully-lit, walkable Bowerstone Slums the child hero can be controlled through), but not the childhood EXPERIENCE. The render/cook substrate is genuinely feature-complete and hero control/camera/locomotion/nav/quest-sequencing are READY, but every system that turns the QC010 script…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "verify:grounding",
+      "phaseIndex": 3,
+      "phaseTitle": "Verify",
+      "agentId": "a98c60a5eb2173a7f",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1786933920689,
+      "queuedAt": 1786933920673,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Adversarial audit for GUESSING and hidden RE gaps: cross-ch…",
+      "promptPreview": "Adversarially audit this childhood-recreation plan for GUESSING. Every READY/PARTIAL status and every phase must be backed by decomp/data (a quest line, a native, a spec, cooked data). Flag any claim that is optimistic, any \"just wire it up\" that hides an unsolved RE gap (dialogue text tags, cutscene closures, NPC AI, GDB creature instantiation), and any place a stub is presented as done. Spot-che…",
+      "lastProgressAt": 1786934126927,
+      "tokens": 64457,
+      "toolCalls": 16,
+      "durationMs": 206237,
+      "resultPreview": "{\"lens\":\"Adversarial audit for GUESSING and hidden RE gaps: cross-checked every READY/PARTIAL status and every phase against qc010_childhood.lua (10,303 lines) and the decomp specs in ghidra_out/ (cutscene_ics_system.txt, npc_archetype_binding_re.txt, quest_system.txt, frontend_language_subtitles.txt, npc_spawn_re.txt). Measured the actual native/API call frequencies in the real quest rather than …"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 7,
+      "label": "verify:feasibility-parity",
+      "phaseIndex": 3,
+      "phaseTitle": "Verify",
+      "agentId": "a488cc1752713ec08",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1786933920690,
+      "queuedAt": 1786933920673,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Adversarial audit of FEASIBILITY and the gameplay-track ↔ e…",
+      "promptPreview": "Adversarially audit FEASIBILITY + the track boundary. Is each phase achievable WITHOUT editing the environment session's files (renderer, cook_levels.py, native_scene render fields)? Which phases are actually BLOCKED on that coordination (visible NPCs, level-content cook, cutscene camera visuals) and must be labelled so, not planned as if this track can do them alone? Are both-backends (D3D12+Vulk…",
+      "lastProgressAt": 1786934031380,
+      "tokens": 61883,
+      "toolCalls": 14,
+      "durationMs": 110689,
+      "resultPreview": "{\"lens\":\"Adversarial audit of FEASIBILITY and the gameplay-track ↔ environment-session boundary: for each phase, is it achievable WITHOUT editing env-session-owned files (native_scene.h/cpp F2SCENE schema, both world renderers, native_world.frag, cook_levels.py), and are both-backends (D3D12 + Vulkan) parity implications acknowledged? Verified against the actual repo on branch agent/native-gamepla…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 8,
+      "label": "verify:completeness",
+      "phaseIndex": 3,
+      "phaseTitle": "Verify",
+      "agentId": "ab3c1a0db8fb2fd6b",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1786933920691,
+      "queuedAt": 1786933920674,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Adversarial re-scan of qc010_childhood.lua (10,303 lines) f…",
+      "promptPreview": "Adversarially audit for what the plan MISSED. Re-scan the childhood beats (D:/Documents/Fable2RE/lua-decompiled/gamescripts/scripts/quests/qc010_childhood.lua) for required systems the gap analysis omitted — e.g. the specific minigames (spending gold, the warrant chase, the shooting range), Rose's follow/lead AI, the music-box purchase interaction, save-on-chapter-transition, the child->adult tran…",
+      "lastProgressAt": 1786934098881,
+      "tokens": 65039,
+      "toolCalls": 19,
+      "durationMs": 178190,
+      "resultPreview": "{\"lens\":\"Adversarial re-scan of qc010_childhood.lua (10,303 lines) for required runtime systems/beats the gap_analysis omitted or mis-scoped. Confirmed each item against concrete line evidence in the script; mapped each to the phase where it belongs.\",\"verdict\":\"NEEDS_FIXES\",\"problems\":[{\"item\":\"Diegetic music + SFX system (SoundTools.PlayMusic / PlaySound / SE_* cues)\",\"issue\":\"Pervasive and load…"
+    }
+  ],
+  "totalTokens": 741800,
+  "totalToolCalls": 137
+}
