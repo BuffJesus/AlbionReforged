@@ -267,6 +267,7 @@ public:
         }
         if (command_line_flag(L"--show-fps")) game_.frontend.set_fps_display_enabled(true);
         if (command_line_flag(L"--gameplay")) gameplay_mode_ = true;
+        if (command_line_flag(L"--auto-walk")) auto_walk_ = true;  // FLAGGED anim-verification driver
         // Embedded Lua scripting (opt-in) — D3D12 parity (native_frontend_app.cpp).
         if (command_line_flag(L"--scripting")) {
             if (game_.enable_scripting()) {
@@ -383,6 +384,14 @@ public:
                     ShowCursor(!want_capture ? TRUE : FALSE);
                     mouse_captured_now_ = want_capture;
                 }
+            }
+            // Verification driver (--auto-walk): see the D3D12 app. FLAGGED, off by default.
+            if (auto_walk_ && game_.mode == f2::GameMode::InWorld) {
+                game_.external_input = true;
+                game_.input = f2::InputState{};
+                // Walk a slow circle (see the D3D12 app): keeps the hero moving + turning.
+                const float t = static_cast<float>(game_.elapsed_seconds) * 0.9f;
+                game_.input.move = {std::sin(t) * 0.6f, std::cos(t) * 0.6f};
             }
             game_.tick(delta);
             update_video();
@@ -2377,6 +2386,7 @@ private:
     // Opt-in P2 gameplay (--gameplay / toggle 'G'): follow camera + character controller
     // instead of the free-fly inspection cam. Default OFF preserves inspection behaviour.
     bool gameplay_mode_ = false;
+    bool auto_walk_ = false;  // --auto-walk: scripted motion for anim screenshot verification
     bool gameplay_toggle_held_ = false;
     bool mouse_captured_now_ = false;
     std::array<float, 3> character_offset_{0.0f, 0.0f, 0.0f};

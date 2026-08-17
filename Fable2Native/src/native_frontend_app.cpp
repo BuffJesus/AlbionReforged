@@ -285,6 +285,7 @@ public:
         }
         if (command_line_flag(L"--show-fps")) game_.frontend.set_fps_display_enabled(true);
         if (command_line_flag(L"--gameplay")) gameplay_mode_ = true;
+        if (command_line_flag(L"--auto-walk")) auto_walk_ = true;  // FLAGGED anim-verification driver
         // Embedded Lua scripting (opt-in). Boots the VM, registers the native API, wires
         // the Quest/General/AI managers, then loads Lua mods from --mods <dir> (default a
         // "mods" folder next to the game data). Game-script (LuaQ) loading rides the same
@@ -429,6 +430,17 @@ public:
                     ShowCursor(!want_capture ? TRUE : FALSE);
                     mouse_captured_now_ = want_capture;
                 }
+            }
+            // Verification driver (--auto-walk): script a forward+steer walk so a headless
+            // screenshot catches a mid-stride, turned hero (no real input device in a capture).
+            // FLAGGED debug aid, off by default; drives the same InputState the sampler would.
+            if (auto_walk_ && game_.mode == f2::GameMode::InWorld) {
+                game_.external_input = true;
+                game_.input = f2::InputState{};
+                // Walk a slow circle: keeps the hero moving (so the walk clip plays) and
+                // continuously turning (so heading != baked yaw), and avoids pinning on geometry.
+                const float t = static_cast<float>(game_.elapsed_seconds) * 0.9f;
+                game_.input.move = {std::sin(t) * 0.6f, std::cos(t) * 0.6f};
             }
             game_.tick(delta);
             update_video();
@@ -2054,6 +2066,7 @@ private:
     // controller + follow camera instead of the free-fly inspection cam. Default OFF
     // leaves the existing World-inspection behaviour untouched.
     bool gameplay_mode_ = false;
+    bool auto_walk_ = false;  // --auto-walk: scripted motion for anim screenshot verification
     bool gameplay_toggle_held_ = false;
     bool mouse_captured_now_ = false;
     std::array<float, 3> character_offset_{0.0f, 0.0f, 0.0f};

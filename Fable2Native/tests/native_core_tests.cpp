@@ -376,9 +376,9 @@ static f2::AnimClip make_loco_clip(std::uint32_t hash) {
     f2::AnimClip c;
     c.hash = hash;
     c.bone_count = 1;
-    c.frame_count = 2;
+    c.frame_count = 40;  // ~1.33s @30fps: long enough that time() doesn't loop within the test
     c.fps = 30.0f;
-    c.skin.assign(2, std::array<float, 12>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0});  // identity 3x4
+    c.skin.assign(40, std::array<float, 12>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0});  // identity 3x4
     return c;
 }
 static void test_stage2_animation() {
@@ -401,13 +401,20 @@ static void test_stage2_animation() {
     F2_CHECK(game.hero_anim.clip() == &game.hero_clips[0]);
 
     // Moving forward: planar speed rises -> a faster (non-idle) clip; the player advances.
-    for (int i = 0; i < 30; ++i) {
+    for (int i = 0; i < 60; ++i) {
         game.input = f2::InputState{};
         game.input.move = {0.0f, 1.0f};
         game.tick(1.0 / 60.0);
     }
     F2_CHECK(game.hero_anim.clip() != nullptr && game.hero_anim.clip() != &game.hero_clips[0]);
-    F2_CHECK(game.hero_anim.time() >= 0.0f);
+    // The clip TIME must accumulate across steady ticks — a regression guard against re-setting
+    // the clip every step (set_clip resets time, which would pin the animation to frame 0).
+    F2_CHECK(game.hero_anim.time() > 0.1f);
+    const float t_before = game.hero_anim.time();
+    game.input = f2::InputState{};
+    game.input.move = {0.0f, 1.0f};
+    game.tick(1.0 / 60.0);
+    F2_CHECK(game.hero_anim.time() > t_before);  // advances by ~one step, not reset to 0
 
     // Stub-flag safety: with NO clips the driver holds bind pose and does not crash.
     f2::NativeGame bare;

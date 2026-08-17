@@ -357,10 +357,14 @@ void NativeGame::tick(double delta_seconds) {
                           static_cast<float>(simulation_step));
 
             // Skeletal animation: pick the locomotion clip whose root speed matches the hero's
-            // planar speed and advance the player. FLAGGED: no-op bind pose until the cook emits
+            // planar speed and advance the player. Only (re)set the clip when it CHANGES —
+            // set_clip resets the playback time, so calling it every step would pin the clip to
+            // frame 0 and freeze the animation. FLAGGED: no-op bind pose until the cook emits
             // hero_locomotion clips (select returns nullptr on empty; update guards a null clip).
-            if (!hero_locomotion.empty())
-                hero_anim.set_clip(select_locomotion_clip(player.planar_speed(), hero_locomotion));
+            if (!hero_locomotion.empty()) {
+                const AnimClip* want = select_locomotion_clip(player.planar_speed(), hero_locomotion);
+                if (want != hero_anim.clip()) hero_anim.set_clip(want);
+            }
             hero_anim.update(static_cast<float>(simulation_step));
             // Publish the hero heading into its entity transform (rotation[1]=yaw). The visible
             // facing forward to the renderer is Stage 3 (avoids double-rotation vs the baked yaw).
