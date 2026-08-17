@@ -317,6 +317,16 @@ bool NativeGame::load_hero_anim_package(const std::filesystem::path& path) {
     hero_locomotion.clear();
     for (std::size_t i = 0; i < hero_clips.size(); ++i)
         hero_locomotion.push_back({&hero_clips[i], d.root_speeds[i]});
+    // Data-backed move speed: drive the hero at the cooked locomotion clips' OWN measured root
+    // speed (min positive = walk, max = run) so the feet track the ground at playback rate 1.0
+    // (retail hero speed = anim root motion). No hardcoded literal — it follows the actual clips.
+    float wmin = 1e9f, wmax = 0.0f;
+    for (float rs : d.root_speeds)
+        if (rs > 0.05f) { wmin = std::min(wmin, rs); wmax = std::max(wmax, rs); }
+    if (wmax > 0.0f) {
+        player.config.walk_speed = wmin;
+        player.config.run_speed = wmax;
+    }
     return true;
 }
 

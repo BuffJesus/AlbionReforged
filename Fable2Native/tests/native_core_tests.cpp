@@ -473,9 +473,9 @@ static void test_stage3_hero_anim() {
     f2::HeroAnimData d = f2::load_hero_anim(pkg.string());
     F2_CHECK(d.ok);
     F2_CHECK(d.bone_count == 143);
-    // idle-only: walk/run clip identities are unconfirmed (one was a hit-react) and removed until
-    // the anim-name -> clip-hash lookup is RE'd. Package ships the validated idle only.
-    F2_CHECK(d.clips.size() == 1);
+    // idle + a data-backed walk (identified by FootstepLeftWalk/RightWalk events + straight
+    // forward root motion). Run is not yet identified. clips[0]=idle, clips[1]=walk.
+    F2_CHECK(d.clips.size() == 2);
     F2_CHECK(d.geom_bind.size() == d.ref_pose.size() && !d.geom_bind.empty());
 
     // Idle = clips[0] (root speed 0). Skin each geom at idle@0 and match the reference bit-exactly.
@@ -499,7 +499,8 @@ static void test_stage3_hero_anim() {
     for (std::size_t i = 0; i < d.clips.size(); ++i)
         loco.push_back({&d.clips[i], d.root_speeds[i]});
     F2_CHECK(f2::select_locomotion_clip(0.0f, loco) == &d.clips[0]);  // idle
-    F2_CHECK(f2::select_locomotion_clip(4.2f, loco) == &d.clips[0]);  // idle (only clip)
+    F2_CHECK(f2::select_locomotion_clip(d.root_speeds[1], loco) == &d.clips[1]);  // walk at its speed
+    F2_CHECK(d.root_speeds[1] > 0.5f);  // the walk clip carries real forward root motion
 
     // The app-forward math (compute_hero_pose): at delta_yaw=0 the render pose is the reference
     // with the {x,z,y} render swap; a +90deg delta additionally Y-rotates (place_vertex convention).

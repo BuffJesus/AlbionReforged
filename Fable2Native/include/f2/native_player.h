@@ -16,13 +16,14 @@
 namespace f2 {
 
 struct PlayerMovementConfig {
-    // GROUNDED: retail hero locomotion IS animation root motion (p2_feel_constants: no code speed
-    // literal), and these are the MEASURED intrinsic root speeds of the child hero's walk/run
-    // clips (anim_runtime_sampler_re.txt §B, net-root-translation). Moving at the clip's own root
-    // speed makes the feet track the ground (no foot-slide) at playback rate 1.0. FLAGGED: the
-    // walk<->run THRESHOLD + the in-between blend remain an engineering choice (§C).
-    float walk_speed = 0.77f;  // GROUNDED: walk clip id_02EE1AA7 root speed (wu/s)
-    float run_speed  = 4.20f;  // GROUNDED: run clip id_8C7D7F7E root speed (wu/s)
+    // Retail hero locomotion IS animation root motion (p2_feel_constants: no code speed literal),
+    // so the hero moves at the loaded walk/run clip's OWN measured root speed and the feet track
+    // the ground at playback rate 1.0. NativeGame::load_hero_anim_package OVERRIDES these with the
+    // cooked clips' measured root speeds (data-backed) — these are only the fallback when no hero
+    // anim package is loaded. FLAGGED: the walk<->run threshold + in-between blend are engineering
+    // (anim_runtime_sampler_re.txt §C).
+    float walk_speed = 1.30f;  // fallback (overridden by the cooked walk clip's measured root speed)
+    float run_speed  = 1.30f;  // fallback (overridden by the cooked run clip's measured root speed)
 };
 
 class NativePlayer {

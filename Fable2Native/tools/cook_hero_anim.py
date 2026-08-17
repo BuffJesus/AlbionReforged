@@ -27,6 +27,7 @@ Output (.heroanim, little-endian):
 from __future__ import annotations
 
 import argparse
+import math
 import struct
 import subprocess
 import sys
@@ -45,20 +46,20 @@ import fable_anim_format as A  # noqa: E402
 import fable_pose  # noqa: E402
 from cook_levels import _bnk_name_index, _resolve  # noqa: E402
 
-# Locomotion clips (clip name -> intrinsic root speed wu/s).
+# Locomotion clips, identified DATA-BACKED from the anim bank itself (no name-hash guessing).
 #
-# ⚠ CLIP IDENTITY: the anim bank keys clips by an opaque "id_<HASH>" (the source names are NOT in
-# the bank, and the hash is NOT fnv1/crc32 of the semantic name — verified against known names like
-# "Greeting"/"IdleStretch", zero matches). So a clip's PURPOSE can only be inferred, not confirmed.
-#   * idle id_1B78A889 IS defensible: it is fable_pose.DEFAULT_IDLE_CLIP, a 143-bone held-standing
-#     idle that retargets 100% by name to the hero rig (~1deg whole-clip drift) — anim_pose_re §5.
-#   * walk id_02EE1AA7 / run id_8C7D7F7E were inferred ONLY from root-motion speed (§B) and are
-#     WRONG: at runtime id_02EE1AA7 plays a hit-react, not a walk. Removed until the real walk/run
-#     clips are identified (needs the anim-name -> clip-hash lookup RE'd, an open task). Shipping an
-#     unconfirmed clip as "walk" is a guess; we don't.
-CLIPS = [
-    ("id_1B78A889", 0.00),  # idle (validated)
-]
+# The bank keys clips by an opaque "id_<HASH>" with no source names, BUT each clip carries authored
+# EVENTS (fable_anim_format TOC string table). A clip's PURPOSE is read from those events:
+#   * idle id_1B78A889 = fable_pose.DEFAULT_IDLE_CLIP: 0 events, a held-standing idle that retargets
+#     100% by name to the hero rig (anim_pose_re §5).
+#   * walk id_AD8C7C90 = carries FootstepLeftWalk/FootstepRightWalk events (only footstep events)
+#     and decodes to perfectly straight forward root motion (net/path = 1.0) — a genuine forward
+#     WALK, proven from the data, matching the child-hero rig (96% track coverage).
+# (The earlier id_02EE1AA7/id_8C7D7F7E were root-speed GUESSES and were wrong: their events are
+#  SE_BANDIT_PAIN / SE_COLLISION;BODYROLL — a hit-react and a dodge-roll. Removed.)
+# RUN is not yet identified (no clip carries FootstepLeft/RightRun; the human run gait uses a
+# different event marker still to be found) — walk covers running via playback-rate scaling for now.
+CLIPS = ["id_1B78A889", "id_AD8C7C90"]
 
 
 def bake_clip_frame(info, data_file, clip, frame, inv_bind, lk):
@@ -115,8 +116,25 @@ def cook(header_bnk: Path, body_bnk: Path, hero_model: str, f2tool: Path, out_pa
 
     # Resolve the target clips present in the bank.
     by_name = {c.name: c for c in clips_toc}
+    dec = A.AnimDecoder(data_file, log=lambda *a: None)
+
+    def measured_root_speed(clip, h):
+        """Net horizontal root translation / duration (wu/s) — DATA-derived from the clip's own
+        root-track trajectory, not hardcoded (anim_runtime_sampler_re.txt §B metric)."""
+        pts = []
+        for f in range(h.frame_count):
+            p = dec.sample_frame(clip, f)
+            if not p.ok or len(p.bone_trans) < 3:
+                return 0.0
+            pts.append(p.bone_trans[0:3])
+        if len(pts) < 2:
+            return 0.0
+        net = math.hypot(pts[-1][0] - pts[0][0], pts[-1][2] - pts[0][2])
+        dur = h.frame_count / (clip.fps or 30.0)
+        return net / dur if dur > 0 else 0.0
+
     baked = []
-    for name, root_speed in CLIPS:
+    for name in CLIPS:
         clip = by_name.get(name)
         if clip is None:
             print(f"  clip missing: {name} (skipped)", file=sys.stderr)
@@ -124,15 +142,16 @@ def cook(header_bnk: Path, body_bnk: Path, hero_model: str, f2tool: Path, out_pa
         h = data_file.parse_clip_header(clip)
         frame_count = max(1, h.frame_count)
         hash_val = int(name[3:], 16)  # "id_1B78A889" -> 0x1B78A889
+        root_speed = measured_root_speed(clip, h)
         frames = [bake_clip_frame(info, data_file, clip, f, inv_bind, lk) for f in range(frame_count)]
         baked.append((hash_val, frame_count, float(clip.fps or 30.0), root_speed, frames))
-        print(f"  clip {name}: {frame_count} frames @ {clip.fps:.1f}fps, root_speed {root_speed}")
+        print(f"  clip {name}: {frame_count} frames @ {clip.fps:.1f}fps, root_speed {root_speed:.3f}")
 
     if not baked:
         raise SystemExit("no locomotion clips baked")
 
     # Reference: idle@0 posed positions per geom (runtime convention self-test).
-    idle_clip = by_name.get(CLIPS[0][0])
+    idle_clip = by_name.get(CLIPS[0])  # CLIPS[0] = the idle clip id
     ref = []
     for g in geoms:
         posed = fable_pose.pose_skinned_mesh(info, data_file, idle_clip, 0, g, inv_bind, lk) \
