@@ -473,9 +473,9 @@ static void test_stage3_hero_anim() {
     f2::HeroAnimData d = f2::load_hero_anim(pkg.string());
     F2_CHECK(d.ok);
     F2_CHECK(d.bone_count == 143);
-    // idle + a data-backed walk (identified by FootstepLeftWalk/RightWalk events + straight
-    // forward root motion). Run is not yet identified. clips[0]=idle, clips[1]=walk.
-    F2_CHECK(d.clips.size() == 2);
+    // idle + data-backed walk + run (walk = FootstepWalk events; run = both-feet FOOT_PLANT
+    // events; both straight forward root motion). clips[0]=idle, [1]=walk, [2]=run.
+    F2_CHECK(d.clips.size() == 3);
     F2_CHECK(d.geom_bind.size() == d.ref_pose.size() && !d.geom_bind.empty());
 
     // Idle = clips[0] (root speed 0). Skin each geom at idle@0 and match the reference bit-exactly.
@@ -498,9 +498,10 @@ static void test_stage3_hero_anim() {
     std::vector<f2::LocomotionClip> loco;
     for (std::size_t i = 0; i < d.clips.size(); ++i)
         loco.push_back({&d.clips[i], d.root_speeds[i]});
-    F2_CHECK(f2::select_locomotion_clip(0.0f, loco) == &d.clips[0]);  // idle
+    F2_CHECK(f2::select_locomotion_clip(0.0f, loco) == &d.clips[0]);            // idle
     F2_CHECK(f2::select_locomotion_clip(d.root_speeds[1], loco) == &d.clips[1]);  // walk at its speed
-    F2_CHECK(d.root_speeds[1] > 0.5f);  // the walk clip carries real forward root motion
+    F2_CHECK(f2::select_locomotion_clip(d.root_speeds[2], loco) == &d.clips[2]);  // run at its speed
+    F2_CHECK(d.root_speeds[1] > 0.5f && d.root_speeds[2] > d.root_speeds[1]);  // walk < run, real motion
 
     // The app-forward math (compute_hero_pose): at delta_yaw=0 the render pose is the reference
     // with the {x,z,y} render swap; a +90deg delta additionally Y-rotates (place_vertex convention).

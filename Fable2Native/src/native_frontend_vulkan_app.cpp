@@ -389,9 +389,10 @@ public:
             if (auto_walk_ && game_.mode == f2::GameMode::InWorld) {
                 game_.external_input = true;
                 game_.input = f2::InputState{};
-                // Walk a slow circle (see the D3D12 app): keeps the hero moving + turning.
-                const float t = static_cast<float>(game_.elapsed_seconds) * 0.9f;
-                game_.input.move = {std::sin(t) * 0.6f, std::cos(t) * 0.6f};
+                // Walk/run a slow circle with oscillating speed (see the D3D12 app).
+                const float e = static_cast<float>(game_.elapsed_seconds);
+                const float mag = 0.65f + 0.45f * std::sin(e * 0.5f);  // ~0.2..1.1 (crosses run gate)
+                game_.input.move = {std::sin(e * 0.9f) * mag, std::cos(e * 0.9f) * mag};
             }
             game_.tick(delta);
             update_video();

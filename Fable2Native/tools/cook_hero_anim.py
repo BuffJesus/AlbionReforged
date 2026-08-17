@@ -57,9 +57,11 @@ from cook_levels import _bnk_name_index, _resolve  # noqa: E402
 #     WALK, proven from the data, matching the child-hero rig (96% track coverage).
 # (The earlier id_02EE1AA7/id_8C7D7F7E were root-speed GUESSES and were wrong: their events are
 #  SE_BANDIT_PAIN / SE_COLLISION;BODYROLL — a hit-react and a dodge-roll. Removed.)
-# RUN is not yet identified (no clip carries FootstepLeft/RightRun; the human run gait uses a
-# different event marker still to be found) — walk covers running via playback-rate scaling for now.
-CLIPS = ["id_1B78A889", "id_AD8C7C90"]
+#   * run id_12457E19 = carries FOOT_PLANT LEFT/RIGHT_FOOT_DOWN (both-feet foot-contact) events,
+#     only-locomotion events, straight forward root motion at ~2.35 wu/s (25-frame stride) matching
+#     the hero rig — a genuine forward RUN (the human run gait is marked by FOOT_PLANT, not a
+#     "FootstepRun" event; found via the same data-backed method — tools/anim_clip_events.py).
+CLIPS = ["id_1B78A889", "id_AD8C7C90", "id_12457E19"]
 
 
 def bake_clip_frame(info, data_file, clip, frame, inv_bind, lk):

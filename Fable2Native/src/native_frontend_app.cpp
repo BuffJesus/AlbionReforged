@@ -437,10 +437,11 @@ public:
             if (auto_walk_ && game_.mode == f2::GameMode::InWorld) {
                 game_.external_input = true;
                 game_.input = f2::InputState{};
-                // Walk a slow circle: keeps the hero moving (so the walk clip plays) and
-                // continuously turning (so heading != baked yaw), and avoids pinning on geometry.
-                const float t = static_cast<float>(game_.elapsed_seconds) * 0.9f;
-                game_.input.move = {std::sin(t) * 0.6f, std::cos(t) * 0.6f};
+                // Walk/run a slow circle with an OSCILLATING speed (exercises idle<->walk<->run):
+                // keeps the hero moving + continuously turning, and avoids pinning on geometry.
+                const float e = static_cast<float>(game_.elapsed_seconds);
+                const float mag = 0.65f + 0.45f * std::sin(e * 0.5f);  // ~0.2..1.1 (crosses run gate)
+                game_.input.move = {std::sin(e * 0.9f) * mag, std::cos(e * 0.9f) * mag};
             }
             game_.tick(delta);
             update_video();
