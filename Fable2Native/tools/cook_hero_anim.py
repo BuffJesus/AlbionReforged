@@ -45,12 +45,19 @@ import fable_anim_format as A  # noqa: E402
 import fable_pose  # noqa: E402
 from cook_levels import _bnk_name_index, _resolve  # noqa: E402
 
-# Locomotion clips: measured child-hero clips with their intrinsic root speeds (wu/s), the same
-# GROUNDED values the runtime documents (anim_runtime_sampler_re.txt §B, net-root-translation).
+# Locomotion clips (clip name -> intrinsic root speed wu/s).
+#
+# ⚠ CLIP IDENTITY: the anim bank keys clips by an opaque "id_<HASH>" (the source names are NOT in
+# the bank, and the hash is NOT fnv1/crc32 of the semantic name — verified against known names like
+# "Greeting"/"IdleStretch", zero matches). So a clip's PURPOSE can only be inferred, not confirmed.
+#   * idle id_1B78A889 IS defensible: it is fable_pose.DEFAULT_IDLE_CLIP, a 143-bone held-standing
+#     idle that retargets 100% by name to the hero rig (~1deg whole-clip drift) — anim_pose_re §5.
+#   * walk id_02EE1AA7 / run id_8C7D7F7E were inferred ONLY from root-motion speed (§B) and are
+#     WRONG: at runtime id_02EE1AA7 plays a hit-react, not a walk. Removed until the real walk/run
+#     clips are identified (needs the anim-name -> clip-hash lookup RE'd, an open task). Shipping an
+#     unconfirmed clip as "walk" is a guess; we don't.
 CLIPS = [
-    ("id_1B78A889", 0.00),  # idle
-    ("id_02EE1AA7", 0.77),  # walk
-    ("id_8C7D7F7E", 4.20),  # run
+    ("id_1B78A889", 0.00),  # idle (validated)
 ]
 
 

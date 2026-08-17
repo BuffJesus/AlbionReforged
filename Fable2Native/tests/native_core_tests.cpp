@@ -473,7 +473,9 @@ static void test_stage3_hero_anim() {
     f2::HeroAnimData d = f2::load_hero_anim(pkg.string());
     F2_CHECK(d.ok);
     F2_CHECK(d.bone_count == 143);
-    F2_CHECK(d.clips.size() == 3);
+    // idle-only: walk/run clip identities are unconfirmed (one was a hit-react) and removed until
+    // the anim-name -> clip-hash lookup is RE'd. Package ships the validated idle only.
+    F2_CHECK(d.clips.size() == 1);
     F2_CHECK(d.geom_bind.size() == d.ref_pose.size() && !d.geom_bind.empty());
 
     // Idle = clips[0] (root speed 0). Skin each geom at idle@0 and match the reference bit-exactly.
@@ -492,12 +494,12 @@ static void test_stage3_hero_anim() {
     }
     F2_CHECK(max_err < 1e-3f);  // runtime skinner == validated fable_pose baker
 
-    // The baked clips select by their measured root speed.
+    // The single idle clip is selected at every speed (until real walk/run clips are identified).
     std::vector<f2::LocomotionClip> loco;
     for (std::size_t i = 0; i < d.clips.size(); ++i)
         loco.push_back({&d.clips[i], d.root_speeds[i]});
     F2_CHECK(f2::select_locomotion_clip(0.0f, loco) == &d.clips[0]);  // idle
-    F2_CHECK(f2::select_locomotion_clip(4.2f, loco) == &d.clips[2]);  // run
+    F2_CHECK(f2::select_locomotion_clip(4.2f, loco) == &d.clips[0]);  // idle (only clip)
 
     // The app-forward math (compute_hero_pose): at delta_yaw=0 the render pose is the reference
     // with the {x,z,y} render swap; a +90deg delta additionally Y-rotates (place_vertex convention).
