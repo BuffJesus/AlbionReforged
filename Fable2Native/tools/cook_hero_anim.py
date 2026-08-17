@@ -105,7 +105,7 @@ def bake_clip_frame(info, data_file, clip, frame, inv_bind, lk):
     return out  # bone_count lists of 12 floats
 
 
-def cook(header_bnk: Path, body_bnk: Path, hero_model: str, f2tool: Path, out_path: Path,
+def cook(header_bnk: Path, body_bnk: Path, models, f2tool: Path, out_path: Path,
          gdb_path: Path, anim_record: int, slots):
     clips_toc, data_file = fable_pose.load_anim_bank(header_bnk.parent.parent)
 
@@ -128,10 +128,6 @@ def cook(header_bnk: Path, body_bnk: Path, hero_model: str, f2tool: Path, out_pa
 
     hidx = _bnk_name_index(header_bnk)
     gidx = _bnk_name_index(body_bnk)
-    he = _resolve(hidx, hero_model)
-    be = _resolve(gidx, hero_model)
-    if not (he and be):
-        raise SystemExit(f"hero model not in banks: {hero_model}")
     tmp = Path(tempfile.mkdtemp(prefix="f2heroanim_"))
 
     def extract(bnk: Path, exact: str, tag: str) -> bytes:
@@ -140,9 +136,24 @@ def cook(header_bnk: Path, body_bnk: Path, hero_model: str, f2tool: Path, out_pa
                        capture_output=True)
         return dst.read_bytes()
 
-    glued = extract(header_bnk, he, "h.bin") + extract(body_bnk, be, "b.bin")
-    info, geoms = mdl.parse(glued, log=lambda m: None, file_path=hero_model)
-    geoms = geoms or []
+    # Load each part model (a character may be a {head, torso, legs} part-set sharing ONE rig).
+    # Use the first part that carries a full skeleton as the skeleton; concatenate every part's
+    # skinned geoms — the clips retarget onto the shared rig by bone name.
+    info = None
+    geoms = []
+    for m in models:
+        he = _resolve(hidx, m)
+        be = _resolve(gidx, m)
+        if not (he and be):
+            print(f"  model not in banks (skipped): {m}", file=sys.stderr)
+            continue
+        glued = extract(header_bnk, he, "h.bin") + extract(body_bnk, be, "b.bin")
+        pinfo, pgeoms = mdl.parse(glued, log=lambda mm: None, file_path=m)
+        if info is None and getattr(pinfo, "bones", None) and getattr(pinfo, "bone_transforms", None):
+            info = pinfo
+        geoms.extend(pgeoms or [])
+    if info is None:
+        raise SystemExit(f"no rigged model loaded from: {models}")
     inv_bind = fable_pose.build_inv_bind(info)
     lk = fable_pose._build_lookup(info)
 
@@ -234,6 +245,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--body-bnk", type=Path, default=None)
     p.add_argument("--hero-model",
                    default=r"Art\Characters\Heros\Child Male\dotXSI\CH_HeroChild_Male\CH_HeroChild_Male.mdl")
+    p.add_argument("--models", nargs="+", default=None,
+                   help="one or more part models (head/torso/legs) sharing a rig; default = --hero-model")
     p.add_argument("--gdb", type=Path, default=None, help="globals.gdb (anim-set records)")
     p.add_argument("--anim-record", default=None,
                    help="GDB anim-set record hash (hex); default = hero-human 0x576283C7")
@@ -251,7 +264,8 @@ def main(argv=None) -> None:
     gdb = args.gdb or (args.game_root / "data" / "Globals" / "globals.gdb")
     record = int(args.anim_record, 16) if args.anim_record else HERO_ANIM_RECORD
     slots = args.slots or LOCO_SLOTS
-    cook(header, body, args.hero_model, args.f2tool, args.out, gdb, record, slots)
+    models = args.models or [args.hero_model]
+    cook(header, body, models, args.f2tool, args.out, gdb, record, slots)
 
 
 if __name__ == "__main__":

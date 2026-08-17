@@ -139,6 +139,18 @@ class GdbView:
             depth += 1
         return None
 
+    def record_hash(self, index: int) -> int:
+        return _be(self.b, self.hash_base + index * 4)
+
+    def anim_set_records(self, slot="Walk"):
+        """Record hashes that LOCALLY define the given slot (type-4) — the character anim sets."""
+        fh = fnv1(slot)
+        out = []
+        for idx, rec in enumerate(self.offsets):
+            if self._find_local(rec, fh, 4) is not None:
+                out.append(self.record_hash(idx))
+        return out
+
     def anim_fields(self, rec_hash: int):
         """All local type-4 (clip-ref) fields on a record: [(field_hash, key0)]."""
         record = self.lookup(rec_hash)
@@ -172,10 +184,24 @@ def main(argv=None) -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("resolve"); r.add_argument("record"); r.add_argument("slots", nargs="+")
     f = sub.add_parser("fields"); f.add_argument("record")
+    sub.add_parser("list")  # enumerate all character anim-set records + their idle/walk/run
     args = p.parse_args(argv)
     gdb = GdbView(args.gdb.read_bytes())
     if not gdb.ok:
         raise SystemExit(f"not a parseable GDB: {args.gdb}")
+    if args.cmd == "list":
+        recs = gdb.anim_set_records()
+        print(f"{len(recs)} character anim-set records (locally define a Walk slot):")
+        seen = set()
+        for h in recs:
+            trio = tuple(gdb.find_field(h, fnv1(s), 4) for s in ("Idle", "Walk", "Run"))
+            if trio in seen:
+                continue
+            seen.add(trio)
+            fmt = lambda v: ("id_%08X" % v) if v else "-"
+            print(f"  0x{h:08X}  Idle={fmt(trio[0])}  Walk={fmt(trio[1])}  Run={fmt(trio[2])}")
+        print(f"{len(seen)} distinct idle/walk/run sets")
+        return
     rec = int(args.record, 16)
     if args.cmd == "resolve":
         for slot, cid in resolve_slots(gdb, rec, args.slots).items():
