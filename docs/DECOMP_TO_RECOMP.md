@@ -49,6 +49,17 @@ Every knob below is **env-gated and ships in-tree — zero source edits to run.*
 **#1 recommended action:** the force-predicate-true A/B, run alongside the static DXBC dump in one
 session. Both are zero-edit and decide the hypothesis before any rebuild.
 
+> **A/B RESULT (2026-08-16, executed):** Hero001 chapter2slums loadsave under `--gpu_plugin native`,
+> `depth_fresh` OFF in both arms, only `REXGPU_NATIVE_FORCE_PREDICATE_TRUE` varied. The `:1917`
+> marker fired for the forced arm (flag reached the translator) and was absent for baseline.
+> **Forcing predicates true did NOT light the world** — both arms render the identical black-world +
+> bloom-glow signature (clean, game-in-foreground gameplay frames: baseline center-luma 0.04–0.09,
+> forced 0.012). ⇒ **the predicate-value hypothesis is REFUTED** (the blunt global-force version).
+> Consistent with UPDATE 16 (material draws already write a dark HDR, mean 0.08). **Pivot to the
+> `FORCE_PIXEL_COLOR` arm** (below): unconditional `0.25` export bypasses the predicated path — gray
+> world ⇒ black is the shader *body*; still black ⇒ loss is *downstream* of the pixel shader
+> (resolve/compositor/tonemap). Shots: `ghidra_out/title_ui_re/depthfix/win_v0_world_t*.png`.
+
 ---
 
 ## Frontier 2 — adult hero/dog black skin (guest morph-composite path)
