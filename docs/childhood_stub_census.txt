@@ -13,36 +13,53 @@
 # surface, weighted toward the opening beats.
 #
 # calls  native
-20404	IsLevelLoaded()
-5996	SearchTools.FilterWithEC
+65975	IsLevelLoaded()
+43128	DemonDoor.IsFaceOut
+21566	IsDistanceBetweenThingsUnder()
+21564	Action.IsPerformingAnyAction
+21564	DemonDoor.SpawnFace
+21564	IsDistanceBetweenThingsOver()
+5998	SearchTools.FilterWithEC
 5985	Villager.GetECType
+4798	CommunityService.GetCurrentStage
+2399	GetDog()
+2398	CommunityService.GetCurrentInfo
+2396	Dog.SetMoodType
+2396	IsEntityVisibleOnScreen()
 1202	Layers.GetActiveScenarioForLevel
 1201	GetLevelLoaded()
 1200	GetPlayerHenchman()
+1200	Layers.IsLayerActive
+1200	QuestTracker.GetPrimaryQuestName
 1199	IsHeroPlayerPlayingWithSaveGame()
-79	IsLoadedFromSaveGame()
-78	MessageEvents.RegisterEntityNameForActivationMessages
+180	MessageEvents.RegisterEntityNameForActivationMessages
+84	IsLoadedFromSaveGame()
+83	QuestTracker.IsRegistered
+71	Layers.ActivateLayer
+53	QuestTracker.Register
 30	Gossip.ActivateGossipItem
-24	Layers.ActivateLayer
 23	Gossip.DeactivateGossipItem
 22	Stats.AddUnlockedTitle
 18	TutorialManager.CompleteTutorial
 17	ExpressionPerformer.SetExpressionAsAvailable
-17	QuestTracker.Register
+16	AIManager.DisableSimBehaviours
 14	Stats.SetRegionPerceivedRenown
-8	Player.RemoveAllScriptRules
+10	Player.RemoveAllScriptRules
+9	Layers.DeactivateLayer
 8	QuestTracker.IsDemoModeActive
-7	Layers.DeactivateLayer
 6	LevelExit.GetECType
-5	AIManager.DisableSimBehaviours
+5	GameVersion.IsDLCDownloaded
+4	Player.IsAvailable
+4	QuestTracker.HasBeenActivated
 4	Stats.SetChapterProgress
+4	TriggerVolumeExclusionZone.GetECType
 3	AddConnectionArea()
 3	C2DBoxI()
-3	QuestTracker.IsRegistered
 3	QuestTracker.SetAsActive
 3	QuestTracker.Unlock
 2	Carrying.GetSlotToSheatheWeapon
 2	Carrying.PutEntityInSlot
+2	Dog.IsInjured
 2	ExpressionPerformer.SetExpressionAsExtendable
 2	GUI.FadeScreenOut
 2	GUI.LockScreenFade
@@ -52,10 +69,9 @@
 2	Inventory.RemoveAllItemsOfType
 2	Layers.ActivateScenario
 2	Player.AddScriptRules
+2	Player.SetOverrideCameraMode
 2	Stats.SetTitleRecord
-2	Timing.GetDayCount
 2	Timing.SetTimeOfDay
-2	TriggerVolumeExclusionZone.GetECType
 1	Age.SetAge
 1	Age.SetAgeGroup
 1	Age.SetAgeLimit
@@ -78,11 +94,9 @@
 1	Door.SetOpen
 1	ExperienceOrb.SetAsEnabled
 1	FastTravel.SetBlockedTextTag
-1	GameVersion.IsDLCDownloaded
 1	Gender.Get
 1	GetBreadcrumbEntity()
-1	GetDog()
-1	GetRandomNumber()
+1	GraphEdgeController.SetLocked
 1	GroupEvent.CreateCrowdControl
 1	GuildMessages.IsAvailable
 1	GuildMessages.SetNarratorTag
@@ -113,31 +127,85 @@
 1	Village.GetECType
 1	WorldMapInfo.EnableGargoyles
 
-# referenced but never called (2):
--	CameraValues.FOV
+# referenced but never called (1):
 -	Carrying.RemoveEntityFromSlot
 
-# SILENT coroutine errors (4 distinct) - these kill beats outright:
-# 1x  ?:0: attempt to compare number with table
-# 1x  ?:0: attempt to compare two table values
-# 1x  ?:0: attempt to index a nil value
-# 1x  ?:0: attempt to index global 'DummyObjects' (a nil value)
+# SILENT coroutine errors (5 distinct) - these kill beats outright:
+# 1x  frame=0 lastStub=CommunityService.GetCurrentStage :: ?:0: attempt to compare number with table | stack traceback: | 	?: in function <?:239>
+# 1x  frame=0 lastStub=GroupEvent.CreateCrowdControl :: ?:0: attempt to index a nil value | stack traceback: | 	?: in function <?:401>
+# 1x  frame=1 lastStub=CommunityService.GetCurrentStage :: ?:0: attempt to compare number with table | stack traceback: | 	?: in function <?:239>
+# 1x  frame=1 lastStub=Inventory.RemoveAllItemsOfCategory :: ?:0: attempt to index global 'DummyObjects' (a nil value) | stack traceback: | 	?: in function <?:347>
+# 1x  frame=1 lastStub=QuestTracker.IsRegistered :: ?:0: attempt to index global 'DummyObjects' (a nil value) | stack traceback: | 	?: in main chunk | 	[C]: in function 'require' | 	?: in function 'LoadQuestModule' | 	?: in function 'StartNewOptionalQuest' | 	?: in function 'CheckQuestEligibility' | 	?: in function <?:1666>
 
 # SPIN SET - calls in the last 60 frames (per frame in brackets). These are the GATES:
-# 2040	[34/frame]	IsLevelLoaded()
+# 6600	[110/frame]	IsLevelLoaded()
+# 4320	[72/frame]	DemonDoor.IsFaceOut
+# 2160	[36/frame]	Action.IsPerformingAnyAction
+# 2160	[36/frame]	DemonDoor.SpawnFace
+# 2160	[36/frame]	IsDistanceBetweenThingsOver()
+# 2160	[36/frame]	IsDistanceBetweenThingsUnder()
 # 600	[10/frame]	SearchTools.FilterWithEC
 # 600	[10/frame]	Villager.GetECType
+# 480	[8/frame]	CommunityService.GetCurrentStage
+# 240	[4/frame]	CommunityService.GetCurrentInfo
+# 240	[4/frame]	Dog.SetMoodType
+# 240	[4/frame]	GetDog()
+# 240	[4/frame]	IsEntityVisibleOnScreen()
 # 120	[2/frame]	GetLevelLoaded()
 # 120	[2/frame]	GetPlayerHenchman()
 # 120	[2/frame]	IsHeroPlayerPlayingWithSaveGame()
 # 120	[2/frame]	Layers.GetActiveScenarioForLevel
+# 120	[2/frame]	Layers.IsLayerActive
+# 120	[2/frame]	QuestTracker.GetPrimaryQuestName
 
 # WAITS entered (frame  thread  :primitive) - the tail entries are the GATES:
+0 QO900_DemonDoorDunecrest :WaitFor pred@?
+0 QO900_DemonDoorDunecrest :WaitFor RETURNED
+0 QO920_DemonDoorWestcliffPreCave :WaitFor pred@?
+0 QO920_DemonDoorWestcliffPreCave :WaitFor RETURNED
+0 QO925_DemonDoorBrightwood_2 :WaitFor pred@?
+0 QO925_DemonDoorBrightwood_2 :WaitFor RETURNED
+0 QO930_DemonDoorBowerLake :WaitFor pred@?
+0 QO930_DemonDoorBowerLake :WaitFor RETURNED
+0 QO940_DemonDoorBrightwood :WaitFor pred@?
+0 QO940_DemonDoorBrightwood :WaitFor RETURNED
+0 QO950_DemonDoorHobbesCave :WaitFor pred@?
+0 QO950_DemonDoorHobbesCave :WaitFor RETURNED
+0 QO990_DemonDoorBloodstone :WaitFor pred@?
+0 QO990_DemonDoorBloodstone :WaitFor RETURNED
+0 QC050_Wanted :WaitFor pred@?
+0 QO060_Gargoyles :WaitFor pred@?
+1 QO900_DemonDoorDunecrest :WaitFor pred@?
+1 QO900_DemonDoorDunecrest :WaitFor RETURNED
+1 QO920_DemonDoorWestcliffPreCave :WaitFor pred@?
+1 QO920_DemonDoorWestcliffPreCave :WaitFor RETURNED
+1 QO925_DemonDoorBrightwood_2 :WaitFor pred@?
+1 QO925_DemonDoorBrightwood_2 :WaitFor RETURNED
+1 QO930_DemonDoorBowerLake :WaitFor pred@?
+1 QO930_DemonDoorBowerLake :WaitFor RETURNED
+1 QO940_DemonDoorBrightwood :WaitFor pred@?
+1 QO940_DemonDoorBrightwood :WaitFor RETURNED
+1 QO950_DemonDoorHobbesCave :WaitFor pred@?
+1 QO950_DemonDoorHobbesCave :WaitFor RETURNED
+1 QO990_DemonDoorBloodstone :WaitFor pred@?
+1 QO990_DemonDoorBloodstone :WaitFor RETURNED
+1 QO060_Gargoyles :WaitFor pred@?
+1 QC065_Roadblock :WaitFor pred@?
 1 QC070_Thag :WaitForTimeInSeconds arg=0.8
 49 QC070_Thag :WaitForTimeInSeconds RETURNED
 # re-entered most (a re-entered wait is polling; a once-entered wait is parked):
-# 1x  1 QC070_Thag :WaitForTimeInSeconds arg=0.8
-# 1x  49 QC070_Thag :WaitForTimeInSeconds RETURNED
+# 1x  0 QC050_Wanted :WaitFor pred@?
+# 1x  0 QO060_Gargoyles :WaitFor pred@?
+# 1x  0 QO900_DemonDoorDunecrest :WaitFor RETURNED
+# 1x  0 QO900_DemonDoorDunecrest :WaitFor pred@?
+# 1x  0 QO920_DemonDoorWestcliffPreCave :WaitFor RETURNED
+# 1x  0 QO920_DemonDoorWestcliffPreCave :WaitFor pred@?
+# 1x  0 QO925_DemonDoorBrightwood_2 :WaitFor RETURNED
+# 1x  0 QO925_DemonDoorBrightwood_2 :WaitFor pred@?
+# 1x  0 QO930_DemonDoorBowerLake :WaitFor RETURNED
+# 1x  0 QO930_DemonDoorBowerLake :WaitFor pred@?
+# 1x  0 QO940_DemonDoorBrightwood :WaitFor RETURNED
+# 1x  0 QO940_DemonDoorBrightwood :WaitFor pred@?
 
 # where the quest coroutines are parked (the gate to open next):
 # [stall] _G.Fable2Scripts.Henchman_SuckExperienceTracker.co_update status=suspended quest=? state=nil at ?
@@ -154,8 +222,55 @@
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.7.co_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.8.co_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.9.co_update status=suspended quest=? state=nil at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.10.XPCheckThread.co_update status=suspended quest=? state=nil at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.10.co_update status=suspended quest=QC070_Thag state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.10.co_update status=suspended quest=? state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.11.ObjTracker.co_update status=suspended quest=QRCS001_CommunityService state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.11.ConditionCheckThread.co_update status=dead quest=? state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.11.co_update status=suspended quest=QRCS001_CommunityService state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.co_update status=suspended quest=QO900_DemonDoorDunecrest state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.13.co_update status=suspended quest=QO910_DemonDoorRavenscar state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.14.co_update status=suspended quest=QO920_DemonDoorWestcliffPreCave state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.15.co_update status=suspended quest=QO925_DemonDoorBrightwood_2 state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.16.co_update status=suspended quest=QO930_DemonDoorBowerLake state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.17.co_update status=suspended quest=QO940_DemonDoorBrightwood state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.18.co_update status=suspended quest=QO950_DemonDoorHobbesCave state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.19.co_update status=suspended quest=QO980_DemonDoorBWSCemetery state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.20.co_update status=suspended quest=QO990_DemonDoorBloodstone state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.21.co_update status=suspended quest=QJ001_JobWoodsman state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.22.co_update status=suspended quest=QJ002_JobBlacksmith state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.23.co_update status=suspended quest=QJ003_JobBartender state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.24.co_update status=suspended quest=QC020_PoseForPicture state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.25.ShootTutorialThread.co_update status=suspended quest=QC030_BeetleHunter state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.25.co_update status=suspended quest=QC030_BeetleHunter state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.26.co_update status=suspended quest=QC040_BulliesAndDog state=0 at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.27.GiveLetterEarlyThread.co_update status=suspended quest=? state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.27.ChildThreads.1.co_update status=suspended quest=QC045_LoveLetter state=0 at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.27.co_update status=suspended quest=QC045_LoveLetter state=0 at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.1.co_update status=suspended quest=? state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.2.co_update status=suspended quest=? state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.co_update status=suspended quest=QC050_Wanted state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.1.co_update status=suspended quest=QC055_Wino state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.2.co_update status=suspended quest=? state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.co_update status=suspended quest=QC055_Wino state=0 at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.co_update status=suspended quest=QO060_Gargoyles state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ObjTracker.co_update status=suspended quest=QRCS001_CommunityService state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ConditionCheckThread.co_update status=dead quest=? state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.co_update status=suspended quest=QRCS001_CommunityService state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.32.co_update status=suspended quest=QO900_DemonDoorDunecrest state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.33.co_update status=suspended quest=QO910_DemonDoorRavenscar state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.34.co_update status=suspended quest=QO920_DemonDoorWestcliffPreCave state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.35.co_update status=suspended quest=QO925_DemonDoorBrightwood_2 state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.36.co_update status=suspended quest=QO930_DemonDoorBowerLake state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.37.co_update status=suspended quest=QO940_DemonDoorBrightwood state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.38.co_update status=suspended quest=QO950_DemonDoorHobbesCave state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.39.co_update status=suspended quest=QO980_DemonDoorBWSCemetery state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.40.co_update status=suspended quest=QO990_DemonDoorBloodstone state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.41.co_update status=suspended quest=QJ001_JobWoodsman state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.42.co_update status=suspended quest=QJ002_JobBlacksmith state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.43.co_update status=suspended quest=QJ003_JobBartender state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.44.co_update status=suspended quest=QC065_Roadblock state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.45.co_update status=suspended quest=QO060_Gargoyles state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.46.XPCheckThread.co_update status=suspended quest=? state=nil at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.46.co_update status=suspended quest=QC070_Thag state=nil at ?
 # [stall] _G.Fable2Scripts.Hero_AbilityPowerUpTracker.co_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Henchman_DeathTracker.co_update status=suspended quest=? state=nil at ?
 # [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.DebugQuestStartTable.1 id=QC010_Childhood state=nil co=none update=nil
@@ -175,13 +290,11 @@
 0 Gossip.DeactivateGossipItem
 0 MessageEvents.RegisterEntityNameForActivationMessages
 0 IsLevelLoaded()
-0 GetRandomNumber()
-0 Player.RemoveAllScriptRules
+0 QuestTracker.HasBeenActivated
 0 GetLevelLoaded()
 0 Layers.GetActiveScenarioForLevel
 0 LevelExit.GetECType
 0 SearchTools.FilterWithEC
-0 Timing.GetDayCount
 0 AIManager.DisableSimBehaviours
 0 QuestTracker.Unlock
 0 QuestTracker.SetAsActive
@@ -193,6 +306,16 @@
 0 Stats.AddUnlockedTitle
 0 Stats.SetTitleRecord
 0 AutoSaveGame()
+0 CommunityService.GetCurrentStage
+0 CommunityService.GetCurrentInfo
+0 GetDog()
+0 Dog.IsInjured
+0 TriggerVolumeExclusionZone.GetECType
+0 GraphEdgeController.SetLocked
+0 QuestTracker.GetPrimaryQuestName
+0 Layers.IsLayerActive
+0 IsDistanceBetweenThingsUnder()
+0 Player.RemoveAllScriptRules
 0 IsHeroPlayerPlayingWithSaveGame()
 0 Gender.Get
 0 Player.ChangePlayerEntityType
@@ -200,7 +323,6 @@
 0 AmbientPopulationManager.SetCrimeEnabled
 0 Vaulting.SetAsEnabled
 0 Player.SetFastTravelStopActivationAsEnabled
-0 TriggerVolumeExclusionZone.GetECType
 0 ExperienceOrb.SetAsEnabled
 0 Player.SetExperienceSpendingAsEnabled
 0 GUI.SetDPadEnabled
@@ -221,6 +343,12 @@
 0 TutorialManager.CompleteTutorial
 0 GroupEvent.CreateCrowdControl
 0 Age.SetAgeGroup
+0 IsDistanceBetweenThingsOver()
+0 DemonDoor.IsFaceOut
+0 Dog.SetMoodType
+0 DemonDoor.SpawnFace
+0 Action.IsPerformingAnyAction
+0 IsEntityVisibleOnScreen()
 0 GetPlayerHenchman()
 1 IsLoadedFromSaveGame()
 1 Stats.SetRegionPerceivedRenown
@@ -235,7 +363,6 @@
 1 Vaulting.SetTutorialAsEnabled
 1 Inventory.RemoveAllItemsOfType
 1 Inventory.RemoveAllItemsOfCategory
-1 GetDog()
 1 Dog.SetDisableNonEssentialBehaviour
 1 Villager.GetECType
 1 FastTravel.SetBlockedTextTag
@@ -246,6 +373,8 @@
 1 Village.GetECType
 1 SoundTools.PlayMusic
 1 Player.AddScriptRules
+1 Player.SetOverrideCameraMode
+1 Player.IsAvailable
 49 GuildMessages.IsAvailable
 49 TutorialManager.DisplayTutorial
 49 GetBreadcrumbEntity()

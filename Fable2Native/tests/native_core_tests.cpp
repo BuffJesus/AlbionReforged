@@ -356,9 +356,12 @@ static void test_named_entity_sidecar() {
         "SearchTools.FilterWithName(h, 'QC010_HeroInCrowdMarker'); "
         "local r = SearchTools.GetSearchResults(h); "
         "assert(r and #r == 1, 'marker not found'); "
-        "local x, y, z = r[1]:GetPosition(); "
-        "assert(math.abs(x - 175.0739) < 0.01 and math.abs(y - 49.4009) < 0.01 and "
-        "       math.abs(z - 144.7233) < 0.01, 'wrong position'); "
+        // GetPosition returns a CVector3 (the retail contract — see the binding's citation).
+        "local p = r[1]:GetPosition(); "
+        "assert(math.abs(p:GetX() - 175.0739) < 0.01 and math.abs(p:GetY() - 49.4009) < 0.01 and "
+        "       math.abs(p:GetZ() - 144.7233) < 0.01, 'wrong position'); "
+        "local x, y, z = r[1]:GetPositionXYZ(); "
+        "assert(math.abs(x - 175.0739) < 0.01 and math.abs(z - 144.7233) < 0.01, 'wrong xyz'); "
         "assert(r[1]:GetName() == 'QC010_HeroInCrowdMarker')",
         "=t_names") || (std::fprintf(stderr, "names: %s\n",
                         game.script_vm->last_error().c_str()), false));
@@ -427,8 +430,11 @@ static void test_childhood_stub_census() {
     // happened on and routed through the real Debug.Log native (script_log). The frame at which
     // new names stop appearing is where the quest STALLS - the thing the ranking alone can't say.
     vm.run_source(
-        "__f2_frame = 0; local seen = {}; local orig = __stub_call; "
-        "__stub_call = function(k) orig(k); if not seen[k] then seen[k] = true; "
+        // __f2_last also records the most recent stubbed native globally, so the resume-error
+        // handler can name what the dying coroutine touched just before it raised.
+        "__f2_frame = 0; __f2_last = '(none)'; local seen = {}; local orig = __stub_call; "
+        "__stub_call = function(k) orig(k); __f2_last = k; "
+        "if not seen[k] then seen[k] = true; "
         "Debug.Log('[first] ' .. __f2_frame .. ' ' .. k) end end",
         "=census_probe");
     F2_CHECK(vm.last_error().empty());
@@ -442,7 +448,14 @@ static void test_childhood_stub_census() {
         "local raw = coroutine.resume\n"
         "coroutine.resume = function(co, ...)\n"
         "  local a, b = raw(co, ...)\n"
-        "  if a == false then Debug.Log('[resume-error] ' .. tostring(b)) end\n"
+        // debug.traceback(co, msg) walks the DEAD coroutine's own stack. The bytecode is stripped
+        // so there are no line numbers, but each frame still carries its chunk name (the port
+        // names chunks after the script), which is what attributes an error to a script.
+        "  if a == false then\n"
+        "    local tb = debug.traceback(co, tostring(b)) or tostring(b)\n"
+        "    Debug.Log('[resume-error] frame=' .. tostring(__f2_frame) ..\n"
+        "             ' lastStub=' .. tostring(__f2_last) .. ' :: ' ..\n"
+        "             string.gsub(tb, '\\n', ' | ')) end\n"
         "  return a, b\n"
         "end",
         "=census_resume");
@@ -749,7 +762,8 @@ static void test_stage2_control() {
     F2_CHECK(vm.last_error().empty());
     F2_CHECK(std::fabs(game.player.position()[0] - 10.0f) < 1e-4f);
     F2_CHECK(std::fabs(game.player.position()[2] - 5.0f) < 1e-4f);
-    vm.run_source("assert(math.abs(select(1, GetPlayerHero():GetPosition())-10) < 1e-3)", "=t_tp2");
+    // GetPosition yields a CVector3 (retail contract), so read the component off the vector.
+    vm.run_source("assert(math.abs(GetPlayerHero():GetPosition():GetX()-10) < 1e-3)", "=t_tp2");
     F2_CHECK(vm.last_error().empty());
 
     // Facing: SetFacingVector -> player.facing_yaw = atan2(x,z); GetFacingVector round-trips.

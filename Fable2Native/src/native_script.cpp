@@ -610,6 +610,47 @@ void NativeScriptVM::push_nil() {
 void NativeScriptVM::push_new_table() {
     if (state_) lua_newtable(cur_());
 }
+
+void NativeScriptVM::push_vector3(double x, double y, double z) {
+    if (!state_) return;
+    lua_State* s = cur_();
+    lua_getglobal(s, "CVector3");                 // [CVector3?]
+    if (lua_isfunction(s, -1)) {
+        lua_pushnumber(s, static_cast<lua_Number>(x));
+        lua_pushnumber(s, static_cast<lua_Number>(y));
+        lua_pushnumber(s, static_cast<lua_Number>(z));
+        if (lua_pcall(s, 3, 1, 0) == 0) return;   // [vec]
+        lua_pop(s, 1);                            // ctor errored — fall through to a plain table
+    } else {
+        lua_pop(s, 1);                            // not installed yet
+    }
+    lua_newtable(s);                              // [t] — {x=,y=,z=} keeps field access working
+    lua_pushnumber(s, static_cast<lua_Number>(x)); lua_setfield(s, -2, "x");
+    lua_pushnumber(s, static_cast<lua_Number>(y)); lua_setfield(s, -2, "y");
+    lua_pushnumber(s, static_cast<lua_Number>(z)); lua_setfield(s, -2, "z");
+}
+
+bool NativeScriptVM::arg_vector3(int index, double out[3]) const {
+    if (!state_) return false;
+    lua_State* s = cur_();
+    if (lua_istable(s, index)) {
+        static const char* const kField[3] = {"x", "y", "z"};
+        for (int i = 0; i < 3; ++i) {
+            lua_getfield(s, index, kField[i]);
+            out[i] = lua_isnumber(s, -1) ? static_cast<double>(lua_tonumber(s, -1)) : 0.0;
+            lua_pop(s, 1);
+        }
+        return true;
+    }
+    if (lua_isnumber(s, index)) {
+        for (int i = 0; i < 3; ++i) {
+            const int at = index + i;
+            out[i] = lua_isnumber(s, at) ? static_cast<double>(lua_tonumber(s, at)) : 0.0;
+        }
+        return true;
+    }
+    return false;
+}
 void NativeScriptVM::push_handle_list(const char* tag, const std::uint64_t* ids,
                                       std::size_t count) {
     if (!state_) return;

@@ -150,6 +150,16 @@ public:
     void push_bool(bool v);
     void push_nil();
     void push_new_table();  // push a fresh empty Lua table (e.g. an empty result list)
+    // Push a CVector3 built by the game-facing constructor (the stage2_control shim), so a native
+    // can return the VECTOR type the game's scripts expect. Grounded: the game does arithmetic
+    // straight on a returned position — `QuestManager.HeroEntity:GetPosition() + CVector3(0,0,24)`
+    // (qc010_childhood PooCam) — which only works if the left operand is a CVector3. Falls back to
+    // a plain {x,y,z} table if the constructor isn't installed yet, so registration order is safe.
+    void push_vector3(double x, double y, double z);
+    // Read a CVector3-ish argument: a table with x/y/z (what the game passes, e.g.
+    // `Debug.CreateEntityAt("ObjectLimboInventory", "", CVector3(0,0,0))` in gameflow.txt), else
+    // three consecutive scalars starting at `index`. Returns false if neither form is present.
+    bool arg_vector3(int index, double out[3]) const;
     // Push a Lua array (1-based) of object handles for `tag` (e.g. an entity search result).
     void push_handle_list(const char* tag, const std::uint64_t* ids, std::size_t count);
 

@@ -122,6 +122,14 @@ struct NativeGame {
 
     double elapsed_seconds = 0.0;
 
+    // In-game day counter behind Timing.GetDayCount/SetDayCount/AdvanceDayCount. The game's
+    // scripts only ever use it RELATIVELY — GameflowDayChecker:Update samples it, then compares a
+    // later sample and consumes the DIFFERENCE (gameflow.txt:1830/1841-1843) — so the absolute
+    // start value carries no script-visible meaning. ⚠ FLAGGED: it is therefore 0 by choice, not
+    // by evidence; nothing advances it yet (no day/night cycle), so it is stable at its last set
+    // value.
+    int day_count = 0;
+
     // Seed the world's NAMED entities from a cooked `.f2names` sidecar
     // (tools/cook_quest_markers.py): one entity per record, carrying a TransformComponent at the
     // record's world position and its name in `entity_names`. That is what backs a quest's

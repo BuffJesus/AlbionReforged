@@ -63,7 +63,59 @@ print (and absence of "INACTIVE") plus `Gameflow.WeaponNames.ChildMelee == 'Chil
 prints it after `:new()` but before the coroutine is ever resumed, so it passed throughout the
 entire period the childhood was dying on frame 0.
 
-### ▶ THE NEXT GATE (measured, not guessed)
+### ▶ Follow-on fixes (2026-08-19, each measured then verified)
+Chasing the childhood one death at a time. Every step: read the error, ground the contract in the
+game's own source/usage, fix, re-measure.
+
+1. **`Timing.GetDayCount`/`SetDayCount`/`AdvanceDayCount`** — `GameflowDayChecker:Update`
+   (`gameflow.txt:1828`) samples the day count and *compares/subtracts* it, so the black-hole stub
+   raised "attempt to compare two table values" and killed the checker. Only the DIFFERENCE is ever
+   consumed, so the absolute value needs no retail grounding (⚠ flagged as chosen, not evidenced).
+2. **`GetRandomNumber(n)` → integer in [1, n]** — `GameflowQuestUnlocker:Update`
+   (`gameflow.txt:1666`) does `GetRandomNumber(100)` then `> 50`. The RANGE is pinned by the game's
+   own idiom `GetRandomNumber(GetTableSize(t)+1)` with an explicit `== size+1` "none" sentinel
+   (`gameflow.txt:304-306`), which only works for inclusive 1..n. ⚠ Retail's generator is not RE'd,
+   so draws are not sequence-identical.
+3. **`Entity:GetPosition()` returns a CVector3, not 3 scalars** — the game does
+   `QuestManager.HeroEntity:GetPosition() + CVector3(0,0,24)` (qc010 `PooCam`), which only works if
+   the left operand is a vector; and `gameflow.txt` passes positions straight into vector params
+   (`Debug.CreateEntityAt("ObjectLimboInventory", "", CVector3(0,0,0))`). The port's 3-scalar
+   assumption was documented in a comment and is now disproven. Added `push_vector3`/`arg_vector3`
+   to the VM, a scalar `GetPositionXYZ` for the port's own use, and made `Debug.CreateEntityAt`
+   take the vector form.
+4. **Camera scripts are ENGINE-loaded** — `camera/camerasetupscript.lua` is a list of
+   `AddCameraScriptFile(...)` calls and *nothing in the 552 shipped scripts runs it*; the
+   hot-reload dispatcher routes a changed `camera/` file to the native `Debug.ReloadCameras`
+   (generalsetupscript `main.proto[0]` instr 20-26). Implemented `AddCameraScriptFile` +
+   run the setup script at boot, so `CameraFunctions` (which builds every scripted-cutscene camera
+   cage) is real. ⚠ The engine's exact camera-boot entry point is not RE'd — this mirrors the
+   observed mechanism.
+
+**Measured effect (A/B harness, world + markers loaded):** silent coroutine errors **6 → 2**; both
+`DummyObjects` failures gone; the childhood now runs past the crowd setup into its `PooCam`
+cold-open.
+
+### ▶ THE CURRENT GATE: spawned CREATURES have no instantiation path — PROVEN BY A/B
+With the real marker set the childhood dies at frame 0 right after
+`GroupEvent.CreateCrowdControl("QC010_MurgoCrowd")`, on "attempt to index a nil value". The next
+thing Update does is `GetEntityWithName("QC010_VillagerA")` / `"QC010_VillagerB"` and index the
+result — and those are **exactly the two crowd entities in `defaultscenario.save` that carry no
+`SimpleTransformComponent`** (the other 10 `QC010_Villager*` are static markers and cook fine).
+They are creatures: spawned from a GDB archetype, not statically placed.
+
+**A/B proof (not inference):** appending fake `QC010_VillagerA`/`B` rows to the `.f2names` sidecar
+makes that death disappear and the quest advance into `PooCam`; removing them brings it back.
+
+So the next real work is **creature instantiation from the GDB archetype** (decomp already done —
+`ghidra_out/gdb_instantiation_re.txt`, memory `fable2-modding-systems-analysis`), wired into
+`GetEntityWithName`/`Debug.CreateEntityAt`. That is the gate for the childhood's whole cast.
+
+### ▶ REMAINING known errors (both "stub returns a table where a number is needed")
+- `<?:239>` (`quests/qr_communityservice.lua main.proto[6]`) after `CommunityService.GetCurrentStage`
+- `<?:4309>` after `Inventory.GetNumberOfItemsOfCategory`
+Both need the native to return a REAL number; the stub deliberately refuses to fake ordering.
+
+### ▶ THE OLD GATE (superseded, kept for the method)
 The childhood still terminates — `Gameflow.Childhood` is nil by the end of the run and QC070_Thag
 runs — but now on **four later silent coroutine errors**, which are the next work item:
 1. `attempt to index global 'DummyObjects' (a nil value)` — an engine-provided ENUM table

@@ -241,17 +241,22 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         v.push_number(static_cast<double>(v.arg_handle(1)));
         return 1;
     });
-    // Debug.CreateEntityAt(class, name, x, y, z) — spawn from a class name at a position
-    // (gameflow.txt: Debug.CreateEntityAt("CreatureCrummi","Crummi", HeroEntity:GetPosition())
-    // where GetPosition returns 3 numbers). Returns the new entity handle. FLAGGED: `class`
-    // is recorded as the name but not yet resolved to a GDB archetype (no GDB cook here).
+    // Debug.CreateEntityAt(class, name, position) — spawn from a class name at a position. The
+    // third argument is a CVector3 in the game's own calls (gameflow.txt:
+    // `Debug.CreateEntityAt("ObjectLimboInventory", "", CVector3(0, 0, 0))` and
+    // `Debug.CreateEntityAt("CreatureCrummi", "Crummi", QuestManager.HeroEntity:GetPosition())`),
+    // so arg_vector3 reads that form — and still accepts three loose scalars for the port's own
+    // callers. Returns the new entity handle. FLAGGED: `class` is recorded as the name but not yet
+    // resolved to a GDB archetype (no GDB cook here), so the entity has no mesh/AI/appearance.
     vm.register_native("Debug", "CreateEntityAt", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
         if (!g) { v.push_nil(); return 1; }
         NativeEntity& e = g->world.entities.create_entity();
         auto tf = std::make_unique<TransformComponent>();
-        tf->position = {static_cast<float>(v.arg_number(3)), static_cast<float>(v.arg_number(4)),
-                        static_cast<float>(v.arg_number(5))};
+        double pos[3] = {0.0, 0.0, 0.0};
+        v.arg_vector3(3, pos);
+        tf->position = {static_cast<float>(pos[0]), static_cast<float>(pos[1]),
+                        static_cast<float>(pos[2])};
         e.add_component(std::move(tf));
         const char* name = v.arg_string(2);
         g->entity_names[e.uid] = (name && *name) ? name : v.arg_string(1);
@@ -259,7 +264,23 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         return 1;
     });
 
+    // Entity:GetPosition() -> CVector3 (ONE value, not three scalars). Grounded in the game's own
+    // code, which does vector arithmetic straight on the result:
+    //     QuestManager.HeroEntity:GetPosition() + CVector3(0, 0, 24)     (qc010_childhood PooCam)
+    // `number + table` dispatches to CVector3's __add with a NUMBER left operand, which is exactly
+    // the measured failure ("attempt to index local 'a' (a number value)") when this returned 3
+    // scalars. The same contract shows up in gameflow.txt, which passes a position straight into a
+    // vector parameter: Debug.CreateEntityAt("CreatureCrummi", "Crummi", HeroEntity:GetPosition())
+    // alongside Debug.CreateEntityAt("ObjectLimboInventory", "", CVector3(0, 0, 0)).
     vm.register_object_method("Entity", "GetPosition", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        TransformComponent* t = g ? entity_transform(*g, v.arg_handle(1)) : nullptr;
+        const std::array<float, 3> p = t ? t->position : std::array<float, 3>{};
+        v.push_vector3(p[0], p[1], p[2]);
+        return 1;
+    });
+    // The scalar form, for the port's own code/tests that want the components without a vector.
+    vm.register_object_method("Entity", "GetPositionXYZ", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
         TransformComponent* t = g ? entity_transform(*g, v.arg_handle(1)) : nullptr;
         const std::array<float, 3> p = t ? t->position : std::array<float, 3>{};
@@ -571,6 +592,46 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         return 1;
     });
     vm.register_native("Timing", "GetTickRate", [](NativeScriptVM& v) -> int { v.push_number(60.0); return 1; });
+
+    // ---- Timing day counter ----
+    // Needed because it is COMPARED and SUBTRACTED, so a stub value is a crash, not a no-op:
+    // GameflowDayChecker:Update (gameflow.txt:1828) does `local LastDay = Timing.GetDayCount()`
+    // then, in its loop, `local CurrentDay = Timing.GetDayCount()` / `if CurrentDay > LastDay` /
+    // `CurrentDay - LastDay`. With the auto-stub's black-hole value that raised "attempt to
+    // compare two table values" and killed the checker thread silently (measured:
+    // docs/childhood_stub_census.txt).
+    // Only the DIFFERENCE is ever consumed, so the absolute value needs no retail grounding.
+    vm.register_native("Timing", "GetDayCount", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        v.push_number(g ? static_cast<double>(g->day_count) : 0.0);
+        return 1;
+    });
+    vm.register_native("Timing", "SetDayCount", [](NativeScriptVM& v) -> int {
+        if (auto* g = game_of(v)) g->day_count = static_cast<int>(v.arg_number(1));
+        return 0;
+    });
+    vm.register_native("Timing", "AdvanceDayCount", [](NativeScriptVM& v) -> int {
+        if (auto* g = game_of(v)) ++g->day_count;
+        return 0;
+    });
+
+    // GetRandomNumber(n) -> integer in [1, n] INCLUSIVE. The range is pinned by the game's own
+    // use of it as a 1-based table index with an explicit "none" sentinel one past the end
+    // (gameflow.txt:304-306):
+    //     ChosenClothing = GetRandomNumber(GetTableSize(Gameflow.HeroCoats) + 1)
+    //     if (ChosenClothing ~= (GetTableSize(Gameflow.HeroCoats) + 1)) then ... HeroCoats[ChosenClothing]
+    // That idiom only works if n itself is attainable and 1 is the lowest index, i.e. [1, n].
+    // It must return a REAL number: GameflowQuestUnlocker:Update (gameflow.txt:1666) does
+    // `local KidnapTiming = GetRandomNumber(100)` then `if KidnapTiming > 50`, which raised
+    // "attempt to compare number with table" against the auto-stub and killed that thread.
+    // ⚠ FLAGGED: only the RANGE is data-backed. Retail's generator (algorithm, seeding, sequence)
+    // is not RE'd, so draws are NOT retail-identical — anything depending on the exact sequence
+    // matching the 360 will differ.
+    vm.register_global("GetRandomNumber", [](NativeScriptVM& v) -> int {
+        const int n = static_cast<int>(v.arg_number(1));
+        v.push_number(n >= 1 ? std::uniform_int_distribution<int>(1, n)(rng()) : 1);
+        return 1;
+    });
     // Debug.Error surfaces script/coroutine errors the managers would otherwise swallow
     // (QuestManager.Update routes a failed coroutine.resume here). Captured to script_log.
     vm.register_native("Debug", "Error", [](NativeScriptVM& v) -> int {
@@ -633,6 +694,34 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
     // RunScript(name): pull the named LuaQ chunk from the game's script BNK and run it.
     // De-duplicated (a script only loads once) with a hard cap as a runaway backstop.
     // This is the retail lhRunStartupScripts -> generalsetupscript -> RunScript chain.
+    // AddCameraScriptFile(name) — the camera-script loader. `camera/camerasetupscript.lua` is a
+    // list of calls to this native ("CameraFunctions.lua", "CameraValues.lua", "SimpleCamera.lua",
+    // …), i.e. the camera scripts are loaded by the ENGINE, not by any game script: nothing in the
+    // 552 shipped scripts references camerasetupscript by name, and the hot-reload dispatcher in
+    // generalsetupscript routes a changed `camera/` file to the native Debug.ReloadCameras
+    // (generalsetupscript main.proto[0] instr 20-26). Resolving the name against `camera/` in the
+    // BNK reproduces that ownership.
+    // Why it matters: CameraFunctions.CreateGenericClosure builds the camera cages for every
+    // scripted cutscene — QC010's PooCam cold-open dies immediately without it (measured:
+    // "attempt to index global 'CameraFunctions'").
+    // ⚠ FLAGGED: the engine's exact camera-boot entry point is not RE'd; this mirrors the observed
+    // mechanism (run the setup script, let it name its files) rather than a decompiled call site.
+    vm.register_global("AddCameraScriptFile", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const char* name = v.arg_string(1);
+        if (!g || !g->script_bnk || !name || !*name) return 0;
+        const std::string path = std::string("camera/") + name;
+        const std::string key = BnkReader::normalize(path);
+        for (const auto& s : g->loaded_scripts) {
+            if (s == key) return 0;  // already loaded
+        }
+        std::vector<std::uint8_t> bytes = g->script_bnk->extract(path);
+        if (bytes.empty()) return 0;
+        g->loaded_scripts.push_back(key);
+        v.run_bytecode(bytes.data(), bytes.size(), ("=" + key).c_str());
+        return 0;
+    });
+
     vm.register_global("RunScript", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
         if (!g || !g->script_bnk) return 0;

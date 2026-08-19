@@ -80,6 +80,17 @@ int NativeGame::boot_game_scripts(const std::filesystem::path& data_root) {
         script_vm->run_bytecode(boot.data(), boot.size(), "=generalsetupscript");
     }
 
+    // The camera scripts are engine-loaded, not script-loaded: camera/camerasetupscript.lua is
+    // just a list of AddCameraScriptFile(...) calls and nothing in the shipped scripts runs it
+    // (see the AddCameraScriptFile binding for the evidence). Run it here, before the auto-stub,
+    // so CameraFunctions/CameraValues/the camera classes are REAL tables — the scripted-cutscene
+    // camera cages (CameraFunctions.CreateGenericClosure) are built from them.
+    if (std::vector<std::uint8_t> cam = script_bnk->extract("camera/camerasetupscript.lua");
+        !cam.empty()) {
+        loaded_scripts.push_back(BnkReader::normalize("camera/camerasetupscript.lua"));
+        script_vm->run_bytecode(cam.data(), cam.size(), "=camerasetupscript");
+    }
+
     // Define the Platform enum consistently with GetPlatform() (Win32=2) before the auto-stub
     // claims `Platform` as a stub table. Values are arbitrary but self-consistent.
     script_vm->run_source("Platform = { Xbox360 = 1, Win32 = 2, PS3 = 3, PC = 2 }", "=platform");
