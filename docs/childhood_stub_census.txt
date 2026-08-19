@@ -1,0 +1,191 @@
+# Childhood (QC010) stub-miss census - MEASURED, not estimated
+# Source: f2native_core_tests test_childhood_stub_census (Phase 0 of
+# docs/CHILDHOOD_RECREATION_HANDOFF.md). Boot: boot_game_scripts + load_quest_scripts
+# + start_new_game(male), then 600 frames of QuestManager.Update() +
+# ScriptSystems::tick(1/60) (Quest->General->AI). Counts are the POST-BOOT delta, so
+# setup-only natives are excluded.
+# CAVEAT: no world/scene is loaded in this harness, so beats gated on world state
+# (triggers, entity searches, streaming) stall early - this is a LOWER BOUND on the
+# quest's full native surface, weighted toward the opening beats.
+#
+# calls  native
+19203	IsLevelLoaded()
+5994	SearchTools.FilterWithEC
+5985	Villager.GetECType
+1200	GetPlayerHenchman()
+79	IsLoadedFromSaveGame()
+78	MessageEvents.RegisterEntityNameForActivationMessages
+30	Gossip.ActivateGossipItem
+23	Gossip.DeactivateGossipItem
+22	Stats.AddUnlockedTitle
+16	Layers.ActivateLayer
+14	Stats.SetRegionPerceivedRenown
+8	QuestTracker.Register
+6	Layers.DeactivateLayer
+5	AIManager.DisableSimBehaviours
+5	ExpressionPerformer.SetExpressionAsAvailable
+4	LevelExit.GetECType
+4	Stats.SetChapterProgress
+3	QuestTracker.IsRegistered
+3	QuestTracker.SetAsActive
+3	QuestTracker.Unlock
+2	GUI.FadeScreenOut
+2	GUI.LockScreenFade
+2	GUI.SetDPadEnabled
+2	Layers.ActivateScenario
+2	Player.AddScriptRules
+2	Player.RemoveAllScriptRules
+2	Stats.SetTitleRecord
+2	Timing.SetTimeOfDay
+2	TriggerVolumeExclusionZone.GetECType
+1	Age.SetAge
+1	Age.SetAgeGroup
+1	Age.SetAgeLimit
+1	AllowHenchman()
+1	AmbientPopulationManager.AreGuardsDisabled
+1	AmbientPopulationManager.DisableAmbientPopulationInLevel
+1	AmbientPopulationManager.IsAmbientPopulationDisabled
+1	AmbientPopulationManager.SetCrimeEnabled
+1	AmbientPopulationManager.SetInterestingAreasEnabled
+1	AmbientPopulationManager.SetRewardsEnabled
+1	AutoSaveGame()
+1	Bed.GetECType
+1	Breadcrumber.SetParticleAlphaMultiplier
+1	Debug.SetDrawTargetingHighlight
+1	Debug.SetTutorialsEnabled
+1	Dog.SetDisableNonEssentialBehaviour
+1	Door.SetLocked
+1	Door.SetOpen
+1	ExperienceOrb.SetAsEnabled
+1	FastTravel.SetBlockedTextTag
+1	GameVersion.IsDLCDownloaded
+1	Gender.Get
+1	GetDog()
+1	Health.SetAsInvulnerable
+1	Inventory.GetInitialHeroMeleeWeapon
+1	Inventory.GetInitialHeroRangedWeapon
+1	Layers.GetActiveScenarioForLevel
+1	Player.ChangePlayerEntityType
+1	Player.DisableFullPauseMenu
+1	Player.SetExperienceSpendingAsEnabled
+1	Player.SetFastTravelStopActivationAsEnabled
+1	Player.SetMapScreenAsEnabled
+1	Player.SetPauseMenuInfoPageAsEnabled
+1	Player.SetSafetyModeSuggestable
+1	SoundTools.PlayMusic
+1	Stats.SetTitleAsFreeToBuy
+1	Targeted.SetAsTargetable
+1	Timing.SetTimeAsStopped
+1	Transient.GetECType
+1	TutorialManager.SetTutorialsEnabled
+1	Vaulting.SetAsEnabled
+1	Vaulting.SetTutorialAsEnabled
+1	Village.GetECType
+1	WorldMapInfo.EnableGargoyles
+
+# referenced but never called (3):
+-	CameraValues.FOV
+-	Inventory.AddItemOfType
+-	Inventory.RemoveAllItemsOfType
+
+# SILENT coroutine errors (1 distinct) - these kill beats outright:
+# 2x  ?:0: attempt to index field 'WeaponNames' (a nil value)
+
+# SPIN SET - calls in the last 60 frames (per frame in brackets). These are the GATES:
+# 1920	[32/frame]	IsLevelLoaded()
+# 600	[10/frame]	SearchTools.FilterWithEC
+# 600	[10/frame]	Villager.GetECType
+# 120	[2/frame]	GetPlayerHenchman()
+
+# where the quest coroutines are parked (the gate to open next):
+# [stall] _G.Fable2Scripts.Henchman_SuckExperienceTracker.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Hero_SuckExperienceTracker.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.AnimNameRenderer.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Hero_DeathTracker.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Gameflow.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Gameflow.Thag.XPCheckThread.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Gameflow.Thag.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.1.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.2.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.3.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.4.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.5.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.6.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Hero_AbilityPowerUpTracker.co_update status=suspended at ?
+# [stall] _G.Fable2Scripts.Henchman_DeathTracker.co_update status=suspended at ?
+# [stall] scan done, QuestManager=table debug=table
+
+# timeline (frame  native, first call) - the tail is where the quest STALLS:
+0 QuestTracker.Register
+0 GameVersion.IsDLCDownloaded
+0 Debug.SetDrawTargetingHighlight
+0 Stats.SetChapterProgress
+0 Gossip.ActivateGossipItem
+0 Debug.SetTutorialsEnabled
+0 Layers.ActivateScenario
+0 QuestTracker.IsRegistered
+0 Gossip.DeactivateGossipItem
+0 Layers.ActivateLayer
+0 MessageEvents.RegisterEntityNameForActivationMessages
+0 IsLevelLoaded()
+0 AIManager.DisableSimBehaviours
+0 QuestTracker.Unlock
+0 QuestTracker.SetAsActive
+0 Player.DisableFullPauseMenu
+0 GUI.FadeScreenOut
+0 GUI.LockScreenFade
+0 TutorialManager.SetTutorialsEnabled
+0 Breadcrumber.SetParticleAlphaMultiplier
+0 Stats.AddUnlockedTitle
+0 Stats.SetTitleRecord
+0 AutoSaveGame()
+0 Gender.Get
+0 Player.ChangePlayerEntityType
+0 AmbientPopulationManager.SetRewardsEnabled
+0 AmbientPopulationManager.SetCrimeEnabled
+0 Vaulting.SetAsEnabled
+0 Player.SetFastTravelStopActivationAsEnabled
+0 TriggerVolumeExclusionZone.GetECType
+0 SearchTools.FilterWithEC
+0 ExperienceOrb.SetAsEnabled
+0 Player.SetExperienceSpendingAsEnabled
+0 GUI.SetDPadEnabled
+0 Player.SetMapScreenAsEnabled
+0 Player.SetPauseMenuInfoPageAsEnabled
+0 Bed.GetECType
+0 Player.SetSafetyModeSuggestable
+0 Health.SetAsInvulnerable
+0 Door.SetOpen
+0 Door.SetLocked
+0 Targeted.SetAsTargetable
+0 Timing.SetTimeOfDay
+0 Timing.SetTimeAsStopped
+0 Layers.DeactivateLayer
+0 Age.SetAgeGroup
+0 Player.RemoveAllScriptRules
+0 GetPlayerHenchman()
+1 IsLoadedFromSaveGame()
+1 Stats.SetRegionPerceivedRenown
+1 WorldMapInfo.EnableGargoyles
+1 Stats.SetTitleAsFreeToBuy
+1 Age.SetAgeLimit
+1 Age.SetAge
+1 ExpressionPerformer.SetExpressionAsAvailable
+1 AllowHenchman()
+1 Inventory.GetInitialHeroMeleeWeapon
+1 Inventory.GetInitialHeroRangedWeapon
+1 AmbientPopulationManager.SetInterestingAreasEnabled
+1 Vaulting.SetTutorialAsEnabled
+1 GetDog()
+1 Dog.SetDisableNonEssentialBehaviour
+1 Layers.GetActiveScenarioForLevel
+1 Villager.GetECType
+1 FastTravel.SetBlockedTextTag
+1 LevelExit.GetECType
+1 AmbientPopulationManager.IsAmbientPopulationDisabled
+1 AmbientPopulationManager.DisableAmbientPopulationInLevel
+1 Transient.GetECType
+1 AmbientPopulationManager.AreGuardsDisabled
+1 Village.GetECType
+1 SoundTools.PlayMusic
+1 Player.AddScriptRules

@@ -32,12 +32,53 @@ const char* const kSupplementClassNames[] = {
     "Follow", "Stats", "Player", "QuestTracker", "Inventory", "Physics", "Money",
 };
 
+// Engine-provided class tables DERIVED FROM THE GAME'S OWN BYTECODE, not hand-listed:
+// tools/script_engine_globals.py scans all 552 shipped scripts and keeps every Capitalized global
+// that some script indexes as a table (GETGLOBAL -> GETTABLE/SELF) but that NO script ever
+// SETGLOBALs — the engine must be supplying it — and then requires independent EXE-side
+// corroboration (>=3 of its method names, and >=50% of them, appear as bound natives in
+// ghidra_out/lua_natives5_catalog.tsv). Report: docs/script_engine_globals.txt.
+//
+// Why it matters: a global missing from this set reads as nil, and a script indexing it dies —
+// SILENTLY, because the managers discard coroutine.resume's error. Measured: QC010_Childhood died
+// two frames in on `AmbientPopulationManager.SetRewardsEnabled`, so the whole childhood sequence
+// was dead before any beat could play (docs/childhood_stub_census.txt).
+//
+// FLAGGED: these are auto-stub NO-OPS, not implementations — the quest advances instead of dying,
+// which is what makes the stub census meaningful. The tool's 349 REJECTED names are deliberately
+// left alone: they are script-defined quest/behaviour classes, and stubbing a real game table
+// would turn its nil-field reads into stubs and break its own logic.
+const char* const kDerivedEngineClassNames[] = {
+    "Dog", "OpinionReaction", "Combat", "Camera", "Village", "Villager",
+    "PlayerFamily", "Navigation", "GroupEvent", "Creature", "Carrying", "ManagedLocations",
+    "VillageCrimeManager", "AmbientPopulationManager", "CreatureGenerator", "Shard",
+    "GraphicAppearance", "LeadHero", "SpellManager", "Building", "ExpressionPerformer",
+    "AppearanceModifierManager", "Block", "Door", "Health", "NPCRewardGiver", "Action",
+    "Targeting", "FastTravel", "Troll", "Chest", "Perception", "Transient", "Trigger",
+    "Banshee", "Brain", "CombatTalk", "Experience", "LevelExit", "WeaponSetManager", "Faction",
+    "FlitSwitch", "ModeManager", "PlayerProperties", "ScriptControlledTargeting", "Sound",
+    "Targeted", "Shopkeeper", "SoundTools", "Talk", "WaveMachine", "Weapon", "Age", "Beetle",
+    "CrateStack", "CrescendoMusic", "CutsceneReactions", "DiggingSpot", "Firearm", "HeroStatue",
+    "PlayerSpellManager", "SpellAffect", "Viewpoint", "Bed", "BloodAlcohol", "Breakable",
+    "CommunityService", "FiringPosition", "GossipEC", "GuildMessages", "Morph", "NavigatorControl",
+    "ObjectAttachment", "SpikeTrap", "Swimming", "TriggerVolumeExclusionZone", "ECGenericTrigger",
+    "EnvironmentTheme", "FarmCrate", "Gender", "Kynapse", "Mood", "PhysicsCharacter", "AIMovement",
+    "Ambush", "Animation", "CameraInterest", "DemonDoor", "ElectricArcManager", "FlameTrap",
+    "Hittable", "Mana", "Multiplayer", "OnActionUse", "OwnerEntity", "PlayerControl",
+    "PlayerDrunkenness", "PointOfInterest", "ShadowCreature", "Stance", "Vaulting", "Workplace",
+    "WorldMapInfo", "Balverine", "Bob", "BuildingSaleSign", "Decapitatable", "DogLeadTo",
+    "ExperienceReward", "GDB", "GraphicAppearanceDLC", "GraphicAppearanceMorph", "Light",
+    "LightningTrap", "Mentalist", "NPCVaulting", "ParticleEmitter", "Shoveable", "SubgameController",
+    "Summoner", "Wisp",
+};
+
 const std::unordered_set<std::string>& native_name_set() {
     static const std::unordered_set<std::string> set = [] {
         std::unordered_set<std::string> s;
         for (const char* n : kNativeClassNames) s.insert(n);
         for (const char* n : kNativeGlobalNames) s.insert(n);
         for (const char* n : kSupplementClassNames) s.insert(n);
+        for (const char* n : kDerivedEngineClassNames) s.insert(n);
         for (const char* n : {"EMessageEventType", "Platform", "ScriptEnum"}) s.insert(n);  // enums
         return s;
     }();
@@ -364,6 +405,10 @@ void NativeScriptVM::log_stub_miss(const char* name) {
     if (name && *name) stub_misses_.emplace_back(name);
 }
 
+void NativeScriptVM::log_stub_call(const char* name) {
+    if (name && *name) ++stub_call_counts_[name];
+}
+
 bool NativeScriptVM::install_autostub() {
     if (!state_) return false;
     lua_State* s = L(state_);
@@ -377,6 +422,18 @@ bool NativeScriptVM::install_autostub() {
     lua_pushinteger(s, idx);
     lua_pushcclosure(s, &native_trampoline, 2);
     lua_setglobal(s, "__stub_log");
+
+    // __stub_call(name): every INVOCATION of a stubbed native (not just the first reference).
+    // This is the frequency signal behind stub_call_counts() — what a running quest leans on.
+    const int cidx = static_cast<int>(natives_.size());
+    natives_.push_back([](NativeScriptVM& vm) -> int {
+        vm.log_stub_call(vm.arg_string(1));
+        return 0;
+    });
+    lua_pushlightuserdata(s, this);
+    lua_pushinteger(s, cidx);
+    lua_pushcclosure(s, &native_trampoline, 2);
+    lua_setglobal(s, "__stub_call");
 
     // __is_native(name) -> bool: is `name` a retail Lua native (from the catalog)? The _G
     // auto-stub only fabricates a stub for these; unknown Capitalized names read as nil so the
@@ -417,6 +474,20 @@ bool NativeScriptVM::install_autostub() {
         }
         NIL = setmetatable({}, nilmt)
         _G.__F2_NIL = NIL
+        -- A per-key clone of the black hole that TALLIES each call under `key`. Behaviourally
+        -- identical to NIL (chainable index, callable, arithmetic-safe, returns NIL) — the only
+        -- difference is the __stub_call tick, so swapping it in changes no script semantics.
+        local function counted(key)
+          return setmetatable({}, {
+            __index = function() return NIL end,
+            __call = function(_, ...) __stub_call(key); return NIL end,
+            __newindex = function() end,
+            __tostring = function() return "nil" end,
+            __add = zero, __sub = zero, __mul = zero, __div = zero, __mod = zero,
+            __pow = zero, __unm = zero, __len = zero,
+            __concat = function() return "" end,
+          })
+        end
         local function predicate(m)
           return type(m) == "string" and (m:match("^Is") or m:match("^Has")
             or m:match("^Find") or m:match("^Exists") or m:match("^Can") or m:match("Loading"))
@@ -432,7 +503,11 @@ bool NativeScriptVM::install_autostub() {
               -- indexable, so it survives `Class.Method()`, `Class.Field.Sub`, and being
               -- stored then chained — no "attempt to index a function value".
               local v
-              if predicate(m) then v = function() return false end else v = NIL end
+              if predicate(m) then
+                v = function() __stub_call(key); return false end
+              else
+                v = counted(key)
+              end
               rawset(t, m, v)
               return v
             end,
@@ -442,6 +517,7 @@ bool NativeScriptVM::install_autostub() {
             -- named globals return false to avoid truthiness drift.
             __call = function(t, ...)
               if not seen[cn] then seen[cn] = true; __stub_log(cn .. "()") end
+              __stub_call(cn .. "()")
               if predicate(cn) then return false end
               return NIL
             end,
@@ -479,7 +555,7 @@ bool NativeScriptVM::install_autostub() {
         -- die to the metatable swap. Pre-create them as the black-hole NIL (callable + indexable
         -- + arithmetic-safe) as a raw _G entry. Real registered globals are skipped (rawget guard).
         function __mkglobalstub(n)
-          if rawget(_G, n) == nil then rawset(_G, n, NIL) end
+          if rawget(_G, n) == nil then rawset(_G, n, counted(n .. "()")) end
         end
     )LUA";
     if (!run_source(kBootstrap, "=autostub")) return false;
@@ -489,6 +565,7 @@ bool NativeScriptVM::install_autostub() {
     std::string pre;
     for (const char* n : kNativeClassNames) { pre += "__mkclassstub('"; pre += n; pre += "') "; }
     for (const char* n : kSupplementClassNames) { pre += "__mkclassstub('"; pre += n; pre += "') "; }
+    for (const char* n : kDerivedEngineClassNames) { pre += "__mkclassstub('"; pre += n; pre += "') "; }
     if (!run_source(pre.c_str(), "=mkclassstubs")) return false;
     // Pre-create the catalog's global native functions as black-hole stubs (chunked so the Lua
     // chunk stays small). Real registered globals are skipped by __mkglobalstub's rawget guard.

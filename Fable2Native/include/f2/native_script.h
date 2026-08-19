@@ -19,6 +19,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -130,6 +131,15 @@ public:
     void log_stub_miss(const char* name);
     [[nodiscard]] const std::vector<std::string>& stub_misses() const noexcept { return stub_misses_; }
 
+    // Record a missing-native CALL (called by the auto-stub on every invocation, unlike
+    // log_stub_miss which fires once per unique name at first *reference*). stub_call_counts()
+    // is the empirical "what does this quest actually hit, and how hard" census — the ordering
+    // signal for which natives to implement first.
+    void log_stub_call(const char* name);
+    [[nodiscard]] const std::map<std::string, int>& stub_call_counts() const noexcept {
+        return stub_call_counts_;
+    }
+
     // --- helpers for native fns (operate on the current call's Lua stack) ---
     [[nodiscard]] int arg_count() const;
     [[nodiscard]] double arg_number(int index) const;   // 1-based; 0 if not a number
@@ -158,6 +168,7 @@ private:
     void* user_data_ = nullptr;             // opaque game context for bound natives
     std::vector<ScriptNativeFn> natives_;   // registered fns, indexed by closure upvalue
     std::vector<std::string> stub_misses_;  // unique missing-native worklist
+    std::map<std::string, int> stub_call_counts_;  // per-name CALL frequency (ranking signal)
     std::string last_error_;
 };
 

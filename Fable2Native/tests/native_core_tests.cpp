@@ -289,6 +289,215 @@ static void test_cook_scripts_package() {
     std::filesystem::remove_all(temp, ec);
 }
 
+// Phase 0 of the childhood recreation (docs/CHILDHOOD_RECREATION_HANDOFF.md): the EMPIRICAL
+// stub-miss census. Boots the real script stack, starts a new game so the gameflow enters
+// QC010_Childhood, drives the retail Quest->General->AI tick for a few simulated seconds, and
+// ranks the missing natives BY CALL COUNT (stub_call_counts(), not the once-per-name
+// stub_misses() surface). The ranking is the ordering signal for which natives to implement
+// first; it is written to docs/childhood_stub_census.txt so the plan cites measurements, not
+// the script-grep estimate. Informational (no assertions on the contents — the point is to
+// MEASURE); skipped if game data is absent.
+static void test_childhood_stub_census() {
+    const std::filesystem::path bnk_path =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    const std::filesystem::path data_root = bnk_path.parent_path().parent_path();
+    if (!std::filesystem::exists(bnk_path)) return;
+
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    F2_CHECK(game.boot_game_scripts(data_root) > 0);
+    F2_CHECK(game.load_quest_scripts() > 0);
+    f2::NativeScriptVM& vm = *game.script_vm;
+
+    game.start_new_game(/*female=*/false);
+    // Ignore everything the BOOT hit: we want what the CHILDHOOD costs, not setup noise.
+    const std::map<std::string, int> boot_baseline = vm.stub_call_counts();
+
+    // TIMELINE probe: wrap __stub_call so each native's FIRST call is stamped with the frame it
+    // happened on and routed through the real Debug.Log native (script_log). The frame at which
+    // new names stop appearing is where the quest STALLS - the thing the ranking alone can't say.
+    vm.run_source(
+        "__f2_frame = 0; local seen = {}; local orig = __stub_call; "
+        "__stub_call = function(k) orig(k); if not seen[k] then seen[k] = true; "
+        "Debug.Log('[first] ' .. __f2_frame .. ' ' .. k) end end",
+        "=census_probe");
+    F2_CHECK(vm.last_error().empty());
+
+    // ERROR probe: the script managers resume their coroutines with coroutine.resume and
+    // DISCARD the (false, err) result, so a quest that dies mid-beat dies SILENTLY — which is
+    // exactly what "the sequence advances while nothing shows" looks like. Wrap resume so every
+    // failure is reported. (Retail bytecode is stripped, so there are no line numbers; the
+    // message text is the signal.)
+    vm.run_source(
+        "local raw = coroutine.resume\n"
+        "coroutine.resume = function(co, ...)\n"
+        "  local a, b = raw(co, ...)\n"
+        "  if a == false then Debug.Log('[resume-error] ' .. tostring(b)) end\n"
+        "  return a, b\n"
+        "end",
+        "=census_resume");
+    F2_CHECK(vm.last_error().empty());
+    game.script_log.clear();
+
+    // Drive the real tick. QuestManager.Update resumes Gameflow -> QC010_Childhood's own
+    // coroutine; script_systems.tick also resumes the General + AI managers (retail order),
+    // so entity/AI-side natives the quest leans on are counted too.
+    constexpr int kFrames = 600;   // 10 s at 60 Hz
+    constexpr int kTailWindow = 60;  // the last second: what the stalled quest is SPINNING on
+    std::map<std::string, int> tail_baseline;
+    for (int i = 0; i < kFrames; ++i) {
+        if (i == kFrames - kTailWindow) tail_baseline = vm.stub_call_counts();
+        vm.run_source(("__f2_frame = " + std::to_string(i)).c_str(), "=census_frame");
+        vm.run_source("QuestManager.Update()", "=census");
+        game.script_systems.tick(1.0 / 60.0);
+    }
+
+    // STALL REPORT: the ranking says WHAT is missing, the timeline says WHEN it stops, and this
+    // says WHERE the quest coroutine is parked — walk every live quest thread and report the Lua
+    // source:line each suspended coroutine yielded at. That line IS the gate to open next.
+    vm.run_source(
+        "local seen = {}\n"
+        "local function scan(t, path, depth)\n"
+        "  if depth > 6 or seen[t] then return end\n"
+        "  seen[t] = true\n"
+        "  for k, v in pairs(t) do\n"
+        "    local tv = type(v)\n"
+        "    if tv == 'thread' then\n"
+        "      local where = '?'\n"
+        "      for lvl = 0, 6 do\n"
+        "        local i = debug.getinfo(v, lvl, 'Sl')\n"
+        "        if not i then break end\n"
+        "        if i.currentline and i.currentline > 0 then\n"
+        "          where = tostring(i.short_src) .. ':' .. tostring(i.currentline); break\n"
+        "        end\n"
+        "      end\n"
+        "      Debug.Log('[stall] ' .. path .. '.' .. tostring(k) .. ' status=' ..\n"
+        "               coroutine.status(v) .. ' at ' .. where)\n"
+        "    elseif tv == 'table' and type(k) ~= 'userdata' then\n"
+        "      scan(v, path .. '.' .. tostring(k), depth + 1)\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+        "scan(_G, '_G', 0)\n"
+        "Debug.Log('[stall] scan done, QuestManager=' .. type(QuestManager) .. ' debug=' .. type(debug))",
+        "=census_stall");
+    if (!vm.last_error().empty())
+        game.script_log.push_back("[stall] scan error: " + vm.last_error());
+
+    // Rank by calls DURING the childhood (post-boot delta).
+    std::vector<std::pair<std::string, int>> ranked;
+    for (const auto& [name, count] : vm.stub_call_counts()) {
+        const auto it = boot_baseline.find(name);
+        const int delta = count - (it == boot_baseline.end() ? 0 : it->second);
+        if (delta > 0) ranked.emplace_back(name, delta);
+    }
+    std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) {
+        return a.second != b.second ? a.second > b.second : a.first < b.first;
+    });
+    // Natives the childhood REFERENCED but never called (reads of a stubbed field, etc.) still
+    // matter for the worklist, so record the reference-only tail separately.
+    std::vector<std::string> referenced_only;
+    for (const auto& name : vm.stub_misses()) {
+        const auto it = vm.stub_call_counts().find(name);
+        if (it == vm.stub_call_counts().end() || it->second == 0) referenced_only.push_back(name);
+    }
+    std::sort(referenced_only.begin(), referenced_only.end());
+    referenced_only.erase(std::unique(referenced_only.begin(), referenced_only.end()),
+                          referenced_only.end());
+
+    const std::filesystem::path out =
+        "D:/Documents/Fable2RE/docs/childhood_stub_census.txt";
+    std::ofstream f(out);
+    f << "# Childhood (QC010) stub-miss census - MEASURED, not estimated\n"
+      << "# Source: f2native_core_tests test_childhood_stub_census (Phase 0 of\n"
+      << "# docs/CHILDHOOD_RECREATION_HANDOFF.md). Boot: boot_game_scripts + load_quest_scripts\n"
+      << "# + start_new_game(male), then " << kFrames << " frames of QuestManager.Update() +\n"
+      << "# ScriptSystems::tick(1/60) (Quest->General->AI). Counts are the POST-BOOT delta, so\n"
+      << "# setup-only natives are excluded.\n"
+      << "# CAVEAT: no world/scene is loaded in this harness, so beats gated on world state\n"
+      << "# (triggers, entity searches, streaming) stall early - this is a LOWER BOUND on the\n"
+      << "# quest's full native surface, weighted toward the opening beats.\n#\n"
+      << "# calls  native\n";
+    for (const auto& [name, count] : ranked) f << count << "\t" << name << "\n";
+    f << "\n# referenced but never called (" << referenced_only.size() << "):\n";
+    for (const auto& name : referenced_only) f << "-\t" << name << "\n";
+
+    // The timeline: first-call frame per native, in the order the quest reached them. The last
+    // entry is the furthest beat this harness gets to; everything after it is the stall.
+    // Silent coroutine deaths (a resumed quest/gameflow thread that raised) — ranked by
+    // frequency. A dead gameflow/quest thread outranks any missing native: nothing downstream
+    // of it can ever run.
+    {
+        std::map<std::string, int> errs;
+        for (const auto& line : game.script_log) {
+            const std::size_t tag = line.find("[resume-error] ");
+            if (tag != std::string::npos) ++errs[line.substr(tag + 15)];
+        }
+        std::vector<std::pair<std::string, int>> ranked_errs(errs.begin(), errs.end());
+        std::sort(ranked_errs.begin(), ranked_errs.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        f << "\n# SILENT coroutine errors (" << ranked_errs.size()
+          << " distinct) - these kill beats outright:\n";
+        for (const auto& [msg, count] : ranked_errs) f << "# " << count << "x  " << msg << "\n";
+        std::cout << "[census] silent coroutine errors: " << ranked_errs.size() << " distinct\n";
+        for (const auto& [msg, count] : ranked_errs)
+            std::cout << "  " << count << "x  " << msg << "\n";
+    }
+
+    // What the STALLED quest is polling in the last second. Once the sequence has run as far as
+    // the stubs allow, the natives still being hammered every frame ARE the gate: those are the
+    // predicates a beat is waiting to turn true. Implementing one of these unblocks progress;
+    // implementing something merely frequent overall does not.
+    {
+        std::vector<std::pair<std::string, int>> spin;
+        for (const auto& [name, count] : vm.stub_call_counts()) {
+            const auto it = tail_baseline.find(name);
+            const int delta = count - (it == tail_baseline.end() ? 0 : it->second);
+            if (delta > 0) spin.emplace_back(name, delta);
+        }
+        std::sort(spin.begin(), spin.end(), [](const auto& a, const auto& b) {
+            return a.second != b.second ? a.second > b.second : a.first < b.first;
+        });
+        f << "\n# SPIN SET - calls in the last " << kTailWindow
+          << " frames (per frame in brackets). These are the GATES:\n";
+        for (const auto& [name, count] : spin)
+            f << "# " << count << "\t[" << (count / kTailWindow) << "/frame]\t" << name << "\n";
+        std::cout << "[census] spin set (last " << kTailWindow << " frames): " << spin.size()
+                  << " natives\n";
+        int shown = 0;
+        for (const auto& [name, count] : spin) {
+            std::cout << "  " << count << "x  " << name << "\n";
+            if (++shown >= 12) break;
+        }
+    }
+
+    f << "\n# where the quest coroutines are parked (the gate to open next):\n";
+    for (const auto& line : game.script_log) {
+        const std::size_t tag = line.find("[stall] ");
+        if (tag != std::string::npos) f << "# " << line.substr(tag) << "\n";
+    }
+
+    f << "\n# timeline (frame  native, first call) - the tail is where the quest STALLS:\n";
+    int timeline_rows = 0;
+    for (const auto& line : game.script_log) {
+        const std::size_t tag = line.find("[first] ");
+        if (tag == std::string::npos) continue;
+        f << line.substr(tag + 8) << "\n";
+        ++timeline_rows;
+    }
+    f.flush();
+
+    std::cout << "[census] childhood stub calls: " << ranked.size() << " distinct natives, "
+              << referenced_only.size() << " reference-only, " << timeline_rows
+              << " timeline rows -> " << out.string() << "\n";
+    int shown = 0;
+    for (const auto& [name, count] : ranked) {
+        std::cout << "  " << count << "x  " << name << "\n";
+        if (++shown >= 25) break;
+    }
+    std::cout << std::flush;
+}
+
 // Stage 2 (Slice 1): the Physics control natives the childhood scripts call — CVector3 vector
 // math + teleport/facing/velocity wired to NativePlayer + the hero entity transform.
 static void test_stage2_control() {
@@ -1434,6 +1643,7 @@ int main() {
     // ---- P8: New Game -> gameflow reaches the childhood chapter (real BNK; skipped if absent) ----
     test_gameflow_starts_childhood();
     test_cook_scripts_package();
+    test_childhood_stub_census();
     test_stage2_control();
     test_stage2_navigation();
     test_stage2_animation();
