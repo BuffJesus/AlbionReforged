@@ -508,6 +508,34 @@ static void test_childhood_stub_census() {
         "=census_wait");
     F2_CHECK(vm.last_error().empty());
 
+    // DIAGNOSTIC ARM (opt-in, FABLE2NATIVE_CENSUS_SKIP_CUTSCENES=1): make PlayCutscene return
+    // immediately instead of blocking. Every PlayCutscene currently parks forever — no cutscene
+    // system exists to end it — which hides every beat BEHIND the first one. Returning at once is
+    // NOT faithful (no camera, no dialogue, no timing, and any beat whose state the cutscene was
+    // supposed to change is skipped), so this exists purely to MEASURE what the rest of the quest
+    // then asks for. It is never on by default.
+    if (const char* skip = std::getenv("FABLE2NATIVE_CENSUS_SKIP_CUTSCENES");
+        skip && *skip == '1') {
+        vm.run_source(
+            "for _, base in ipairs({QuestThreadBase, QuestEntityThreadBase}) do\n"
+            "  for _, n in ipairs({'PlayCutscene','PlayFullCutscene','PlayInteractiveCutscene'}) do\n"
+            "    if base and type(rawget(base, n)) == 'function' then\n"
+            "      base[n] = function(self, a)\n"
+            "        Debug.Log('[wait] ' .. __f2_frame .. ' ' .. \n"
+            "                 tostring(type(self)=='table' and (self.QuestName or self.Name) or '?')\n"
+            "                 .. ' :' .. n .. ' SKIPPED cutscene=' ..\n"
+            "                 tostring(type(a)=='table' and rawget(a,'Cutscene') or a))\n"
+            "        return true\n"
+            "      end\n"
+            "    end\n"
+            "  end\n"
+            "end",
+            "=census_skipcut");
+        F2_CHECK(vm.last_error().empty());
+        scene_note += "; CUTSCENES SKIPPED (diagnostic arm)";
+        std::cout << "[census] DIAGNOSTIC: PlayCutscene returns immediately\n";
+    }
+
     // With every probe live, hand off to the new game: the gameflow now enters QC010_Childhood
     // with wrapped wait primitives, so its own beats are observable.
     game.start_new_game(/*female=*/false);

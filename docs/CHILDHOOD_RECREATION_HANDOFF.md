@@ -147,6 +147,18 @@ So the next implementable step is `GDB.RecordExists` / `GDB.GetRecord` (+ `:GetF
 `data/interactivecutscenes/interactivecutscenes.gdb`, then a minimal beat-runner that satisfies the
 loop and returns.
 
+⚠ **But PlayCutscene is NOT the only thing holding the main thread — measured.** The census has a
+diagnostic arm, `FABLE2NATIVE_CENSUS_SKIP_CUTSCENES=1`, which makes `PlayCutscene` return
+immediately (never on by default; it is not faithful — no camera, no dialogue, no timing, and any
+state the cutscene should have changed is skipped — it exists only to see what lies beyond).
+With it on, other threads do advance (`QC010_JeevesGreet`, `QC010_GuardMorning`,
+`QC010_JeevesToStudy`, `QC055_MagpieIntoSleep` all get skipped in sequence) — but
+**`QC010_Childhood` still parks at the same `WaitFor` on `StartHeroPooScene`**, and
+`QC010_SetRoseMode` is never even reached. That flag is set by `QC010_Rose.CustomUpdate`
+(`qc010_childhood.lua main.proto[49]`, linedefined 1411-2505) — the Rose ENTITY thread — so
+something upstream is stopping that thread from reaching its first beat. Finding out what is the
+next diagnosis, and it is independent of the cutscene work.
+
 ⚠ **OPEN RE QUESTION (do not guess):** that GDB opens fine (14,692 records) but the record key is
 NOT `FNV-1(cutscene name)` — `QC010_SetRoseMode` → `0x263BEB69` does not resolve, and the literal
 name does not appear anywhere in the loose data dir, so the debug name table is absent here. The
