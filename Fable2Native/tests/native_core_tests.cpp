@@ -289,6 +289,59 @@ static void test_cook_scripts_package() {
     std::filesystem::remove_all(temp, ec);
 }
 
+// Named quest entities: a cooked `.f2names` sidecar (tools/cook_quest_markers.py) seeds the
+// world's named markers, and a quest's GetEntityWithName path (SearchTools StartNewSearch ->
+// FilterWithName -> GetSearchResults over entity_names) resolves them to a handle whose
+// GetPosition returns the cooked world position. Self-contained: writes its own sidecar, so it
+// runs without game data.
+static void test_named_entity_sidecar() {
+    const auto dir = std::filesystem::temp_directory_path() / "f2native_names";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const auto file = dir / "test.f2names";
+    {
+        std::ofstream f(file);
+        f << "F2NAMES 1\n"
+          << "# name\tx\ty\tz\tyaw\n"
+          << "QC010_HeroInCrowdMarker\t175.0739\t49.4009\t144.7233\t-3.1416\n"
+          << "QC010_RoseInCrowdMarker\t173.9961\t49.4009\t144.9737\t-0.0000\n"
+          << "malformed row with no tabs\n";   // skipped, not fatal
+    }
+
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    F2_CHECK(game.load_named_entities(file) == 2);          // the malformed row is dropped
+    F2_CHECK(game.load_named_entities(dir / "nope.f2names") == 0);  // absent = 0, not a crash
+
+    // SearchTools lives in register_game_systems_api, which boot_game_scripts installs — so the
+    // script round-trip below needs the user's script bank. Without it, the C++ seeding above is
+    // still verified and the rest is skipped.
+    const std::filesystem::path bnk_path =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    if (!std::filesystem::exists(bnk_path)) {
+        std::filesystem::remove_all(dir, ec);
+        return;
+    }
+    // The seeding above survives the boot (entity_names is game state, not script state), so the
+    // search below runs against the markers already loaded — not a second copy of them.
+    F2_CHECK(game.boot_game_scripts(bnk_path.parent_path().parent_path()) > 0);
+
+    // The full search path a quest uses, through the real natives.
+    F2_CHECK(game.script_vm->run_source(
+        "local h = SearchTools.StartNewSearch(); "
+        "SearchTools.FilterWithName(h, 'QC010_HeroInCrowdMarker'); "
+        "local r = SearchTools.GetSearchResults(h); "
+        "assert(r and #r == 1, 'marker not found'); "
+        "local x, y, z = r[1]:GetPosition(); "
+        "assert(math.abs(x - 175.0739) < 0.01 and math.abs(y - 49.4009) < 0.01 and "
+        "       math.abs(z - 144.7233) < 0.01, 'wrong position'); "
+        "assert(r[1]:GetName() == 'QC010_HeroInCrowdMarker')",
+        "=t_names") || (std::fprintf(stderr, "names: %s\n",
+                        game.script_vm->last_error().c_str()), false));
+    F2_CHECK(game.script_vm->last_error().empty());
+    std::filesystem::remove_all(dir, ec);
+}
+
 // Phase 0 of the childhood recreation (docs/CHILDHOOD_RECREATION_HANDOFF.md): the EMPIRICAL
 // stub-miss census. Boots the real script stack, starts a new game so the gameflow enters
 // QC010_Childhood, drives the retail Quest->General->AI tick for a few simulated seconds, and
@@ -305,11 +358,44 @@ static void test_childhood_stub_census() {
 
     f2::NativeGame game;
     F2_CHECK(game.enable_scripting());
+
+    // OPTIONAL cooked world. Without a scene, entity searches come back empty and every
+    // world-gated beat parks forever, so the census is a lower bound on the opening beats. Point
+    // FABLE2NATIVE_CENSUS_SCENE at a cooked chapter2slums .f2scene to measure with the world live.
+    // (Cooked scenes are large build artifacts, not in the repo, hence an env var and not a path.)
+    std::string scene_note = "no scene loaded (set FABLE2NATIVE_CENSUS_SCENE to a cooked .f2scene)";
+    if (const char* scene_env = std::getenv("FABLE2NATIVE_CENSUS_SCENE")) {
+        const std::filesystem::path scene_path = scene_env;
+        std::string scene_err;
+        if (!std::filesystem::exists(scene_path)) {
+            scene_note = "scene MISSING: " + scene_path.string();
+        } else if (!game.load_scene(scene_path, scene_err)) {
+            scene_note = "scene FAILED to load (" + scene_err + "): " + scene_path.string();
+        } else {
+            game.mode = f2::GameMode::InWorld;   // gameplay systems only tick InWorld
+            game.external_input = true;          // headless: no device sampling
+            scene_note = "scene loaded: " + scene_path.filename().string() + " (" +
+                         std::to_string(game.scene.instances.size()) + " instances)";
+        }
+        std::cout << "[census] " << scene_note << "\n";
+    }
+
+    // OPTIONAL named markers (tools/cook_quest_markers.py). Without them GetEntityWithName finds
+    // nothing and the world-gated beats cannot advance no matter what else is implemented.
+    if (const char* names_env = std::getenv("FABLE2NATIVE_CENSUS_NAMES")) {
+        const int seeded = game.load_named_entities(names_env);
+        scene_note += "; named entities seeded: " + std::to_string(seeded);
+        std::cout << "[census] named entities seeded: " << seeded << "\n";
+    }
+
     F2_CHECK(game.boot_game_scripts(data_root) > 0);
     F2_CHECK(game.load_quest_scripts() > 0);
     f2::NativeScriptVM& vm = *game.script_vm;
 
-    game.start_new_game(/*female=*/false);
+    // NOTE ordering: every probe below is installed BEFORE start_new_game. A quest instance
+    // snapshots its base-class methods when it is created, so wrapping QuestThreadBase after the
+    // childhood already exists leaves that instance holding the UNWRAPPED originals — which is
+    // why an earlier pass saw waits from QC070_Thag (created later) but none from QC010.
     // Ignore everything the BOOT hit: we want what the CHILDHOOD costs, not setup noise.
     const std::map<std::string, int> boot_baseline = vm.stub_call_counts();
 
@@ -337,6 +423,48 @@ static void test_childhood_stub_census() {
         "end",
         "=census_resume");
     F2_CHECK(vm.last_error().empty());
+
+    // WAIT probe: the quest threads park inside QuestThreadBase's wait primitives
+    // (questmanager.lua sets WaitFor / WaitForMessage / WaitForTriggerToFire / ... on it). Wrap
+    // them so each entry is logged with the calling thread and, for WaitFor, the predicate's
+    // chunk. The LAST wait a thread enters and never leaves IS the gate — named, not inferred.
+    // The wrapper is transparent: it forwards self + all args and propagates all returns.
+    vm.run_source(
+        "local names = {'WaitFor','WaitForMessage','WaitForTriggerToFire','WaitForQuestToFinish',"
+        "'WaitForMyCutsceneToFinish','WaitForInteractiveCutsceneToFinish',"
+        "'WaitForTimeInSeconds','WaitForCurrentActionToFinish','WaitUntilStarted','Wait',"
+        // PlayCutscene is the childhood's real pacing primitive (135 call sites in
+        // qc010_childhood.lua, each `self:PlayCutscene{Cutscene=..., UntilCondition=fn}`). It is a
+        // SCRIPT method, not a native, so it never shows up in the stub census however long it
+        // blocks — it has to be probed by name.
+        "'PlayCutscene','PlayFullCutscene','PlayInteractiveCutscene'}\n"
+        "for _, n in ipairs(names) do\n"
+        "  local f = QuestThreadBase and QuestThreadBase[n]\n"
+        "  if type(f) == 'function' then\n"
+        "    QuestThreadBase[n] = function(self, a, ...)\n"
+        "      local extra = ''\n"
+        "      if type(a) == 'function' then\n"
+        "        local i = debug.getinfo(a, 'S')\n"
+        "        extra = ' pred@' .. tostring(i and i.short_src)\n"
+        "      elseif type(a) == 'table' then extra = ' cutscene=' .. tostring(rawget(a,'Cutscene'))\n"
+        "      elseif a ~= nil then extra = ' arg=' .. tostring(a) end\n"
+        "      local who = '?'\n"
+        "      if type(self) == 'table' then who = tostring(self.QuestName or self.Name or '?') end\n"
+        "      Debug.Log('[wait] ' .. __f2_frame .. ' ' .. who .. ' :' .. n .. extra)\n"
+        // Log the RETURN too: an entry with no matching exit is a primitive that never came back,
+        // which is exactly what a parked beat looks like from the outside.
+        "      local r1, r2 = f(self, a, ...)\n"
+        "      Debug.Log('[wait] ' .. __f2_frame .. ' ' .. who .. ' :' .. n .. ' RETURNED')\n"
+        "      return r1, r2\n"
+        "    end\n"
+        "  end\n"
+        "end",
+        "=census_wait");
+    F2_CHECK(vm.last_error().empty());
+
+    // With every probe live, hand off to the new game: the gameflow now enters QC010_Childhood
+    // with wrapped wait primitives, so its own beats are observable.
+    game.start_new_game(/*female=*/false);
     game.script_log.clear();
 
     // Drive the real tick. QuestManager.Update resumes Gameflow -> QC010_Childhood's own
@@ -349,7 +477,11 @@ static void test_childhood_stub_census() {
         if (i == kFrames - kTailWindow) tail_baseline = vm.stub_call_counts();
         vm.run_source(("__f2_frame = " + std::to_string(i)).c_str(), "=census_frame");
         vm.run_source("QuestManager.Update()", "=census");
-        game.script_systems.tick(1.0 / 60.0);
+        if (game.mode == f2::GameMode::InWorld) {
+            game.tick(1.0 / 60.0);          // full frame: scripts + NPCs + player + camera
+        } else {
+            game.script_systems.tick(1.0 / 60.0);  // no world: scripts only
+        }
     }
 
     // STALL REPORT: the ranking says WHAT is missing, the timeline says WHEN it stops, and this
@@ -371,14 +503,39 @@ static void test_childhood_stub_census() {
         "          where = tostring(i.short_src) .. ':' .. tostring(i.currentline); break\n"
         "        end\n"
         "      end\n"
+        "      local id = tostring(rawget(t, 'QuestName') or rawget(t, 'Name') or '?')\n"
+        "      local st = tostring(rawget(t, 'CurrentState'))\n"
         "      Debug.Log('[stall] ' .. path .. '.' .. tostring(k) .. ' status=' ..\n"
-        "               coroutine.status(v) .. ' at ' .. where)\n"
+        "               coroutine.status(v) .. ' quest=' .. id .. ' state=' .. st ..\n"
+        "               ' at ' .. where)\n"
         "    elseif tv == 'table' and type(k) ~= 'userdata' then\n"
         "      scan(v, path .. '.' .. tostring(k), depth + 1)\n"
         "    end\n"
         "  end\n"
         "end\n"
         "scan(_G, '_G', 0)\n"
+        // Direct interrogation of the childhood itself: the auto-scan reports coroutines by
+        // container path, which does not say WHICH quest a thread belongs to when the thread is
+        // held under a generic key (Gameflow.ChildThreads.N). Find every table that identifies as
+        // QC010 and report its state.
+        "local function probe(t, path, depth, seen)\n"
+        "  if depth > 6 or seen[t] then return end\n"
+        "  seen[t] = true\n"
+        "  for k, v in pairs(t) do\n"
+        "    if type(v) == 'table' then\n"
+        "      local id = rawget(v, 'QuestName') or rawget(v, 'Name')\n"
+        "      if type(id) == 'string' and id:find('QC010') then\n"
+        "        local co = rawget(v, 'co_update')\n"
+        "        Debug.Log('[stall] QC010 OBJECT at ' .. path .. '.' .. tostring(k) ..\n"
+        "                 ' id=' .. id .. ' state=' .. tostring(rawget(v, 'CurrentState')) ..\n"
+        "                 ' co=' .. (co and coroutine.status(co) or 'none') ..\n"
+        "                 ' update=' .. type(rawget(v, 'Update')))\n"
+        "      end\n"
+        "      probe(v, path .. '.' .. tostring(k), depth + 1, seen)\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+        "probe(_G, '_G', 0, {})\n"
         "Debug.Log('[stall] scan done, QuestManager=' .. type(QuestManager) .. ' debug=' .. type(debug))",
         "=census_stall");
     if (!vm.last_error().empty())
@@ -414,9 +571,10 @@ static void test_childhood_stub_census() {
       << "# + start_new_game(male), then " << kFrames << " frames of QuestManager.Update() +\n"
       << "# ScriptSystems::tick(1/60) (Quest->General->AI). Counts are the POST-BOOT delta, so\n"
       << "# setup-only natives are excluded.\n"
-      << "# CAVEAT: no world/scene is loaded in this harness, so beats gated on world state\n"
-      << "# (triggers, entity searches, streaming) stall early - this is a LOWER BOUND on the\n"
-      << "# quest's full native surface, weighted toward the opening beats.\n#\n"
+      << "# World: " << scene_note << "\n"
+      << "# CAVEAT: with NO scene loaded, beats gated on world state (triggers, entity searches,\n"
+      << "# streaming) park immediately - such a run is a LOWER BOUND on the quest's native\n"
+      << "# surface, weighted toward the opening beats.\n#\n"
       << "# calls  native\n";
     for (const auto& [name, count] : ranked) f << count << "\t" << name << "\n";
     f << "\n# referenced but never called (" << referenced_only.size() << "):\n";
@@ -469,6 +627,25 @@ static void test_childhood_stub_census() {
             std::cout << "  " << count << "x  " << name << "\n";
             if (++shown >= 12) break;
         }
+    }
+
+    // Every wait a quest thread ENTERED, in order. The tail is where each thread is stuck.
+    {
+        std::map<std::string, int> waits;
+        f << "\n# WAITS entered (frame  thread  :primitive) - the tail entries are the GATES:\n";
+        for (const auto& line : game.script_log) {
+            const std::size_t tag = line.find("[wait] ");
+            if (tag == std::string::npos) continue;
+            const std::string entry = line.substr(tag + 7);
+            if (++waits[entry] == 1) f << entry << "\n";   // first entry of each distinct wait
+        }
+        std::vector<std::pair<std::string, int>> ranked_waits(waits.begin(), waits.end());
+        std::sort(ranked_waits.begin(), ranked_waits.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        f << "# re-entered most (a re-entered wait is polling; a once-entered wait is parked):\n";
+        for (int i = 0; i < 12 && i < static_cast<int>(ranked_waits.size()); ++i)
+            f << "# " << ranked_waits[i].second << "x  " << ranked_waits[i].first << "\n";
+        std::cout << "[census] waits entered: " << waits.size() << " distinct\n";
     }
 
     f << "\n# where the quest coroutines are parked (the gate to open next):\n";
@@ -1643,6 +1820,7 @@ int main() {
     // ---- P8: New Game -> gameflow reaches the childhood chapter (real BNK; skipped if absent) ----
     test_gameflow_starts_childhood();
     test_cook_scripts_package();
+    test_named_entity_sidecar();
     test_childhood_stub_census();
     test_stage2_control();
     test_stage2_navigation();

@@ -65,6 +65,27 @@ startup runs all the way through layer/age/script-rule setup to `SoundTools.Play
 - The pre-Phase-0 estimate (135 `PlayCutscene`, heavy `GUI.Display*Box`/`GetText`) is a *script
   grep*, and none of it appears in the measured run yet — those beats live past the current gate.
 
+### ⚠ Phase 0 follow-up: THE STAGE IS THE WRONG SCENARIO — see `docs/CHILDHOOD_LEVEL_EVIDENCE.md`
+Pinned from the game's own bytecode + level data: `gameflow.lua` instr 274-281 registers the
+childhood as `RegisterDebugQuest(DebugQC010, 'QC010_Childhood', 'Childhood', 'BWSSlums',
+'QC010_ChildhoodStart')`, and the quest's cast/markers live in **`bwsslums/defaultscenario`
+(95 `QC010_*` names)**, not in **`chapter2slums` (2)** — which the gameflow couples to the
+childhood's good/evil RESOLUTION (instr 672-714), i.e. the POST-childhood state of the same map.
+The cooked stage this track has been building on is `chapter2slums`. Same geometry, wrong era,
+missing 93 of the 95 names the quest resolves.
+- **Shipped:** `Fable2Native/tools/cook_quest_markers.py` cooks a level's named entities into a
+  `.f2names` sidecar (264 records for defaultscenario, 98 quest-prefixed) — a SIDECAR on purpose,
+  so the ENV-owned F2SCENE schema needs no negotiation. `NativeGame::load_named_entities` seeds
+  them so `GetEntityWithName` resolves; proven by `test_named_entity_sidecar`.
+- **Measured, and important:** seeding the markers did NOT move the census (still 77 natives, same
+  spin set). Named entities were **not** the only gate — do not assume text or cutscenes are next
+  either. The census now takes `FABLE2NATIVE_CENSUS_SCENE` + `FABLE2NATIVE_CENSUS_NAMES` so this
+  stays measurable.
+- ⚠ WITHDRAWN: an intermediate reading of this session claimed QC010 "is never instantiated"
+  because the live-VM probe found it in `Gameflow.DebugQuestStartTable` with no coroutine. That
+  table is written by `RegisterDebugQuest` (instr 274-281) — it is a REGISTRATION, so the probe
+  proves nothing about instantiation. Where the childhood thread actually parks is still OPEN.
+
 ### Phase 1 — TEXT IS VISIBLE (highest leverage, fully in-track, decomp DONE) ★ recommended first build
 Goal: every childhood text beat renders — hold-A prompts, quest questions, narration, subtitles,
 gold/warrant counters. Converts "silent sequencing" into a readable opening + unblocks cutscene

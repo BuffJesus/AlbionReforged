@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
+#include <stdexcept>
 
 namespace f2 {
 
@@ -307,6 +309,47 @@ void NativeGame::prepare_world() {
     player.set_position(start);
     camera_controller.yaw = scene.hero_yaw;
     camera_controller.pitch = -0.3f;
+}
+
+int NativeGame::load_named_entities(const std::filesystem::path& path) {
+    std::ifstream f(path);
+    if (!f) return 0;
+    std::string line;
+    if (!std::getline(f, line) || line.rfind("F2NAMES", 0) != 0) return 0;  // magic gate
+    int seeded = 0;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        // name \t x \t y \t z \t yaw — names cannot contain a tab, so this split is exact.
+        std::array<std::size_t, 4> tab{};
+        std::size_t at = 0;
+        bool ok = true;
+        for (std::size_t i = 0; i < tab.size(); ++i) {
+            at = line.find('\t', at);
+            if (at == std::string::npos) { ok = false; break; }
+            tab[i] = at++;
+        }
+        if (!ok) continue;
+        const std::string name = line.substr(0, tab[0]);
+        if (name.empty()) continue;
+        float v[4];
+        try {
+            for (std::size_t i = 0; i < 4; ++i) {
+                const std::size_t beg = tab[i] + 1;
+                const std::size_t end = (i + 1 < tab.size()) ? tab[i + 1] : line.size();
+                v[i] = std::stof(line.substr(beg, end - beg));
+            }
+        } catch (const std::exception&) {
+            continue;   // a malformed row is skipped, not fatal
+        }
+        NativeEntity& e = world.entities.create_entity();
+        auto tf = std::make_unique<TransformComponent>();
+        tf->position = {v[0], v[1], v[2]};
+        tf->rotation = {0.0f, v[3], 0.0f};  // yaw about world up
+        e.add_component(std::move(tf));
+        entity_names[e.uid] = name;
+        ++seeded;
+    }
+    return seeded;
 }
 
 bool NativeGame::load_hero_anim_package(const std::filesystem::path& path) {

@@ -122,6 +122,20 @@ struct NativeGame {
 
     double elapsed_seconds = 0.0;
 
+    // Seed the world's NAMED entities from a cooked `.f2names` sidecar
+    // (tools/cook_quest_markers.py): one entity per record, carrying a TransformComponent at the
+    // record's world position and its name in `entity_names`. That is what backs a quest's
+    // `GetEntityWithName` / `GetPositionOfEntity` (SearchTools resolves the name filter against
+    // `entity_names`), so without it every world-gated beat parks — measured in
+    // docs/childhood_stub_census.txt. Returns the number seeded; 0 if the file is absent or
+    // malformed (not fatal — the port simply has no markers).
+    //
+    // FLAGGED: markers/triggers only. Entities with no SimpleTransformComponent are absent from
+    // the cook, which is most CREATURES (Rose, Theresa, …) — they are spawned by the quest, not
+    // statically placed, so they need the GDB archetype path, not this one. Trigger VOLUMES seed
+    // as points; their on-disk extent record is not RE'd yet.
+    int load_named_entities(const std::filesystem::path& path);
+
     bool load_scene(const std::filesystem::path& path, std::string& error);
     // Set up the live world from the current `scene` (entities + collision + hero
     // placement). load_scene calls this; a headless driver can call it after setting
