@@ -357,7 +357,11 @@ int NativeGame::load_named_entities(const std::filesystem::path& path) {
     int seeded = 0;
     while (std::getline(f, line)) {
         if (line.empty() || line[0] == '#') continue;
-        // name \t x \t y \t z \t yaw — names cannot contain a tab, so this split is exact.
+        // name \t x \t y \t z \t yaw [\t kind] — names cannot contain a tab, so the split is
+        // exact. The trailing `kind` column (marker | entity) is optional: a "marker" is placed
+        // and carries a real position, an "entity" is declared in the level's registry with no
+        // position and is placed by script. Both become named entities here; the distinction is
+        // recorded in the cook for the reader, not acted on yet.
         std::array<std::size_t, 4> tab{};
         std::size_t at = 0;
         bool ok = true;
@@ -367,13 +371,14 @@ int NativeGame::load_named_entities(const std::filesystem::path& path) {
             tab[i] = at++;
         }
         if (!ok) continue;
+        const std::size_t yaw_end = std::min(line.find('\t', tab[3] + 1), line.size());
         const std::string name = line.substr(0, tab[0]);
         if (name.empty()) continue;
         float v[4];
         try {
             for (std::size_t i = 0; i < 4; ++i) {
                 const std::size_t beg = tab[i] + 1;
-                const std::size_t end = (i + 1 < tab.size()) ? tab[i + 1] : line.size();
+                const std::size_t end = (i + 1 < tab.size()) ? tab[i + 1] : yaw_end;
                 v[i] = std::stof(line.substr(beg, end - beg));
             }
         } catch (const std::exception&) {

@@ -19,11 +19,14 @@ names, while `defaultscenario.save` holds 95 - and gameflow.lua only calls
 (the good/evil branch), i.e. Chapter2Slums is the POST-childhood state of the same map.
 
 Decode path: `<level>.save` is an XML name->GUID registry and `<level>.gdb` the per-GUID record
-table; `npc_markerdump --filter ""` follows the validated SimpleTransformComponent (0x619F96CF)
--> Position (0x...) / Rotation (0x21EBC83B) chain (ghidra_out/npc_spawn_re.txt §1.2). Entities
-with no such component are dropped by the tool and reported here as `no_transform` - that is
-expected for CREATURES (Rose, Theresa, ...), which are spawned rather than statically placed;
-what this cook yields is the marker/trigger/point geometry the quest navigates by.
+table; `npc_markerdump --filter ""` follows the validated 0x619F96CF -> Position / Rotation
+(0x21EBC83B) chain (ghidra_out/npc_spawn_re.txt 1.2). Entities with no such component are dropped
+by that pass; the second pass below picks them up as DECLARED entities.
+
+Naming note (verified 2026-08-19): field hash 0x619F96CF is FNV-1("PhysicsSimpleComponent")
+exactly - `CECPhysicsSimple` in ghidra_out/gdb_component_registry.txt, typeId 2. The project has
+been calling it "SimpleTransformComponent"; the CHAIN is validated either way, only the name was
+wrong.
 
 Coordinates: markerdump reports GAME space; this writes RENDER/world space using the cooker's
 own {x,z,y} swap (cook_levels.py: game(gx,gy,gz) -> world(gx, gz, gy)), so positions are directly
@@ -91,7 +94,49 @@ def cook(level: str, game_dir: Path, out_path: Path, f2tool: Path, markerdump: P
             "name": m["name"],
             "pos": [gx, gz, gy],        # game -> world {x,z,y}, matching cook_levels.py
             "yaw": rot[1] if len(rot) > 1 else 0.0,
+            "kind": "marker",
         })
+
+    # DECLARED ENTITIES (no placement component). The level's .save is a name -> GUID registry;
+    # an entry with no transform-bearing component is not a marker but a real entity the level
+    # declares and the scripts command by name — the childhood's cast, for instance:
+    #   QC010_VillagerA -> GraphicAppearanceMorphComponent + PhysicsSimulationCharacterNavigator
+    #   QC010_Rose      -> PhysicsSimulationCharacterNavigator + AIBrainComponent
+    #   QC010_Theresa   -> PhysicsSimulationCharacterNavigator
+    # (dumped with tools/gdb_entity_dump.py). Their records live in **globals.gdb**, not the level
+    # gdb, and they carry NO position — they are placed by script (teleported to markers), which is
+    # why the marker pass drops them.
+    # Emitting them lets GetEntityWithName return a real handle, which is what the quest needs to
+    # command them at all. ⚠ FLAGGED: position is NOT data-backed (there is none to read); they are
+    # seeded at the origin and it is the script's job to move them. Mesh/AI/appearance still need
+    # the GDB archetype instantiation chain (ghidra_out/gdb_instantiation_re.txt) — an entity here
+    # is a HANDLE, not a visible character.
+    placed = {r["name"] for r in records}
+    declared = 0
+    skipped = 0
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from gdb_anim_slots import GdbView  # the verified GDB reader
+        import re as _re
+        xml = save_p.read_text(encoding="latin-1", errors="replace")
+        registry = {m.group(1): int(m.group(2), 16) for m in
+                    _re.finditer(r'<Entity\s+name="([^"]*)"[^>]*>\s*(0x[0-9A-Fa-f]+)', xml)}
+        views = [GdbView(gdb_p.read_bytes())]
+        globals_gdb = game_dir / "data" / "Globals" / "globals.gdb"
+        if globals_gdb.is_file():
+            views.append(GdbView(globals_gdb.read_bytes()))
+        for name, guid in sorted(registry.items()):
+            if name in placed:
+                continue
+            if any(v.ok and v.lookup(guid) is not None for v in views):
+                records.append({"name": name, "pos": [0.0, 0.0, 0.0], "yaw": 0.0,
+                                "kind": "entity"})
+                declared += 1
+            else:
+                skipped += 1
+    except Exception as exc:  # noqa: BLE001 — the marker pass is still valid without this
+        log("  declared-entity pass skipped (%s: %s)" % (type(exc).__name__, exc))
+
     records.sort(key=lambda r: r["name"])
 
     # Line format, not JSON: the runtime has no JSON reader and this file is small, so a
@@ -102,19 +147,22 @@ def cook(level: str, game_dir: Path, out_path: Path, f2tool: Path, markerdump: P
         "# level: %s" % level,
         "# source: npc_markerdump --filter '' over <level>.save + <level>.gdb",
         "# space: world (game {x,z,y} swap applied, matching cook_levels.py)",
-        "# entities with no SimpleTransformComponent (dropped, mostly spawned creatures): %d"
-        % data.get("miss", 0),
-        "# name\tx\ty\tz\tyaw",
+        "# kind=marker: placed, position read from its transform-bearing component.",
+        "# kind=entity: DECLARED in the .save with a GDB record but NO position - script-placed",
+        "#              (the quest teleports it). Seeded at the origin; position NOT data-backed.",
+        "# registry entries with neither a transform nor a GDB record: %d" % skipped,
+        "# name\tx\ty\tz\tyaw\tkind",
     ]
     for r in records:
-        lines.append("%s\t%.4f\t%.4f\t%.4f\t%.4f"
-                     % (r["name"], r["pos"][0], r["pos"][1], r["pos"][2], r["yaw"]))
+        lines.append("%s\t%.4f\t%.4f\t%.4f\t%.4f\t%s"
+                     % (r["name"], r["pos"][0], r["pos"][1], r["pos"][2], r["yaw"], r["kind"]))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     out = {"no_transform": data.get("miss", 0)}
     quest = sum(1 for r in records if r["name"][:1] == "Q" and "_" in r["name"])
-    log(f"cooked {len(records)} named entities ({quest} quest-prefixed, "
-        f"{out['no_transform']} had no transform component) -> {out_path}")
+    log(f"cooked {len(records)} named entities: {len(records) - declared} placed markers + "
+        f"{declared} declared entities ({quest} quest-prefixed); {skipped} registry entries had "
+        f"neither a transform nor a GDB record -> {out_path}")
     return len(records)
 
 

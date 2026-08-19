@@ -95,7 +95,32 @@ game's own source/usage, fix, re-measure.
 `DummyObjects` failures gone; the childhood now runs past the crowd setup into its `PooCam`
 cold-open.
 
-### ▶ THE CURRENT GATE: spawned CREATURES have no instantiation path — PROVEN BY A/B
+### ▶▶ THE CHILDHOOD NOW RUNS (2026-08-19) — its thread is ALIVE and parked on a real wait
+`Gameflow.Childhood ... co=suspended` (was: dead, then absent). The census timeline shows the
+actual opening executing in order: `GUI.FadeScreenOut` + `LockScreenFade` → crowd setup →
+`PooCam` (the bird-poo cold open) → `SoundTools.PlayMusicAndAtmosForLevel` → `GUI.UnlockScreenFade`
+→ **`GUI.FadeScreenIn`** — then it parks at `QC010_Childhood :WaitFor`. Natives reached: **133**.
+
+**What unblocked it: DECLARED entities.** The `.save` registry holds two kinds of name → GUID
+entry, and the cook was only emitting one:
+- **markers** — carry a transform-bearing component, position readable (264 in defaultscenario);
+- **declared entities** — a GDB record but NO position, because they are placed by script. Their
+  records live in **`globals.gdb`**, not the level GDB. Dumped with the new
+  `tools/gdb_entity_dump.py`:
+  `QC010_VillagerA` → GraphicAppearanceMorph + PhysicsSimulationCharacterNavigator ·
+  `QC010_Rose` → PhysicsSimulationCharacterNavigator + AIBrain · `QC010_Theresa` → the same navigator.
+  902 of them in defaultscenario. `cook_quest_markers.py` now emits both kinds (`kind` column).
+
+⚠ FLAGGED: a declared entity is a **handle**, not a character — seeded at the origin (there is no
+position to read; the script teleports it) with no mesh/AI/appearance. Making them visible still
+needs the GDB archetype instantiation chain (`ghidra_out/gdb_instantiation_re.txt`).
+
+**Naming correction, verified:** field hash `0x619F96CF` is FNV-1(`"PhysicsSimpleComponent"`)
+*exactly* — `CECPhysicsSimple` in `ghidra_out/gdb_component_registry.txt`, typeId 2. The project
+has been calling it "SimpleTransformComponent" (e.g. `npc_spawn_re.txt`, memory notes). The decoded
+CHAIN is validated either way; only the name was wrong.
+
+### ▶ (history) The gate this replaced: spawned CREATURES — PROVEN BY A/B
 With the real marker set the childhood dies at frame 0 right after
 `GroupEvent.CreateCrowdControl("QC010_MurgoCrowd")`, on "attempt to index a nil value". The next
 thing Update does is `GetEntityWithName("QC010_VillagerA")` / `"QC010_VillagerB"` and index the
