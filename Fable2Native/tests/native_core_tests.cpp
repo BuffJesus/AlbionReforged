@@ -576,8 +576,14 @@ static void test_childhood_stub_census() {
     // Drive the real tick. QuestManager.Update resumes Gameflow -> QC010_Childhood's own
     // coroutine; script_systems.tick also resumes the General + AI managers (retail order),
     // so entity/AI-side natives the quest leans on are counted too.
-    constexpr int kFrames = 600;   // 10 s at 60 Hz
-    constexpr int kTailWindow = 60;  // the last second: what the stalled quest is SPINNING on
+    // 10 s at 60 Hz by default; FABLE2NATIVE_CENSUS_FRAMES raises the horizon for a long
+    // diagnostic run (e.g. paired with SKIP_CUTSCENES to enumerate how far the quest would go).
+    int kFrames = 600;
+    if (const char* fr = std::getenv("FABLE2NATIVE_CENSUS_FRAMES")) {
+        const int v = std::atoi(fr);
+        if (v > 0 && v <= 200000) kFrames = v;
+    }
+    const int kTailWindow = 60;  // the last second: what the stalled quest is SPINNING on
     std::map<std::string, int> tail_baseline;
     for (int i = 0; i < kFrames; ++i) {
         if (i == kFrames - kTailWindow) tail_baseline = vm.stub_call_counts();

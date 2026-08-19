@@ -166,18 +166,62 @@ ChildThreads.12.ChildThreads.1.custom_update state=20          yield <- f@1382 <
 ```
 
 `?@401` is QC010's `Update`, `?@1411` is `QC010_Rose.CustomUpdate`. So the **Rose thread is alive
-and has advanced to state 20**, parked inside `PlayCutscene`; the main thread has moved on to a
-later `WaitFor` (predicate `f@764`, not the `StartHeroPooScene` one at 635). 23 entity threads are
-live with real states (21 at state 0, one at 10, one at 20).
+and has advanced to state 20-21**, and 23 entity threads are live with real states.
 
-So there is no separate second gate: it is `PlayCutscene` all the way down, and the childhood gets
-further than the earlier reading suggested.
+⚠ Read stack frames carefully: `f@764` is **`questmanager.lua`'s `WaitFor` internal yield helper**
+(`main.proto[50]`), NOT a quest predicate — an intermediate note here misread it as one and claimed
+the main thread had moved on. It has not: the wait log records exactly ONE `WaitFor` entry for
+`QC010_Childhood`, at frame 1, predicate `635` (`StartHeroPooScene`), with no matching RETURN even
+after 100 simulated seconds. The predicate itself is held as an upvalue and is not visible on the
+stack; only the entry log names it.
 
-⚠ **OPEN RE QUESTION (do not guess):** that GDB opens fine (14,692 records) but the record key is
-NOT `FNV-1(cutscene name)` — `QC010_SetRoseMode` → `0x263BEB69` does not resolve, and the literal
-name does not appear anywhere in the loose data dir, so the debug name table is absent here. The
-key derivation has to be RE'd (or recovered from a bank) before `GDB.GetRecord` can be honest.
-Until then any cutscene lookup would be invented.
+⚠ **OPEN, do not paper over:** the Rose thread's `CurrentState` is 20-21, yet the branch that sets
+`ParentQuest.StartHeroPooScene` sits under `CurrentState == 0`, and the main thread's wait on that
+flag has never fired. Either that branch was bypassed (a message-driven jump, or a different state
+variable than the probe reads) or the flag is being set on a different table than the predicate
+reads. That inconsistency is the next thing to measure — do not assume which.
+
+**Scope datum:** with `SKIP_CUTSCENES=1` over 6000 frames (100 s), only **4 distinct cutscenes**
+are ever requested (`QC010_JeevesGreet`, `QC010_GuardMorning`, `QC010_JeevesToStudy`,
+`QC055_MagpieIntoSleep`). So removing the cutscene gate alone does NOT cascade the quest forward —
+the remaining blocks are ordinary `WaitFor` predicates needing real world state, not one missing
+system. `FABLE2NATIVE_CENSUS_FRAMES` sets the horizon.
+
+### ✅ SOLVED (2026-08-19): how `GDB.GetRecord(name)` resolves a name — it is a TWO-STEP lookup
+A GDB record key is an **editor-assigned opaque GUID**, not a hash of anything — which is why
+hashing a name and searching the record table always fails (I tested 9 hash variants over all
+33,886 script string constants: chance-level everywhere). The indirection is a separate **NAME
+TABLE** at the end of each `.gdb`:
+
+```
+0x10        name_count                   (NOT equal to `count` in any shipped file)
+hash_base   = schema_base + size_b       count * u32 record GUIDs (sorted)
+offset_base = hash_base + count*4        count * u16
+name_base   = align4(offset_base + count*2)
+NAME TABLE  = name_count * { u32 fnv1(name), u32 recordGUID }, sorted ascending by hash
+```
+
+So: `guid = name_table[fnv1(name)]`, then the existing `lookup(guid)` binary search.
+
+**Verified end to end, independently of the agents that proposed it:**
+`fnv1("QC010_SetRoseMode")` → GUID `0x94FA26B1` → record `@0x2A318` → `MaxRangeFromPlayer` =
+**10.0** — exactly the field `PlayCutscene` reads. `QC010_JeevesGreet` likewise. The pairs are
+strictly ascending in every shipped file and every GUID column resolves as a record in the same
+file; 47 of qc010's 122 `QC010_*` string constants resolve as cutscene records (the rest are
+entity/marker/layer names, as expected).
+
+⚠ Corrections this produced: `ghidra_out/gdb_entity_spec.txt` line 27 says `name_count (== count)`
+— that is **wrong** in every real file (interactivecutscenes 14692/2886, globals 71847/9993).
+And `Fable2AssetBrowser/source/src/Level/GdbEdit.cpp:79-167` already parsed this layout; the
+gameplay track simply did not know.
+
+Shipped: `GdbView.guid_for_name()` / `record_for_name()` in `Fable2Native/tools/gdb_anim_slots.py`
+(the existing anim-slot path is unregressed — hero `Idle` still resolves to `id_4B706EF5`).
+
+**NEXT (implementation, now unblocked):** port `GdbView` to C++ (`native_gdb.h/.cpp`) with the name
+table, open `globals.gdb` + `interactivecutscenes.gdb` (+ the level gdb, level first), and register
+`GDB.RecordExists` / `GDB.GetRecord` / `record:GetFloat`. Then `PlayCutscene` can get past its
+lookup, and the remaining work is the beat-runner that ends the cutscene.
 
 ### ▶ (history) The gate this replaced: spawned CREATURES — PROVEN BY A/B
 With the real marker set the childhood dies at frame 0 right after

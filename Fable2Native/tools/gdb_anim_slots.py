@@ -57,7 +57,55 @@ class GdbView:
         self.body_end = self.schema_base
         if not self._build_offsets():
             return
+        self._build_name_table()
         self.ok = True
+
+    # ---- NAME TABLE: name -> record GUID -------------------------------------------------
+    # A GDB record key is an editor-assigned opaque GUID, NOT a hash of any name — which is why
+    # hashing a name and searching the record table always fails. The indirection is a separate
+    # NAME TABLE at the end of the file: `name_count` entries of {u32 fnv1(name), u32 recordGUID},
+    # sorted ascending by hash. That is what backs the game's GDB.RecordExists / GDB.GetRecord.
+    #
+    #   0x10        name_count            (NOTE: NOT equal to `count` in any shipped file)
+    #   hash_base   = schema_base + size_b        count * u32 record GUIDs (sorted)
+    #   offset_base = hash_base + count*4         count * u16
+    #   name_base   = align4(offset_base + count*2)
+    #   name table  = name_count * {u32 fnv1(name), u32 recordGUID}
+    #
+    # Verified 2026-08-19 against the shipped files: the pairs are strictly ascending, every GUID
+    # column resolves as a record in the same file, and the blocking case round-trips —
+    #   fnv1("QC010_SetRoseMode") -> GUID 0x94FA26B1 -> record -> MaxRangeFromPlayer = 10.0
+    # which is exactly what QuestEntityThreadBase.PlayCutscene reads. Independent corroboration:
+    # Fable2AssetBrowser/source/src/Level/GdbEdit.cpp:79-167 already parses this same layout.
+    def _build_name_table(self):
+        self.name_pairs = []
+        self._name_keys = []
+        try:
+            name_count = _be(self.b, 0x10)
+            offset_base = self.hash_base + self.count * 4
+            name_base = (offset_base + self.count * 2 + 3) & ~3
+            if name_count == 0 or name_base + name_count * 8 > len(self.b):
+                return
+            self.name_pairs = [(_be(self.b, name_base + i * 8), _be(self.b, name_base + i * 8 + 4))
+                               for i in range(name_count)]
+            self._name_keys = [k for k, _ in self.name_pairs]
+        except Exception:  # noqa: BLE001 — a file without a usable name table just has none
+            self.name_pairs = []
+            self._name_keys = []
+
+    def guid_for_name(self, name: str):
+        """Record GUID for a NAME (the GDB.GetRecord path), or None."""
+        import bisect
+        h = fnv1(name)
+        i = bisect.bisect_left(self._name_keys, h)
+        if i < len(self._name_keys) and self._name_keys[i] == h:
+            return self.name_pairs[i][1]
+        return None
+
+    def record_for_name(self, name: str):
+        """Record offset for a NAME, or None (name table -> GUID -> record)."""
+        guid = self.guid_for_name(name)
+        return self.lookup(guid) if guid is not None else None
 
     def _schema_at(self, record: int):
         if record + 4 > self.body_end:
