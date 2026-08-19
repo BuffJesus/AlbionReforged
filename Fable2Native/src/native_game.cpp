@@ -80,6 +80,17 @@ int NativeGame::boot_game_scripts(const std::filesystem::path& data_root) {
         script_vm->run_bytecode(boot.data(), boot.size(), "=generalsetupscript");
     }
 
+    // Open the game database the GDB native class reads. globals.gdb holds entity archetypes and
+    // animation sets; interactivecutscenes.gdb holds the cutscene records PlayCutscene looks up by
+    // name (QuestEntityThreadBase.PlayCutscene: GDB.RecordExists -> GDB.GetRecord ->
+    // record:GetFloat("MaxRangeFromPlayer")). Each .list beside them is the game's own manifest.
+    // Order = search order; a level's own gdb should be add()ed BEFORE these once one is cooked.
+    // Missing files are not fatal — the natives then answer "no record", same as a bad name.
+    for (const char* rel : {"data/Globals/globals.gdb",
+                            "data/interactivecutscenes/interactivecutscenes.gdb"}) {
+        gdb.add(data_root / rel);
+    }
+
     // The camera scripts are engine-loaded, not script-loaded: camera/camerasetupscript.lua is
     // just a list of AddCameraScriptFile(...) calls and nothing in the shipped scripts runs it
     // (see the AddCameraScriptFile binding for the evidence). Run it here, before the auto-stub,

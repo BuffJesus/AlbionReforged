@@ -694,6 +694,64 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
     // RunScript(name): pull the named LuaQ chunk from the game's script BNK and run it.
     // De-duplicated (a script only loads once) with a hard cap as a runaway backstop.
     // This is the retail lhRunStartupScripts -> generalsetupscript -> RunScript chain.
+    // ---- GDB (the game database) ----
+    // A record NAME resolves in two steps — name table (fnv1(name) -> GUID), then the record GUID
+    // table — see native_gdb.h for the layout and its verification. The scripts' usage that drives
+    // this is QuestEntityThreadBase.PlayCutscene (questmanager.lua:2103):
+    //     if GDB.RecordExists(name) then rec = GDB.GetRecord(name) end
+    //     rec:GetFloat("MaxRangeFromPlayer")
+    // GetRecord returns a HANDLE (the record's GUID) carrying the record methods, which is how the
+    // script calls rec:GetFloat(...).
+    vm.register_native("GDB", "RecordExists", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const char* name = v.arg_string(1);
+        v.push_bool(g && name && *name && g->gdb.record_exists(name));
+        return 1;
+    });
+    vm.register_native("GDB", "GetRecord", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const char* name = v.arg_string(1);
+        if (!g || !name || !*name) { v.push_nil(); return 1; }
+        const auto guid = g->gdb.guid_for_name(name);
+        if (!guid) { v.push_nil(); return 1; }   // nil, so `if rec then` reads false in script
+        v.push_handle("GdbRecord", *guid);
+        return 1;
+    });
+    vm.register_object_method("GdbRecord", "GetFloat", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const char* field = v.arg_string(2);
+        const auto val = (g && field && *field)
+                             ? g->gdb.field_float(static_cast<std::uint32_t>(v.arg_handle(1)), field)
+                             : std::nullopt;
+        if (!val) { v.push_nil(); return 1; }
+        v.push_number(*val);
+        return 1;
+    });
+    // Integer-ish accessors over the same record. FLAGGED: the game's exact GDB accessor set is
+    // wider than this (bools, strings, record refs); these are the ones reached so far. A string
+    // getter needs the file's string table, which native_gdb.h does not parse yet.
+    vm.register_object_method("GdbRecord", "GetInt", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const char* field = v.arg_string(2);
+        const auto raw = (g && field && *field)
+                             ? g->gdb.field_raw(static_cast<std::uint32_t>(v.arg_handle(1)), field,
+                                                gdb::kTypeS32)
+                             : std::nullopt;
+        if (!raw) { v.push_nil(); return 1; }
+        v.push_number(static_cast<double>(static_cast<std::int32_t>(*raw)));
+        return 1;
+    });
+    vm.register_object_method("GdbRecord", "GetBool", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const char* field = v.arg_string(2);
+        const auto raw = (g && field && *field)
+                             ? g->gdb.field_raw(static_cast<std::uint32_t>(v.arg_handle(1)), field,
+                                                gdb::kTypeBool)
+                             : std::nullopt;
+        v.push_bool(raw.has_value() && *raw != 0);
+        return 1;
+    });
+
     // AddCameraScriptFile(name) — the camera-script loader. `camera/camerasetupscript.lua` is a
     // list of calls to this native ("CameraFunctions.lua", "CameraValues.lua", "SimpleCamera.lua",
     // …), i.e. the camera scripts are loaded by the ENGINE, not by any game script: nothing in the

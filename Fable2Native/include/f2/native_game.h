@@ -12,6 +12,7 @@
 #include "native_save.h"
 #include "native_script.h"
 #include "native_bnk.h"
+#include "native_gdb.h"
 #include "native_message.h"
 
 #include <array>
@@ -61,6 +62,11 @@ struct NativeGame {
     // The game's script BNK (null until boot_game_scripts). RunScript pulls chunks from it.
     std::unique_ptr<BnkReader> script_bnk;
     std::vector<std::string> loaded_scripts;  // normalized names RunScript has loaded
+
+    // The game database behind the GDB native class. boot_game_scripts opens globals.gdb +
+    // interactivecutscenes.gdb from <data_root>/data; a level's own gdb should be added FIRST when
+    // one is cooked, so a level override wins over the global archetype.
+    gdb::GdbDatabase gdb;
 
     // Game-script substrate (populated by boot_game_scripts). The message-event bus quests
     // poll; the hero entity handle GetPlayerHero() returns; per-entity display names for

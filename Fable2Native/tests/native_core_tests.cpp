@@ -7,6 +7,7 @@
 #include "f2/native_entity.h"
 #include "f2/native_world.h"
 #include "f2/native_gdb_hash.h"
+#include "f2/native_gdb.h"
 #include "f2/native_physics.h"
 #include "f2/native_camera.h"
 #include "f2/native_player.h"
@@ -367,6 +368,48 @@ static void test_named_entity_sidecar() {
                         game.script_vm->last_error().c_str()), false));
     F2_CHECK(game.script_vm->last_error().empty());
     std::filesystem::remove_all(dir, ec);
+}
+
+// GDB name resolution through the real natives: the two-step lookup the game uses.
+// A record key is an opaque GUID, and each .gdb carries a NAME TABLE of {fnv1(name), GUID} that
+// maps a script's string onto it (see native_gdb.h). This asserts the exact chain
+// QuestEntityThreadBase.PlayCutscene walks (questmanager.lua:2103):
+//     GDB.RecordExists(name) -> GDB.GetRecord(name) -> rec:GetFloat("MaxRangeFromPlayer")
+// on a real childhood cutscene, plus a negative control. Skipped if game data is absent.
+static void test_gdb_record_lookup() {
+    const std::filesystem::path bnk_path =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    const std::filesystem::path data_root = bnk_path.parent_path().parent_path();
+    if (!std::filesystem::exists(bnk_path)) return;
+
+    // The C++ reader directly: name -> GUID -> field, independent of Lua.
+    f2::gdb::GdbFile ics;
+    if (ics.open(data_root / "data/interactivecutscenes/interactivecutscenes.gdb")) {
+        const auto guid = ics.guid_for_name("QC010_SetRoseMode");
+        F2_CHECK(guid.has_value() && *guid == 0x94FA26B1u);   // verified byte-level
+        const auto range = ics.field_float(*guid, f2::gdb::fnv1("MaxRangeFromPlayer"));
+        F2_CHECK(range.has_value() && std::fabs(*range - 10.0f) < 1e-4f);
+        F2_CHECK(!ics.guid_for_name("NoSuchCutsceneName").has_value());  // negative control
+    }
+
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    F2_CHECK(game.boot_game_scripts(data_root) > 0);   // opens globals + interactivecutscenes
+    F2_CHECK(game.gdb.file_count() >= 1);
+
+    // ...and through the natives, exactly as the quest script calls them.
+    F2_CHECK(game.script_vm->run_source(
+        "assert(GDB.RecordExists('QC010_SetRoseMode'), 'cutscene record missing'); "
+        "local rec = GDB.GetRecord('QC010_SetRoseMode'); "
+        "assert(rec, 'GetRecord returned nil'); "
+        "local r = rec:GetFloat('MaxRangeFromPlayer'); "
+        "assert(r and math.abs(r - 10) < 0.001, 'MaxRangeFromPlayer wrong: ' .. tostring(r)); "
+        // A name that is not a record must read as false/nil, not error — the game branches on it
+        // and calls Debug.Error itself when a cutscene is missing.
+        "assert(GDB.RecordExists('NoSuchCutsceneName') == false); "
+        "assert(GDB.GetRecord('NoSuchCutsceneName') == nil)",
+        "=t_gdb"));
+    F2_CHECK(game.script_vm->last_error().empty());
 }
 
 // Phase 0 of the childhood recreation (docs/CHILDHOOD_RECREATION_HANDOFF.md): the EMPIRICAL
@@ -1967,6 +2010,7 @@ int main() {
     // ---- P8: New Game -> gameflow reaches the childhood chapter (real BNK; skipped if absent) ----
     test_gameflow_starts_childhood();
     test_cook_scripts_package();
+    test_gdb_record_lookup();
     test_named_entity_sidecar();
     test_childhood_stub_census();
     test_stage2_control();
