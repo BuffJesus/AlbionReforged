@@ -7,18 +7,32 @@ agents, verified). Deep memory: `fable2native-stage2-control-camera-anim`,
 stub FLAGGED**; both backends (D3D12+Vulkan) at parity; do NOT edit ENVIRONMENT-session files
 (renderer, `cook_levels.py`, `native_scene.h/.cpp` render fields) — coordinate instead.
 
-## Where we are (verdict: ~35% — STAGE ready, EXPERIENCE not)
-The child hero spawns in a fully-lit, walkable **Bowerstone Slums** and is controllable + walk/run
-**skeletally animated** on both backends; the gameflow reaches + runs **QC010_Childhood** (test
-`test_gameflow_starts_childhood`). But the quest plays into **black-hole stubs** — the sequence
-advances while nothing shows. DONE this session (Stages 1–3 + data-backed locomotion): see the git
-log below.
+## Where we are — UPDATED 2026-08-19 (read this before the older sections below)
+**The childhood quest RUNS.** Its coroutine is alive and it executes its real opening (fade → crowd
+setup → the `PooCam` bird-poo cold open → music → fade in), with 23 entity threads live and
+`PlayCutscene` now resolving its cutscene records. The 2026-08-16 verdict below ("~35%, the quest
+plays into black-hole stubs, the sequence advances while nothing shows") was written before the
+root cause was found: the quest was not sequencing silently, it was **dying on frame 0** every time
+(§ROOT CAUSE). Sections below this one are kept for their evidence and method, but where they
+conflict with this one, this one is current.
 
-READY: stage render (chapter2slums), hero control/camera/locomotion/nav, quest sequencing (msg bus
-+ Quest→General→AI tick), scripted Physics/Navigation/Camera natives, hero anim clips resolved
-**from `globals.gdb`** (Idle=id_4B706EF5, Walk=id_49220AA3, Run=id_4AB9BC89 on hero anim-set record
-0x576283C7 — see `tools/gdb_anim_slots.py`). NPC locomotion is **cook-ready** (`cook_hero_anim.py
---models …`) but visible NPC animation is render-blocked (see `docs/NPC_LOCOMOTION_PLAN.md`).
+⚠ **Two corrections that invalidate parts of the older text:**
+1. **The stage is the wrong scenario.** The childhood is authored on `bwsslums/defaultscenario`,
+   NOT `chapter2slums` — different heightfield, `.genv`, engine_level, models/textures and entity
+   gdb/save, per the game's own `.list` manifests. See `docs/CHILDHOOD_LEVEL_EVIDENCE.md`.
+   Cooking `defaultscenario` is an ENV-session task with a fully specified input list.
+2. **Named entities come in two kinds** (markers with a position, and declared entities with a GDB
+   record but none), and both are needed — see §DECLARED entities.
+
+Still READY as described: hero control/camera/locomotion/nav, quest sequencing (msg bus +
+Quest→General→AI tick), scripted Physics/Navigation/Camera natives, hero anim clips resolved from
+`globals.gdb` (Idle=id_4B706EF5, Walk=id_49220AA3, Run=id_4AB9BC89 on record 0x576283C7 —
+`tools/gdb_anim_slots.py`). NPC locomotion is cook-ready but visible NPC animation is render-blocked
+(`docs/NPC_LOCOMOTION_PLAN.md`).
+
+**Current frontier:** the interactive-cutscene machinery. `PlayCutscene` now runs through its GDB
+lookup into `StartCutscene`/`IsInteractiveCutsceneWaitingForMe` and fails there on
+`attempt to call method 'GetID' (a nil value)` — an entity handle the ICS path expects.
 
 ## ▶▶ ROOT CAUSE FOUND + FIXED (2026-08-19): `Gameflow:Init()` ran on the INACTIVE branch
 
