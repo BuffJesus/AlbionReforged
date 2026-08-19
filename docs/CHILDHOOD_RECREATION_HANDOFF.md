@@ -120,6 +120,39 @@ needs the GDB archetype instantiation chain (`ghidra_out/gdb_instantiation_re.tx
 has been calling it "SimpleTransformComponent" (e.g. `npc_spawn_re.txt`, memory notes). The decoded
 CHAIN is validated either way; only the name was wrong.
 
+### ▶▶ THE GATE NOW: `PlayCutscene` never returns — MEASURED
+With entity threads probed (they derive from `QuestEntityThreadBase`, not `QuestThreadBase` — the
+earlier probe only wrapped the latter, which is why every entity-thread wait was invisible), the
+census shows the childhood's beats calling `PlayCutscene` with real names —
+`QC010_SetRoseMode`, `QC010_JeevesGreet`, `QC010_GuardMorning`, `QC055_MagpieIntoSleep` — and
+**not one of them ever returns**. The main thread is parked in `WaitFor` on a predicate
+(`qc010_childhood.lua main.proto[17].proto[0]`, linedefined 635) that reads
+`ParentQuest.StartHeroPooScene`, which an entity thread only sets *after*
+`PlayCutscene{Cutscene="QC010_SetRoseMode"}` returns.
+
+So the pre-Phase-0 estimate ("135 PlayCutscene calls") turns out to be right — but it is now
+*reached and confirmed by measurement* rather than counted by grep, which is the difference
+between a guess and a diagnosis.
+
+**The contract, from the decompiled `QuestEntityThreadBase.PlayCutscene`**
+(`lua-decompiled/gamescripts/scripts/quests/questmanager.lua:2103`):
+1. `MessageEvents.GetMostRecentMessageID()` (twice — brackets the messages the cutscene posts)
+2. `opts.Entity = self.Entity`
+3. **`GDB.RecordExists(name)` → `GDB.GetRecord(name)`** — a cutscene is a GDB RECORD; if it is
+   missing the game itself calls `Debug.Error("Unable to find a cutscene called " .. name)`
+4. `record:GetFloat("MaxRangeFromPlayer")`
+5. loops on `self.ShouldCutsceneTerminate`
+
+So the next implementable step is `GDB.RecordExists` / `GDB.GetRecord` (+ `:GetFloat`) over
+`data/interactivecutscenes/interactivecutscenes.gdb`, then a minimal beat-runner that satisfies the
+loop and returns.
+
+⚠ **OPEN RE QUESTION (do not guess):** that GDB opens fine (14,692 records) but the record key is
+NOT `FNV-1(cutscene name)` — `QC010_SetRoseMode` → `0x263BEB69` does not resolve, and the literal
+name does not appear anywhere in the loose data dir, so the debug name table is absent here. The
+key derivation has to be RE'd (or recovered from a bank) before `GDB.GetRecord` can be honest.
+Until then any cutscene lookup would be invented.
+
 ### ▶ (history) The gate this replaced: spawned CREATURES — PROVEN BY A/B
 With the real marker set the childhood dies at frame 0 right after
 `GroupEvent.CreateCrowdControl("QC010_MurgoCrowd")`, on "attempt to index a nil value". The next

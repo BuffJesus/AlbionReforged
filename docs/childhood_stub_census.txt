@@ -181,45 +181,55 @@
 # 120	[2/frame]	Trigger.AreAllTriggerEntitiesInsideTriggerVolume
 
 # WAITS entered (frame  thread  :primitive) - the tail entries are the GATES:
-0 QO900_DemonDoorDunecrest :WaitFor pred@?
+0 QO900_DemonDoorDunecrest :WaitFor pred@?:94
 0 QO900_DemonDoorDunecrest :WaitFor RETURNED
-0 QO920_DemonDoorWestcliffPreCave :WaitFor pred@?
+0 QO920_DemonDoorWestcliffPreCave :WaitFor pred@?:34
 0 QO920_DemonDoorWestcliffPreCave :WaitFor RETURNED
-0 QO925_DemonDoorBrightwood_2 :WaitFor pred@?
+0 QO925_DemonDoorBrightwood_2 :WaitFor pred@?:41
 0 QO925_DemonDoorBrightwood_2 :WaitFor RETURNED
-0 QO930_DemonDoorBowerLake :WaitFor pred@?
+0 QO930_DemonDoorBowerLake :WaitFor pred@?:35
 0 QO930_DemonDoorBowerLake :WaitFor RETURNED
-0 QO940_DemonDoorBrightwood :WaitFor pred@?
+0 QO940_DemonDoorBrightwood :WaitFor pred@?:64
 0 QO940_DemonDoorBrightwood :WaitFor RETURNED
-0 QO950_DemonDoorHobbesCave :WaitFor pred@?
+0 QO950_DemonDoorHobbesCave :WaitFor pred@?:34
 0 QO950_DemonDoorHobbesCave :WaitFor RETURNED
-0 QO990_DemonDoorBloodstone :WaitFor pred@?
+0 QO990_DemonDoorBloodstone :WaitFor pred@?:41
 0 QO990_DemonDoorBloodstone :WaitFor RETURNED
-0 QC050_Wanted :WaitFor pred@?
-0 QO060_Gargoyles :WaitFor pred@?
+0 QC050_Wanted :WaitFor pred@?:97
+0 QO060_Gargoyles :WaitFor pred@?:133
 0 ? :WaitForTimeInSeconds arg=2
-0 ? :WaitFor pred@?
+0 ? :WaitFor pred@?:2766
+0 ? :WaitFor pred@?:4004
 0 ? :WaitForTriggerToFire cutscene=nil
+0 ? :WaitFor pred@?:2991
 0 ? :WaitFor RETURNED
+0 ? :WaitFor pred@?:2995
 0 ? :WaitForTimeInSeconds arg=3
+0 ? :WaitFor pred@?:3703
 0 ? :WaitForTimeInSeconds arg=4
-1 QC010_Childhood :WaitFor pred@?
+0 ? :WaitFor pred@?:646
+0 ? :WaitFor pred@?:627
+0 ? :PlayCutscene cutscene=QC055_MagpieIntoSleep
+1 QC010_Childhood :WaitFor pred@?:635
 119 ? :WaitForTimeInSeconds RETURNED
+119 ? :PlayCutscene cutscene=QC010_JeevesGreet
+119 ? :PlayCutscene cutscene=QC010_GuardMorning
 179 ? :WaitForTimeInSeconds RETURNED
+179 ? :PlayCutscene cutscene=QC010_JeevesGreet
 239 ? :WaitForTimeInSeconds RETURNED
 # re-entered most (a re-entered wait is polling; a once-entered wait is parked):
-# 7x  0 ? :WaitFor pred@?
 # 5x  0 ? :WaitForTriggerToFire cutscene=nil
 # 2x  0 ? :WaitForTimeInSeconds arg=2
 # 2x  119 ? :WaitForTimeInSeconds RETURNED
 # 1x  0 ? :WaitFor RETURNED
+# 1x  0 ? :WaitFor pred@?:2766
+# 1x  0 ? :WaitFor pred@?:2991
+# 1x  0 ? :WaitFor pred@?:2995
+# 1x  0 ? :WaitFor pred@?:3703
+# 1x  0 ? :WaitFor pred@?:4004
+# 1x  0 ? :WaitFor pred@?:627
+# 1x  0 ? :WaitFor pred@?:646
 # 1x  0 ? :WaitForTimeInSeconds arg=3
-# 1x  0 ? :WaitForTimeInSeconds arg=4
-# 1x  0 QC050_Wanted :WaitFor pred@?
-# 1x  0 QO060_Gargoyles :WaitFor pred@?
-# 1x  0 QO900_DemonDoorDunecrest :WaitFor RETURNED
-# 1x  0 QO900_DemonDoorDunecrest :WaitFor pred@?
-# 1x  0 QO920_DemonDoorWestcliffPreCave :WaitFor RETURNED
 
 # where the quest coroutines are parked (the gate to open next):
 # [stall] _G.Fable2Scripts.Henchman_SuckExperienceTracker.co_update status=suspended quest=? state=nil at ?
@@ -240,35 +250,35 @@
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.11.co_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.QC010_GenericEventManager.co_update status=suspended quest=QC010_Childhood state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.PackRatThread.co_update status=dead quest=? state=nil at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.1.custom_update status=suspended quest=? state=20 at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.1.custom_update status=suspended quest=? state=20 at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.1.co_update status=suspended quest=? state=20 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.2.custom_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.2.co_update status=suspended quest=? state=0 at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.3.custom_update status=suspended quest=? state=0 at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.3.custom_update status=suspended quest=? state=0 at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.3.co_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.4.custom_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.4.co_update status=suspended quest=? state=0 at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.5.custom_update status=suspended quest=? state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.5.custom_update status=suspended quest=? state=nil at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.5.co_update status=suspended quest=? state=nil at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.6.custom_update status=suspended quest=? state=0 at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.6.custom_update status=suspended quest=? state=0 at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.6.co_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.7.custom_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.7.co_update status=suspended quest=? state=nil at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.8.custom_update status=suspended quest=? state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.8.custom_update status=suspended quest=? state=nil at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.8.co_update status=suspended quest=? state=nil at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.9.custom_update status=suspended quest=? state=0 at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.9.custom_update status=suspended quest=? state=0 at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.9.co_update status=suspended quest=? state=0 at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.10.custom_update status=suspended quest=? state=10 at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.10.custom_update status=suspended quest=? state=10 at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.10.co_update status=suspended quest=? state=10 at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.11.custom_update status=suspended quest=? state=0 at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.11.custom_update status=suspended quest=? state=0 at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.11.co_update status=suspended quest=? state=0 at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.12.custom_update status=suspended quest=? state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.12.custom_update status=suspended quest=? state=nil at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.12.co_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.14.custom_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.14.co_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.15.custom_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.15.co_update status=suspended quest=? state=0 at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.co_update status=suspended quest=QC010_Childhood state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.co_update status=suspended quest=QC010_Childhood state=nil at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.13.ObjTracker.co_update status=suspended quest=QRCS001_CommunityService state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.13.ConditionCheckThread.co_update status=dead quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.13.co_update status=suspended quest=QRCS001_CommunityService state=nil at ?
@@ -299,9 +309,9 @@
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.1.co_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.2.custom_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.2.co_update status=suspended quest=? state=0 at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.3.custom_update status=suspended quest=? state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.3.custom_update status=suspended quest=? state=nil at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.3.co_update status=suspended quest=? state=nil at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.4.custom_update status=suspended quest=? state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.4.custom_update status=suspended quest=? state=nil at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.4.co_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.5.custom_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.5.co_update status=suspended quest=? state=nil at ?
@@ -353,22 +363,22 @@
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.co_update status=suspended quest=QC045_LoveLetter state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.1.custom_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.1.co_update status=suspended quest=? state=0 at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.2.custom_update status=suspended quest=? state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.2.custom_update status=suspended quest=? state=nil at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.2.co_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.3.custom_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.3.co_update status=suspended quest=? state=nil at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.4.custom_update status=suspended quest=? state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.4.custom_update status=suspended quest=? state=nil at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.4.co_update status=suspended quest=? state=nil at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.5.custom_update status=suspended quest=? state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.5.custom_update status=suspended quest=? state=nil at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.5.co_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.6.co_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.7.co_update status=suspended quest=? state=nil at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.co_update status=suspended quest=QC050_Wanted state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.co_update status=suspended quest=QC050_Wanted state=nil at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.1.custom_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.1.co_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.2.custom_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.2.co_update status=suspended quest=? state=0 at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.3.custom_update status=suspended quest=? state=0 at ?
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.3.custom_update status=suspended quest=? state=0 at census_wait:18
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.3.co_update status=suspended quest=? state=0 at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.4.custom_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.4.co_update status=suspended quest=? state=nil at ?
@@ -379,7 +389,7 @@
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.7.co_update status=suspended quest=QC055_Wino state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.8.co_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.co_update status=suspended quest=QC055_Wino state=0 at ?
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.32.co_update status=suspended quest=QO060_Gargoyles state=nil at census_wait:15
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.32.co_update status=suspended quest=QO060_Gargoyles state=nil at census_wait:18
 # [stall] _G.Fable2Scripts.Hero_AbilityPowerUpTracker.co_update status=suspended quest=? state=nil at ?
 # [stall] _G.Fable2Scripts.Henchman_DeathTracker.co_update status=suspended quest=? state=nil at ?
 # [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12 id=QC010_Childhood state=nil co=suspended update=nil

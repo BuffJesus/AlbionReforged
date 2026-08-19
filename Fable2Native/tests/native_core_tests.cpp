@@ -475,14 +475,22 @@ static void test_childhood_stub_census() {
         // SCRIPT method, not a native, so it never shows up in the stub census however long it
         // blocks — it has to be probed by name.
         "'PlayCutscene','PlayFullCutscene','PlayInteractiveCutscene'}\n"
+        // Both bases: a quest's own thread derives from QuestThreadBase, but its sub-threads
+        // (the ones that actually drive the childhood's beats) derive from QuestEntityThreadBase,
+        // so wrapping only the former left every entity-thread wait invisible.
+        "local bases = {QuestThreadBase, QuestEntityThreadBase}\n"
+        "for _, base in ipairs(bases) do\n"
         "for _, n in ipairs(names) do\n"
-        "  local f = QuestThreadBase and QuestThreadBase[n]\n"
+        "  local f = base and rawget(base, n)\n"
         "  if type(f) == 'function' then\n"
-        "    QuestThreadBase[n] = function(self, a, ...)\n"
+        "    base[n] = function(self, a, ...)\n"
         "      local extra = ''\n"
         "      if type(a) == 'function' then\n"
+        // linedefined survives stripping, so it identifies the predicate exactly (map it back
+        // with tools/find_proto_by_line.py).
         "        local i = debug.getinfo(a, 'S')\n"
-        "        extra = ' pred@' .. tostring(i and i.short_src)\n"
+        "        extra = ' pred@' .. tostring(i and i.short_src) ..\n"
+        "                ':' .. tostring(i and i.linedefined)\n"
         "      elseif type(a) == 'table' then extra = ' cutscene=' .. tostring(rawget(a,'Cutscene'))\n"
         "      elseif a ~= nil then extra = ' arg=' .. tostring(a) end\n"
         "      local who = '?'\n"
@@ -495,6 +503,7 @@ static void test_childhood_stub_census() {
         "      return r1, r2\n"
         "    end\n"
         "  end\n"
+        "end\n"
         "end",
         "=census_wait");
     F2_CHECK(vm.last_error().empty());
