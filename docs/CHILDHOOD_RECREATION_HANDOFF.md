@@ -218,10 +218,21 @@ gameplay track simply did not know.
 Shipped: `GdbView.guid_for_name()` / `record_for_name()` in `Fable2Native/tools/gdb_anim_slots.py`
 (the existing anim-slot path is unregressed — hero `Idle` still resolves to `id_4B706EF5`).
 
-**NEXT (implementation, now unblocked):** port `GdbView` to C++ (`native_gdb.h/.cpp`) with the name
-table, open `globals.gdb` + `interactivecutscenes.gdb` (+ the level gdb, level first), and register
-`GDB.RecordExists` / `GDB.GetRecord` / `record:GetFloat`. Then `PlayCutscene` can get past its
-lookup, and the remaining work is the beat-runner that ends the cutscene.
+**DONE (commit b11c3e7):** `native_gdb.h/.cpp` ports the reader to C++ (`GdbFile` + `GdbDatabase`,
+name table + kHashParent inheritance), `boot_game_scripts` opens `globals.gdb` +
+`interactivecutscenes.gdb`, and the natives are registered: `GDB.RecordExists`, `GDB.GetRecord`
+(returns a record handle), `rec:GetFloat/GetInt/GetBool`. `test_gdb_record_lookup` asserts the
+chain both in C++ and through Lua, with GUID `0x94FA26B1` byte-exact and a negative control.
+
+**Measured:** `"Unable to find a cutscene called ..."` no longer fires at all, and `PlayCutscene`
+now runs THROUGH the lookup into `StartCutscene` / `IsInteractiveCutsceneWaitingForMe`
+(`AIManager.GetRequestedCutsceneOnEntity` and `ClearCutsceneOnEntity` are now reached). Distinct
+silent errors rose 5 → 12 because more code executes — the new ones are inside the cutscene
+machinery (`attempt to call method 'GetID' (a nil value)`, an entity handle the ICS path expects).
+That is the next gap.
+
+⚠ FLAGGED: no string getter yet (needs the file's string table); level `.gdb` files are not opened
+(add them BEFORE globals when a level cook provides one, so a level override wins).
 
 ### ▶ (history) The gate this replaced: spawned CREATURES — PROVEN BY A/B
 With the real marker set the childhood dies at frame 0 right after
