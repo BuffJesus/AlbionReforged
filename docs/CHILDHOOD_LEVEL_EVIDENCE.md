@@ -88,6 +88,25 @@ active DURING the childhood. The entity data in §2 is the strong evidence that 
 authored on `defaultscenario`; treat "the normal flow leaves BWSSlums on its default scenario"
 as ⚠ UNPINNED until a `Layers.ActivateScenario`/scenario-default trace confirms it.
 
+## 3b. The two scenarios are DIFFERENT COOKS — PINNED by the game's own manifest
+
+Each scenario ships a `<scenario>.list` naming exactly the assets it loads. Extracted with
+`f2tool extract levels.bnk "worlds\albion\bwsslums\<scenario>\<scenario>.list"`:
+
+| asset | `defaultscenario` (childhood) | `chapter2slums` (post-childhood) |
+|---|---|---|
+| heightfield `.ghf`/`.ama`/`.amm`/`.amr`/`.hdb` | `new_heightfield_9_id_7EC0ACA2` | `CH2_heightfield_Slums_id_3A6902ED` |
+| env theme `.genv` | `new_heightfield_9_id_7EC0ACA2.genv` | `CH2_heightfield_Slums_id_3A6902ED.genv` |
+| entity `.gdb` / `.save` | `DefaultScenario.*` | `Chapter2Slums.*` |
+| `engine_level`, `havok_scenario`, `_models.bnk`, `_textures.bnk`, `_texture_headers.bnk`, `_streaming.bnk` | `defaultscenario_*` | `chapter2slums_*` |
+
+So the childhood is not a re-dressing of the cooked stage: **terrain, environment theme, static
+geometry, textures and the entity layer are all separate files**. Recreating the childhood stage
+means cooking `defaultscenario` — an ENVIRONMENT-session task, with a fully specified input list
+(above). `cook_levels.py` already takes each of these as an explicit argument
+(`--terrain-ghf/--terrain-ehf/--genv/--level-save/--level-gdb/--header-bnk/--body-bnk/…`), so no
+change to the cooker is implied — only a retarget.
+
 ## 4. What this means for the recreation plan
 
 - The cooked stage the track has been using is **`chapter2slums`** — the level's post-childhood
