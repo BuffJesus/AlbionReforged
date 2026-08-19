@@ -224,15 +224,42 @@ void NativeGame::start_new_game(bool female) {
     // ChangePlayerEntityType have something to read until the appearance/model system is wired.
     const std::uint64_t hero = hero_uid;  // ensure_hero() runs inside GetPlayerHero below
     (void)hero;
-    // The new-game handoff: prime QuestManager.HeroEntity, run Gameflow:Init (populates the
-    // DebugQuestStartTable), flip GameflowMode on, and release the GAMEFLOW_START gate. After
-    // this, the InWorld tick's QuestManager.Update advances the gameflow into QC010_Childhood.
+    // The new-game handoff: prime QuestManager.HeroEntity, set GameflowMode, run Gameflow:Init
+    // (populates the DebugQuestStartTable), and release the GAMEFLOW_START gate. After this, the
+    // InWorld tick's QuestManager.Update advances the gameflow into QC010_Childhood.
+    //
+    // ORDER IS LOAD-BEARING: `GameflowMode` must be true BEFORE Init runs. The game ships its own
+    // source for this file — `scripts/quests/gameflow.txt` in gamescripts_r.bnk — and it branches
+    // on the flag mid-Init:
+    //     2037  if QuestTracker.IsToStartGameflow(QuestManager.HeroEntity) then
+    //     2038      Gameflow.GameflowMode = true
+    //     2250  if not Gameflow.GameflowMode then
+    //     2251      print("Gameflow INACTIVE")     -- debug/sandbox kit: dog, weapons, potions
+    //     2289  else print("Gameflow ACTIVE")      -- the REAL new-game setup
+    //     2383      Gameflow.WeaponNames = {}
+    //     2384      Gameflow.WeaponNames.ChildMelee = "ChildSwordWooden"
+    // Setting the flag after Init meant Init took the INACTIVE branch, so `Gameflow.WeaponNames`
+    // was never created — and QC010_Childhood's Update dies on its FIRST frame at
+    // `Gameflow.WeaponNames.ChildMelee` (qc010_childhood.lua Update instr 213-214). The gameflow's
+    // WaitForQuestToFinish then sees a dead coroutine, prints "QC010 Ending" and walks on to
+    // QC060/QC070 — which is exactly why the childhood "started" yet nothing ever played, and why
+    // the census recorded `2x attempt to index field 'WeaponNames'` with QC070_Thag as the only
+    // live quest thread.
+    //
+    // FLAGGED: pre-setting the flag stands in for `QuestTracker.IsToStartGameflow` (line 2037),
+    // which the port does not implement — the auto-stub answers false for any `Is*` predicate. The
+    // durable fix is to bind that native; this reproduces the state retail is in on a new game,
+    // where the flag is only ever set, never cleared.
+    //
+    // Init's error is REPORTED, not swallowed: this bug hid behind a bare pcall for the whole
+    // investigation. Debug.Error lands in script_log (native_bindings.cpp).
     script_vm->run_source(
         "QuestManager.HeroEntity = GetPlayerHero(); "
         "if Gameflow then "
-        "  pcall(function() Gameflow:Init() end); "
         "  Gameflow.GameflowMode = true; Gameflow._Initialised = true; "
         "  Gameflow.LoadedFromSave = false; Gameflow.SkipToNextPositionInGameflow = true; "
+        "  local ok, err = pcall(function() Gameflow:Init() end); "
+        "  if not ok then Debug.Error('Gameflow:Init failed: ' .. tostring(err)) end; "
         "end",
         "=start_new_game");
     const std::string model = female ? "CreatureHeroFemaleChild" : "CreatureHeroChild";

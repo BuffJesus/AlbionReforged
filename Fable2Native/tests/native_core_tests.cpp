@@ -199,8 +199,14 @@ static void test_entity_thread_spawns() {
 // ---- P8: NEW GAME -> the self-starting gameflow reaches the childhood chapter ----
 // The whole start sequence runs on the substrate: start_new_game() releases the gameflow's
 // GAMEFLOW_START gate, then QuestManager.Update advances GAMEFLOW_START -> DebugQC010 and
-// StartQuest loads QC010_Childhood FROM THE BNK (via the require-loader) and runs it — its
-// own "QC010_Childhood Starting" print proves it. Skipped if game data is absent.
+// StartQuest loads QC010_Childhood FROM THE BNK (via the require-loader) and runs it.
+//
+// ⚠ "QC010_Childhood Starting" is a WEAK assertion and is kept only as a precondition: the game
+// prints it in GameflowBase:StartQuest AFTER `Gameflow[name] = quest_type:new()` but BEFORE the
+// quest's coroutine is ever resumed. It proves require + class resolution + :new(), nothing more —
+// it passed on every run for the whole period the childhood was dying on its first frame. The
+// load-bearing assertions are the Gameflow:Init branch + WeaponNames checks below.
+// Skipped if game data is absent.
 static void test_gameflow_starts_childhood() {
     const std::filesystem::path bnk_path =
         "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
@@ -213,6 +219,24 @@ static void test_gameflow_starts_childhood() {
     f2::NativeScriptVM& vm = *game.script_vm;
 
     game.start_new_game(/*female=*/false);   // the new-game handoff
+
+    // REGRESSION GUARD for the GameflowMode ordering bug. Gameflow:Init branches on
+    // Gameflow.GameflowMode and prints which way it went (the BNK ships this file's original
+    // source as scripts/quests/gameflow.txt: line 2250 `if not Gameflow.GameflowMode then`,
+    // 2251 print("Gameflow INACTIVE"), 2289 print("Gameflow ACTIVE")). Only the ACTIVE branch
+    // builds the state the childhood needs — e.g. Gameflow.WeaponNames at 2383-2385. If the port
+    // sets the flag after calling Init, Init takes INACTIVE, WeaponNames is nil, and QC010's
+    // Update dies on its first frame. Assert the branch, and assert the data it must produce.
+    bool active = false, inactive = false;
+    for (const auto& line : game.script_log) {
+        if (line.find("Gameflow ACTIVE") != std::string::npos) active = true;
+        if (line.find("Gameflow INACTIVE") != std::string::npos) inactive = true;
+    }
+    F2_CHECK(active && !inactive);
+    vm.run_source("assert(Gameflow.WeaponNames ~= nil and "
+                  "Gameflow.WeaponNames.ChildMelee == 'ChildSwordWooden')", "=t_weapons");
+    F2_CHECK(vm.last_error().empty());  // gameflow.txt:2383-2384, verbatim from the game's data
+
     game.script_log.clear();
     // Drive the gameflow: QuestManager.Update resumes Gameflow.Update, which advances past the
     // GAMEFLOW_START gate into DebugQC010 and StartQuest("QC010_Childhood").
@@ -465,6 +489,17 @@ static void test_childhood_stub_census() {
     // With every probe live, hand off to the new game: the gameflow now enters QC010_Childhood
     // with wrapped wait primitives, so its own beats are observable.
     game.start_new_game(/*female=*/false);
+
+    // The game prints its own branch marker inside Gameflow:Init ("Gameflow ACTIVE" / "Gameflow
+    // INACTIVE", gameflow.txt:2251/2289 — the BNK ships that file's original source). Capture it
+    // BEFORE clearing the log: which branch Init took decides whether the childhood can run at
+    // all, and it is the one-line regression guard for the GameflowMode ordering bug.
+    std::string init_branch = "(neither marker printed)";
+    for (const auto& line : game.script_log) {
+        if (line.find("Gameflow ACTIVE") != std::string::npos) init_branch = "ACTIVE";
+        else if (line.find("Gameflow INACTIVE") != std::string::npos) init_branch = "INACTIVE (BUG)";
+    }
+    std::cout << "[census] Gameflow:Init branch = " << init_branch << "\n";
     game.script_log.clear();
 
     // Drive the real tick. QuestManager.Update resumes Gameflow -> QC010_Childhood's own
@@ -536,6 +571,16 @@ static void test_childhood_stub_census() {
         "  end\n"
         "end\n"
         "probe(_G, '_G', 0, {})\n"
+        // The direct, authoritative checks. The gameflow keys a running quest by its GAMEFLOW
+        // name (Gameflow.Childhood), and a quest instance identifies via `_Name`, not `QuestName`
+        // — so the generic scan above cannot see it. Ask for it by name instead.
+        "local c = Gameflow and rawget(Gameflow, 'Childhood')\n"
+        "Debug.Log('[stall] Gameflow.Childhood = ' .. type(c) ..\n"
+        "         (type(c) == 'table' and (' _Name=' .. tostring(rawget(c, '_Name')) ..\n"
+        "          ' co=' .. (rawget(c, 'co_update') and coroutine.status(rawget(c,'co_update'))\n"
+        "                     or 'none') ..\n"
+        "          ' state=' .. tostring(rawget(c, 'CurrentState'))) or ''))\n"
+        "Debug.Log('[stall] Gameflow.WeaponNames = ' .. type(Gameflow and Gameflow.WeaponNames))\n"
         "Debug.Log('[stall] scan done, QuestManager=' .. type(QuestManager) .. ' debug=' .. type(debug))",
         "=census_stall");
     if (!vm.last_error().empty())
@@ -572,6 +617,10 @@ static void test_childhood_stub_census() {
       << "# ScriptSystems::tick(1/60) (Quest->General->AI). Counts are the POST-BOOT delta, so\n"
       << "# setup-only natives are excluded.\n"
       << "# World: " << scene_note << "\n"
+      << "# Gameflow:Init branch (the game's OWN print, gameflow.txt:2251/2289): "
+      << init_branch << "\n"
+      << "#   ACTIVE = the real new-game setup ran (WeaponNames, breadcrumbs, quest checkers).\n"
+      << "#   INACTIVE = the debug/sandbox branch ran instead and the childhood dies frame 0.\n"
       << "# CAVEAT: with NO scene loaded, beats gated on world state (triggers, entity searches,\n"
       << "# streaming) park immediately - such a run is a LOWER BOUND on the quest's native\n"
       << "# surface, weighted toward the opening beats.\n#\n"
