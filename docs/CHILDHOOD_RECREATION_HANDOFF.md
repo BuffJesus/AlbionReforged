@@ -151,13 +151,27 @@ loop and returns.
 diagnostic arm, `FABLE2NATIVE_CENSUS_SKIP_CUTSCENES=1`, which makes `PlayCutscene` return
 immediately (never on by default; it is not faithful — no camera, no dialogue, no timing, and any
 state the cutscene should have changed is skipped — it exists only to see what lies beyond).
-With it on, other threads do advance (`QC010_JeevesGreet`, `QC010_GuardMorning`,
-`QC010_JeevesToStudy`, `QC055_MagpieIntoSleep` all get skipped in sequence) — but
-**`QC010_Childhood` still parks at the same `WaitFor` on `StartHeroPooScene`**, and
-`QC010_SetRoseMode` is never even reached. That flag is set by `QC010_Rose.CustomUpdate`
-(`qc010_childhood.lua main.proto[49]`, linedefined 1411-2505) — the Rose ENTITY thread — so
-something upstream is stopping that thread from reaching its first beat. Finding out what is the
-next diagnosis, and it is independent of the cutscene work.
+With it on, other threads advance (`QC010_JeevesGreet`, `QC010_GuardMorning`, `QC010_JeevesToStudy`,
+`QC055_MagpieIntoSleep` are skipped in sequence).
+
+⚠ **CORRECTION (measured after deepening the coroutine scan):** an earlier note here claimed the
+Rose thread "never reaches its first beat". That was an artifact of the stall scan's depth limit —
+entity threads live at `Gameflow.ChildThreads[N].ChildThreads[M]`, one level past where it stopped
+looking, so they were simply invisible. With depth 9 and per-frame `linedefined` reporting, the
+real picture is:
+
+```
+ChildThreads.12.co_update                    QC010_Childhood   yield <- f@764 <- WaitFor <- ?@401
+ChildThreads.12.ChildThreads.1.custom_update state=20          yield <- f@1382 <- PlayCutscene <- ?@1411
+```
+
+`?@401` is QC010's `Update`, `?@1411` is `QC010_Rose.CustomUpdate`. So the **Rose thread is alive
+and has advanced to state 20**, parked inside `PlayCutscene`; the main thread has moved on to a
+later `WaitFor` (predicate `f@764`, not the `StartHeroPooScene` one at 635). 23 entity threads are
+live with real states (21 at state 0, one at 10, one at 20).
+
+So there is no separate second gate: it is `PlayCutscene` all the way down, and the childhood gets
+further than the earlier reading suggested.
 
 ⚠ **OPEN RE QUESTION (do not guess):** that GDB opens fine (14,692 records) but the record key is
 NOT `FNV-1(cutscene name)` — `QC010_SetRoseMode` → `0x263BEB69` does not resolve, and the literal

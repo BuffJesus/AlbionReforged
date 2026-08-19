@@ -508,6 +508,27 @@ static void test_childhood_stub_census() {
         "=census_wait");
     F2_CHECK(vm.last_error().empty());
 
+    // ENTITY-THREAD probe. A quest's beats live in entity threads, and
+    // QuestThreadBase.StartNewEntityThread (questmanager.lua:942) spawns ONE PER ENTITY MATCHING
+    // THE NAME: GetAllEntitiesWithName(name) -> for each match, ThreadClass:new(entity, ...) ->
+    // StartNewThread. So a name that resolves to nothing silently starts NO thread and that
+    // quest's whole branch never runs — with no error anywhere. Log the match count per name.
+    vm.run_source(
+        "local f = QuestThreadBase and rawget(QuestThreadBase, 'StartNewEntityThread')\n"
+        "if type(f) == 'function' then\n"
+        "  QuestThreadBase.StartNewEntityThread = function(self, name, cls, ...)\n"
+        "    local n = 0\n"
+        "    if type(name) == 'string' and self and self.GetAllEntitiesWithName then\n"
+        "      local ok, list = pcall(function() return self:GetAllEntitiesWithName(name) end)\n"
+        "      if ok and type(list) == 'table' then n = #list end\n"
+        "    end\n"
+        "    Debug.Log('[ethread] ' .. tostring(name) .. ' matched=' .. n)\n"
+        "    return f(self, name, cls, ...)\n"
+        "  end\n"
+        "end",
+        "=census_ethread");
+    F2_CHECK(vm.last_error().empty());
+
     // DIAGNOSTIC ARM (opt-in, FABLE2NATIVE_CENSUS_SKIP_CUTSCENES=1): make PlayCutscene return
     // immediately instead of blocking. Every PlayCutscene currently parks forever — no cutscene
     // system exists to end it — which hides every beat BEHIND the first one. Returning at once is
@@ -575,19 +596,22 @@ static void test_childhood_stub_census() {
     vm.run_source(
         "local seen = {}\n"
         "local function scan(t, path, depth)\n"
-        "  if depth > 6 or seen[t] then return end\n"
+        "  if depth > 9 or seen[t] then return end\n"
         "  seen[t] = true\n"
         "  for k, v in pairs(t) do\n"
         "    local tv = type(v)\n"
         "    if tv == 'thread' then\n"
         "      local where = '?'\n"
-        "      for lvl = 0, 6 do\n"
-        "        local i = debug.getinfo(v, lvl, 'Sl')\n"
+        // currentline is stripped from retail bytecode, but linedefined is NOT — so record the
+        // whole frame stack as linedefined values. That names the exact function each coroutine is
+        // parked in; map them back with tools/find_proto_by_line.py.
+        "      local frames = {}\n"
+        "      for lvl = 0, 8 do\n"
+        "        local i = debug.getinfo(v, lvl, 'Sn')\n"
         "        if not i then break end\n"
-        "        if i.currentline and i.currentline > 0 then\n"
-        "          where = tostring(i.short_src) .. ':' .. tostring(i.currentline); break\n"
-        "        end\n"
+        "        frames[#frames + 1] = tostring(i.name or '?') .. '@' .. tostring(i.linedefined)\n"
         "      end\n"
+        "      if #frames > 0 then where = table.concat(frames, '<-') end\n"
         "      local id = tostring(rawget(t, 'QuestName') or rawget(t, 'Name') or '?')\n"
         "      local st = tostring(rawget(t, 'CurrentState'))\n"
         "      Debug.Log('[stall] ' .. path .. '.' .. tostring(k) .. ' status=' ..\n"
@@ -604,7 +628,7 @@ static void test_childhood_stub_census() {
         // held under a generic key (Gameflow.ChildThreads.N). Find every table that identifies as
         // QC010 and report its state.
         "local function probe(t, path, depth, seen)\n"
-        "  if depth > 6 or seen[t] then return end\n"
+        "  if depth > 9 or seen[t] then return end\n"
         "  seen[t] = true\n"
         "  for k, v in pairs(t) do\n"
         "    if type(v) == 'table' then\n"
@@ -726,6 +750,23 @@ static void test_childhood_stub_census() {
             std::cout << "  " << count << "x  " << name << "\n";
             if (++shown >= 12) break;
         }
+    }
+
+    // Entity threads: StartNewEntityThread spawns one per entity matching the name, so
+    // `matched=0` means that branch of the quest silently never runs at all.
+    {
+        f << "\n# ENTITY THREADS started (name matched=N). matched=0 => that branch NEVER runs:\n";
+        int zero = 0, total = 0;
+        for (const auto& line : game.script_log) {
+            const std::size_t tag = line.find("[ethread] ");
+            if (tag == std::string::npos) continue;
+            const std::string entry = line.substr(tag + 10);
+            ++total;
+            if (entry.find("matched=0") != std::string::npos) ++zero;
+            f << "# " << entry << "\n";
+        }
+        std::cout << "[census] entity threads: " << total << " requested, " << zero
+                  << " matched nothing\n";
     }
 
     // Every wait a quest thread ENTERED, in order. The tail is where each thread is stuck.
