@@ -73,12 +73,18 @@ def walk(p, path, want, out):
 
 
 def main():
-    want = {int(a) for a in sys.argv[1:]}
-    if not want:
-        print("usage: findproto.py <linedefined> [...]")
+    args = [a for a in sys.argv[1:]]
+    if not args:
+        print("usage: find_proto_by_line.py <scripts-dir> <linedefined> [<linedefined> ...]\n"
+              "  <scripts-dir> = a cooked script package (tools/cook_scripts.py output, the\n"
+              "  <out>/scripts folder). Prints every script+proto defining a function at that\n"
+              "  line, with its string constants.")
         return 1
-    root = Path(r"C:\Users\Cornelio\AppData\Local\Temp\claude\D--Documents-Fable2RE"
-                r"\94683547-479f-4258-9ee7-b07a6a978162\scratchpad\cooked_scripts\scripts")
+    root = Path(args[0])
+    want = {int(a) for a in args[1:]}
+    if not root.is_dir() or not want:
+        print("error: need an existing scripts dir and at least one line number")
+        return 1
     for f in sorted(root.rglob("*.lua")):
         try:
             p = parse(f.read_bytes())
