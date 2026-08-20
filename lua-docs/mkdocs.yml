@@ -1,4 +1,5 @@
 site_name: Albion Reforged — Lua Scripting
+site_url: https://buffjesus.github.io/AlbionReforged/
 site_description: >-
   How Fable II's Lua scripting works, how it was reverse-engineered, and how it
   runs on the Albion Reforged native runtime — quests, managers, message events,
