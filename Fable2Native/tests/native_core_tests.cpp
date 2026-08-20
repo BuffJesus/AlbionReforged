@@ -752,6 +752,41 @@ static void test_childhood_stub_census() {
         "=census_wait");
     F2_CHECK(vm.last_error().empty());
 
+    // GATE probe. PlayCutscene's pre-start loop exits only when ShouldCutsceneTerminate OR
+    // IsCutsceneInRange goes true (questmanager.lua main.proto[83], instrs 37-53), so log what
+    // those two ACTUALLY answer — observed, not reasoned about. One line per distinct answer.
+    vm.run_source(
+        "local seen = {} "
+        "for _, base in ipairs({QuestThreadBase, QuestEntityThreadBase}) do "
+        "  for _, n in ipairs({'ShouldCutsceneTerminate', 'IsCutsceneInRange'}) do "
+        "    local f = base and rawget(base, n) "
+        "    if type(f) == 'function' then "
+        "      base[n] = function(self, a, ...) "
+        "        local ok, r = pcall(f, self, a, ...) "
+        // NOTE: `ok and r` collapses a legitimate `false` into the error branch — spell it out.
+        "        local key = n .. (ok and ('=' .. tostring(r)) or (' ERROR ' .. tostring(r))) "
+        "        if not seen[key] then seen[key] = true Debug.Log('[gate] ' .. key) end "
+        "        if not ok then error(r) end "
+        "        return r "
+        "      end "
+        "    end "
+        "  end "
+        "end "
+        // ScriptFunction.StartCutscene is the step that actually queues a cutscene
+        // (miscfunctions.lua:19). It needs BOTH opts.Entity and opts.Cutscene; log what it got.
+        "if ScriptFunction and type(ScriptFunction.StartCutscene) == 'function' then "
+        "  local sc = ScriptFunction.StartCutscene "
+        "  local logged = {} "
+        "  ScriptFunction.StartCutscene = function(o) "
+        "    local k = 'StartCutscene entity=' .. tostring(o and o.Entity ~= nil) .. "
+        "              ' cutscene=' .. tostring(o and o.Cutscene) "
+        "    if not logged[k] then logged[k] = true Debug.Log('[gate] ' .. k) end "
+        "    return sc(o) "
+        "  end "
+        "end",
+        "=census_gate");
+    F2_CHECK(vm.last_error().empty());
+
     // ENTITY-THREAD probe. A quest's beats live in entity threads, and
     // QuestThreadBase.StartNewEntityThread (questmanager.lua:942) spawns ONE PER ENTITY MATCHING
     // THE NAME: GetAllEntitiesWithName(name) -> for each match, ThreadClass:new(entity, ...) ->
@@ -1061,6 +1096,22 @@ static void test_childhood_stub_census() {
         f << nl << "# THE GAME'S OWN Debug.Error calls (" << errs.size() << " distinct):" << nl;
         for (const auto& [msg, n] : errs) f << "# " << n << "x  " << msg << nl;
         std::cout << "[census] game Debug.Error: " << errs.size() << " distinct" << std::endl;
+        int requests = 0;
+        for (const auto& line : game.script_log)
+            if (line.find("[cutscene-request]") != std::string::npos) ++requests;
+        std::cout << "[census] cutscenes REQUESTED: " << requests << std::endl;
+        for (const auto& line : game.script_log) {
+            const std::size_t at = line.find("[cutscene-perform]");
+            if (at == std::string::npos) continue;
+            f << "# " << line.substr(at) << nl;
+            std::cout << "  " << line.substr(at) << std::endl;
+        }
+        for (const auto& line : game.script_log) {
+            const std::size_t at = line.find("[gate] ");
+            if (at == std::string::npos) continue;
+            f << "# " << line.substr(at) << nl;
+            std::cout << "  " << line.substr(at) << std::endl;
+        }
         int shown = 0;
         for (const auto& [msg, n] : errs) {
             std::cout << "  " << n << "x  " << msg << std::endl;

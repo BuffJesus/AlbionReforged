@@ -4,7 +4,7 @@
 # + start_new_game(male), then 600 frames of QuestManager.Update() +
 # ScriptSystems::tick(1/60) (Quest->General->AI). Counts are the POST-BOOT delta, so
 # setup-only natives are excluded.
-# World: no scene loaded (set FABLE2NATIVE_CENSUS_SCENE to a cooked .f2scene)
+# World: scene loaded: out_hero.f2scene (5676 instances); named entities seeded: 1166
 # Gameflow:Init branch (the game's OWN print, gameflow.txt:2251/2289): ACTIVE
 #   ACTIVE = the real new-game setup ran (WeaponNames, breadcrumbs, quest checkers).
 #   INACTIVE = the debug/sandbox branch ran instead and the childhood dies frame 0.
@@ -13,164 +13,228 @@
 # surface, weighted toward the opening beats.
 #
 # calls  native
-65973	IsLevelLoaded()
-21564	DemonDoor.IsFaceOut
-21564	IsDistanceBetweenThingsOver()
-5998	SearchTools.FilterWithEC
-5985	Villager.GetECType
-4798	CommunityService.GetCurrentStage
-2398	CommunityService.GetCurrentInfo
-1202	Layers.GetActiveScenarioForLevel
+43203	IsLevelLoaded()
+23758	GroupMindManager.GetCutsceneGroupMind
+2401	CommunityService.GetCurrentStage
+2400	Trigger.IsSpecificTriggerEntityInsideTriggerVolume
+2399	GameVersion.IsDLCDownloaded
 1201	GetLevelLoaded()
-1200	GetPlayerHenchman()
+1201	GetPlayerHenchman()
+1201	Layers.GetActiveScenarioForLevel
+1200	CommunityService.GetCurrentInfo
 1200	Layers.IsLayerActive
 1200	QuestTracker.GetPrimaryQuestName
+1200	Trigger.AreAllTriggerEntitiesInsideTriggerVolume
 1199	IsHeroPlayerPlayingWithSaveGame()
-180	MessageEvents.RegisterEntityNameForActivationMessages
-84	IsLoadedFromSaveGame()
-83	QuestTracker.IsRegistered
-71	Layers.ActivateLayer
-53	QuestTracker.Register
-30	Gossip.ActivateGossipItem
+97	MessageEvents.RegisterEntityNameForActivationMessages
+62	AIManager.SetCanRunMoveAwayFromAreaBehaviour
+57	QuestTracker.IsRegistered
+39	Layers.ActivateLayer
+35	QuestTracker.Register
+33	PhysicsCharacter.SetAsPushableByHero
 23	Gossip.DeactivateGossipItem
-22	Stats.AddUnlockedTitle
+22	AIManager.DisableSimBehaviours
+20	Health.SetAsInvulnerable
 18	TutorialManager.CompleteTutorial
-17	ExpressionPerformer.SetExpressionAsAvailable
-16	AIManager.DisableSimBehaviours
-14	Stats.SetRegionPerceivedRenown
-9	Layers.DeactivateLayer
+13	OpinionReaction.SetCanDrawOpinionIcons
+13	Trigger.SetToTriggerOnSpecificEntity
+12	Combat.SetCanFlee
+12	ExpressionPerformer.SetExpressionAsAvailable
+12	Faction.AddTemporaryEntityRelationship
+12	Health.SetCantDie
+11	Mood.SetMoodState
+11	OpinionReaction.IsAvailable
+10	Faction.IsAvailable
+9	GossipEC.AddLabel
+8	Gossip.ActivateGossipItem
 8	Player.RemoveAllScriptRules
 8	QuestTracker.IsDemoModeActive
-6	LevelExit.GetECType
-5	GameVersion.IsDLCDownloaded
+8	SearchTools.FilterWithEC
+8	Targeted.SetAsTargetable
+7	AIManager.EnableSimBehaviours
+4	Door.SetLocked
+4	Door.SetOpen
+4	GraphicAppearance.SetTintColour
+4	OpinionReaction.SetRespondToExpressions
 4	QuestTracker.HasBeenActivated
-4	Stats.SetChapterProgress
 4	TriggerVolumeExclusionZone.GetECType
 3	AddConnectionArea()
 3	C2DBoxI()
-3	GetDog()
-3	QuestTracker.SetAsActive
-3	QuestTracker.Unlock
+3	Creature.SetAsInteresting
+3	GUI.AddWorldIcon
+3	Navigation.SetIsImportant
+3	Navigation.SetMovementPaused
 2	Carrying.GetSlotToSheatheWeapon
 2	Carrying.PutEntityInSlot
-2	Dog.IsInjured
+2	Combat.SetCanFight
 2	ExpressionPerformer.SetExpressionAsExtendable
-2	GUI.FadeScreenOut
-2	GUI.LockScreenFade
 2	GUI.SetDPadEnabled
+2	GetDog()
 2	Inventory.AddItemOfType
 2	Inventory.InstantiateItemOfType
-2	Inventory.RemoveAllItemsOfType
-2	Layers.ActivateScenario
-2	Player.AddScriptRules
+2	Layers.DeactivateLayer
+2	LevelExit.GetECType
+2	Navigation.IsAvailable
+2	PhysicsCharacter.SetAsAbleToPushCharacters
 2	Player.IsAvailable
-2	Stats.SetTitleRecord
+2	Shard.IsAvailable
+2	Stats.SetChapterProgress
 2	Timing.SetTimeOfDay
-1	Age.SetAge
-1	Age.SetAgeGroup
-1	Age.SetAgeLimit
-1	AllowHenchman()
-1	AmbientPopulationManager.AreGuardsDisabled
-1	AmbientPopulationManager.DisableAmbientPopulationInLevel
-1	AmbientPopulationManager.IsAmbientPopulationDisabled
 1	AmbientPopulationManager.SetCrimeEnabled
-1	AmbientPopulationManager.SetInterestingAreasEnabled
 1	AmbientPopulationManager.SetRewardsEnabled
 1	AutoSaveGame()
 1	Bed.GetECType
 1	Breadcrumber.SetParticleAlphaMultiplier
+1	Breakable.GetECType
+1	Building.SetCanAutoCloseDoors
 1	Debug.SetAllExpressionsAvailable
 1	Debug.SetAllExpressionsExtendable
 1	Debug.SetDrawTargetingHighlight
 1	Debug.SetTutorialsEnabled
-1	Dog.SetDisableNonEssentialBehaviour
-1	Door.SetLocked
-1	Door.SetOpen
+1	Dog.IsInjured
+1	Door.SetOpenForEntity
 1	ExperienceOrb.SetAsEnabled
-1	FastTravel.SetBlockedTextTag
+1	Follow.FollowEntity
+1	GUI.FadeScreenIn
+1	GUI.FadeScreenOut
+1	GUI.LockScreenFade
+1	GUI.PlayMovieInternal
+1	GUI.UnlockScreenFade
 1	Gender.Get
+1	GetBreadcrumbEntity()
+1	GraphEdgeController.SetLocked
+1	GraphicAppearance.SetFadedByCamera
 1	GroupEvent.CreateCrowdControl
 1	GuildMessages.SetNarratorTag
-1	Health.SetAsInvulnerable
-1	Inventory.GetInitialHeroMeleeWeapon
-1	Inventory.GetInitialHeroRangedWeapon
-1	Inventory.RemoveAllItemsOfCategory
+1	Inventory.GetNumberOfItemsOfCategory
 1	Kynapse.SetIsAbstractEntity
+1	Layers.ActivateScenario
+1	ModeManager.AddModeByEnumWithAnimGroupName
 1	Player.ChangePlayerEntityType
 1	Player.DisableFullPauseMenu
 1	Player.SetExperienceSpendingAsEnabled
 1	Player.SetFastTravelStopActivationAsEnabled
+1	Player.SetInterestingHighlightingAsEnabled
 1	Player.SetMapScreenAsEnabled
 1	Player.SetOverrideCameraMode
 1	Player.SetPauseMenuInfoPageAsEnabled
 1	Player.SetSafetyModeSuggestable
 1	QuestTracker.IsToStartGameflow
+1	QuestTracker.SetAsActive
+1	QuestTracker.Unlock
+1	SearchTools.FilterWithinDistanceOfPos
 1	SoundTools.PlayMusic
-1	Stats.SetTitleAsFreeToBuy
-1	Targeted.SetAsTargetable
+1	SoundTools.PlayMusicAndAtmosForLevel
+1	SoundTools.SetMusicAndAtmosToStartOnNextLevelLoad
+1	Stats.AddUnlockedTitle
+1	Stats.SetTitleRecord
 1	Timing.SetTimeAsStopped
-1	Transient.GetECType
+1	Trigger.GetBoundingRadius
 1	TutorialManager.SetToPlayNewExpressionLearnedTutorials
 1	TutorialManager.SetTutorialsEnabled
 1	Vaulting.SetAsEnabled
-1	Vaulting.SetTutorialAsEnabled
-1	Village.GetECType
-1	WorldMapInfo.EnableGargoyles
+1	Villager.SetHome
 
-# referenced but never called (1):
--	Carrying.RemoveEntityFromSlot
+# referenced but never called (0):
 
 # SILENT coroutine errors (5 distinct) - these kill beats outright:
+# 4x  frame=0 lastStub=GraphicAppearance.SetTintColour :: ?:0: attempt to index field 'WarrantTargetTimer' (a nil value) | stack traceback: | 	?: in function <?:718>
 # 1x  frame=0 lastStub=CommunityService.GetCurrentStage :: ?:0: attempt to compare number with table | stack traceback: | 	?: in function <?:239>
-# 1x  frame=0 lastStub=GroupEvent.CreateCrowdControl :: ?:0: attempt to index a nil value | stack traceback: | 	?: in function <?:401>
-# 1x  frame=1 lastStub=CommunityService.GetCurrentStage :: ?:0: attempt to compare number with table | stack traceback: | 	?: in function <?:239>
-# 1x  frame=1 lastStub=Inventory.RemoveAllItemsOfCategory :: ?:0: attempt to index global 'DummyObjects' (a nil value) | stack traceback: | 	?: in function <?:347>
-# 1x  frame=1 lastStub=QuestTracker.IsRegistered :: ?:0: attempt to index global 'DummyObjects' (a nil value) | stack traceback: | 	?: in main chunk | 	[C]: in function 'require' | 	?: in function 'LoadQuestModule' | 	?: in function 'StartNewOptionalQuest' | 	?: in function 'CheckQuestEligibility' | 	?: in function <?:1666>
+# 1x  frame=0 lastStub=Inventory.GetNumberOfItemsOfCategory :: ?:0: attempt to compare number with table | stack traceback: | 	?: in function <?:4309>
+# 1x  frame=0 lastStub=Navigation.SetMovementPaused :: GetPositionOfEntity failed to find 'QC050_ArfurMoveIntoAlleyMarker'. | stack traceback: | 	[C]: in function 'assert' | 	?: in function 'GetPositionOfEntity' | 	?: in function <?:505>
+# 1x  frame=0 lastStub=Targeted.SetAsTargetable :: ?:0: attempt to call method 'SetAsGameSaving' (a nil value) | stack traceback: | 	?: in function <?:793>
 
 # SPIN SET - calls in the last 60 frames (per frame in brackets). These are the GATES:
-# 6600	[110/frame]	IsLevelLoaded()
-# 2160	[36/frame]	DemonDoor.IsFaceOut
-# 2160	[36/frame]	IsDistanceBetweenThingsOver()
-# 600	[10/frame]	SearchTools.FilterWithEC
-# 600	[10/frame]	Villager.GetECType
-# 480	[8/frame]	CommunityService.GetCurrentStage
-# 240	[4/frame]	CommunityService.GetCurrentInfo
+# 4320	[72/frame]	IsLevelLoaded()
+# 2400	[40/frame]	GroupMindManager.GetCutsceneGroupMind
+# 240	[4/frame]	CommunityService.GetCurrentStage
+# 240	[4/frame]	GameVersion.IsDLCDownloaded
+# 240	[4/frame]	Trigger.IsSpecificTriggerEntityInsideTriggerVolume
+# 120	[2/frame]	CommunityService.GetCurrentInfo
 # 120	[2/frame]	GetLevelLoaded()
 # 120	[2/frame]	GetPlayerHenchman()
 # 120	[2/frame]	IsHeroPlayerPlayingWithSaveGame()
 # 120	[2/frame]	Layers.GetActiveScenarioForLevel
 # 120	[2/frame]	Layers.IsLayerActive
 # 120	[2/frame]	QuestTracker.GetPrimaryQuestName
+# 120	[2/frame]	Trigger.AreAllTriggerEntitiesInsideTriggerVolume
 
-# DIALOGUE spoken (0 lines) - speaker: line [tag]:
+# DIALOGUE spoken (37 lines) - speaker: line [tag]:
+# QC010_EscortGuardFairfax: Evening, Jeeves. Here are the children Lord Lucien asked for.  [TEXT_QUEST_QC010_JEEVES_GREET_02]
+# QC010_Jeeves: Excellent!  [TEXT_QUEST_QC010_JEEVES_GREET_04]
+# QC010_Jeeves: TEXT_QUEST_QC010_JEEVES_GREET_10  [TEXT_QUEST_QC010_JEEVES_GREET_10]
+# QC010_Rose: Hello, sir.  [TEXT_QUEST_QC010_JEEVES_GREET_20]
+# QC010_Jeeves: If you'd follow me please.  [TEXT_QUEST_QC010_JEEVES_GREET_30]
+# QC010_Guard: Ooh. All right, settle down, there's a nice... angry stray dog...  [TEXT_QUEST_QC010_GUARD_MORNING_10]
+# QC010_Rose: Quiet, boy.  [TEXT_QUEST_QC010_GUARD_MORNING_20]
+# QC010_Rose: What do you want?  [TEXT_QUEST_QC010_GUARD_MORNING_30]
+# QC010_Guard: I work for Lord Lucien, miss. And he would very much like to see you in his castle.  [TEXT_QUEST_QC010_GUARD_MORNING_40]
+# QC010_Guard: I've been sent to collect you.  [TEXT_QUEST_QC010_GUARD_MORNING_50]
+# QC010_EscortGuardFairfax: Evening, Jeeves. Here are the children Lord Lucien asked for.  [TEXT_QUEST_QC010_JEEVES_GREET_02]
+# QC010_Jeeves: Excellent!  [TEXT_QUEST_QC010_JEEVES_GREET_04]
+# QC010_Jeeves: TEXT_QUEST_QC010_JEEVES_GREET_10  [TEXT_QUEST_QC010_JEEVES_GREET_10]
+# QC010_Rose: Hello, sir.  [TEXT_QUEST_QC010_JEEVES_GREET_20]
+# QC010_Jeeves: If you'd follow me please.  [TEXT_QUEST_QC010_JEEVES_GREET_30]
+# QC010_Rose: We look up at this castle every day and think how nice it is; we both do.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_10]
+# QC010_Rose: But inside it's even more beautiful than I imagined.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_20]
+# QC010_Jeeves: It is quite wonderful, isn't it?  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_30]
+# QC010_Jeeves: Ah, hello, Master Garth.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_40]
+# QC010_Jeeves: Huh. Man of few words.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_50]
+# QC010_Rose: Where is the grand dining hall?  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_60]
+# QC010_Jeeves: Oh, in the north wing. Lord Lucien hasn't been in there since... Since the tragic deaths of Lady Fairfax and little Amelia.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_70]
+# QC010_Rose: Oh, I heard. That was so awful.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_90]
+# QC010_Jeeves: Yes, he misses them terribly.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_100]
+# QC010_Rose: So... where does he eat?  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_110]
+# QC010_Jeeves: Actually, he takes most of his meals in his study.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_120]
+# QC010_Jeeves: He's in there working all hours, doing research...  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_130]
+# QC010_Rose: What does he research?  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_140]
+# QC010_Jeeves: History, mostly. Lord Lucien is quite keen on antiquities of all sorts, but he is chiefly interested in things relating to the Old Kingdom.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_150]
+# QC010_Rose: There was a trader in Old Town who said his stuff was from the Old Kingdom.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_170]
+# QC010_Jeeves: Yes... yes, I believe Lord Lucien... heard about that.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_180]
+# QC010_Rose: We bought a piece of it and we made a wish and now we're here!  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_190]
+# QC010_Jeeves: That's wonderful. Now, when you meet Lord Lucien, you must show respect at all times.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_200]
+# QC010_Jeeves: Address him as "my lord." Speak only when spoken to.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_210]
+# QC010_Rose: Yes sir.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_220]
+# QC010_Jeeves: And do not mention Lady Fairfax or Amelia.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_230]
+# QC010_Jeeves: Here we are. Lord Lucien? The children are here.  [TEXT_QUEST_QC010_LUCIEN_INTRO_20]
 
 # ENTITY POSITIONS (cutscene in-range depends on these):
-# hero  0 0 0
+# hero  201.102 52.857 91.8186
+# QC010_Rose  200.013 52.7308 91.4218   dist_to_hero=1.16553
+# QC010_Theresa  172.981 49.4009 144.291   dist_to_hero=59.6324
+# QC010_ChildhoodStart  201.295 52.8238 91.705   dist_to_hero=0.226573
+# QC010_HeroInCrowdMarker  175.074 49.4009 144.723   dist_to_hero=59.0618
 
-# THE GAME'S OWN Debug.Error calls (23 distinct):
+# THE GAME'S OWN Debug.Error calls (17 distinct):
 # 2x  ?:0: attempt to compare number with table
-# 1x  ?:0: attempt to index a nil value
-# 2x  ?:0: attempt to index global 'DummyObjects' (a nil value)
-# 1x  GetEntityWithName failed to find 'BLExitToBLThagCave'.
-# 2x  GetEntityWithName failed to find 'BLExitToBMkt'.
-# 2x  GetEntityWithName failed to find 'BLExitToBW'.
-# 1x  GetEntityWithName failed to find 'BowerstoneMarketExit_Gate'.
+# 1x  Entity: QC010_Guard has been asked to move but has no nav EC
+# 1x  Entity: QC030_Arfur has been asked to move but has no nav EC
+# 1x  GetEntityWithName failed to find 'FF_Door_Luciens'.
+# 1x  GetEntityWithName failed to find 'FF_Door_Luciens_2'.
 # 1x  GetEntityWithName failed to find 'NewObjectBuildingBWSHouse1_20'.
-# 1x  GetEntityWithName failed to find 'QC010_VillagerA'.
-# 1x  GetEntityWithName failed to find 'QC030_GraphEdge1'.
-# 1x  GetEntityWithName failed to find 'QC055_BreakableSearchMarker'.
-# 1x  GetEntityWithName failed to find 'QC070_ObjectFurnitureKeyframedChestWooden'.
-# 2398x  GetEntityWithName failed to find 'QO060_DoorOpenTrigger'.
-# 2x  GetEntityWithName failed to find 'QO900_DemonDoor'.
-# 2x  GetEntityWithName failed to find 'QO910_DemonDoor'.
-# 2x  GetEntityWithName failed to find 'QO920_DemonDoor'.
-# 2x  GetEntityWithName failed to find 'QO925_DemonDoor'.
-# 2x  GetEntityWithName failed to find 'QO930_DemonDoor'.
-# 2x  GetEntityWithName failed to find 'QO940_DemonDoor'.
-# 2x  GetEntityWithName failed to find 'QO950_DemonDoor'.
-# 2x  GetEntityWithName failed to find 'QO980_DemonDoor'.
-# 2x  GetEntityWithName failed to find 'QO990_DemonDoor'.
-# 1x  No village with the name:GypsyVillagefound in ScriptFunction.SetVillageShopsCanOpen
+# 1x  GetEntityWithName failed to find 'QC010_Bedroll'.
+# 1200x  GetEntityWithName failed to find 'QO060_DoorOpenTrigger'.
+# 1x  GetEntityWithName failed to find 'QO900_DemonDoor'.
+# 1x  GetEntityWithName failed to find 'QO910_DemonDoor'.
+# 1x  GetEntityWithName failed to find 'QO920_DemonDoor'.
+# 1x  GetEntityWithName failed to find 'QO925_DemonDoor'.
+# 1x  GetEntityWithName failed to find 'QO930_DemonDoor'.
+# 1x  GetEntityWithName failed to find 'QO940_DemonDoor'.
+# 1x  GetEntityWithName failed to find 'QO950_DemonDoor'.
+# 1x  GetEntityWithName failed to find 'QO980_DemonDoor'.
+# 1x  GetEntityWithName failed to find 'QO990_DemonDoor'.
+# [cutscene-perform] record 0xAD0C745B elements=yes
+# [cutscene-perform] record 0x8EB51907 elements=yes
+# [cutscene-perform] record 0x86F97E85 elements=yes
+# [cutscene-perform] record 0x8EB51907 elements=yes
+# [cutscene-perform] record 0xD8B70661 elements=yes
+# [cutscene-perform] record 0x48E2D490 elements=yes
+# [gate] StartCutscene entity=true cutscene=QC055_MagpieIntoSleep
+# [gate] ShouldCutsceneTerminate=false
+# [gate] StartCutscene entity=true cutscene=QC010_JeevesGreet
+# [gate] StartCutscene entity=true cutscene=QC010_GuardMorning
+# [gate] StartCutscene entity=true cutscene=QC010_JeevesToStudy
+# [gate] StartCutscene entity=true cutscene=QC010_LucienIntro
 
 # ENTITY THREADS started (name matched=N). matched=0 => that branch NEVER runs:
 # GenericTriggerMarker matched=0
@@ -181,22 +245,22 @@
 # QRARCH_Door_Tomb matched=0
 # QR_AssassinationQuestGiver matched=0
 # QR_AssassinationApproachTrigger matched=0
-# QC010_Rose matched=0
-# QC010_Arfur matched=0
-# QC010_Murgo matched=0
-# QC010_Theresa matched=0
-# QC010_HeroThroughArchTrigger matched=0
-# QC010_HeroInCrowdTrigger matched=0
-# QC010_MusicBoxWish matched=0
-# QC010_Bedroll2 matched=0
-# QC010_Guard matched=0
-# QC010_Jeeves matched=0
+# QC010_Rose matched=1
+# QC010_Arfur matched=1
+# QC010_Murgo matched=1
+# QC010_Theresa matched=1
+# QC010_HeroThroughArchTrigger matched=1
+# QC010_HeroInCrowdTrigger matched=1
+# QC010_MusicBoxWish matched=1
+# QC010_Bedroll2 matched=1
+# QC010_Guard matched=1
+# QC010_Jeeves matched=1
 # QC010_Lucien matched=0
 # QC010_Garth matched=0
 # QC010_CircleTrigger matched=0
 # QC010_RoseCircleTrigger matched=0
-# QC010_HeroPassedWall matched=0
-# QC010_RoseCallingTrigger matched=0
+# QC010_HeroPassedWall matched=1
+# QC010_RoseCallingTrigger matched=1
 # QC010_EscortGuardFairfax matched=0
 # QC010_StudyTrigger matched=0
 # QC010_CorridorTrigger matched=0
@@ -220,139 +284,56 @@
 # QJ003_JobBartenderSign_Active_Westcliff1 matched=0
 # QJ003_JobBartenderSign_Active_BWSMarket1 matched=0
 # QJ003_JobBartenderSign_Active_Dunecrest1 matched=0
-# QC020_Barnum matched=0
-# QC020_HeroNearStartOfAlleyTrigger matched=0
-# QC030_Balthazar matched=0
-# QC030_Arfur matched=0
-# QC040_Rex matched=0
-# QC040_BullyBlocker matched=0
-# QC040_HeroInAlleyTrigger matched=0
-# QC040_LookAtTrigger matched=0
-# QC040_BullyRun1 matched=0
-# QC040_BullyRun2 matched=0
-# QC040_Bully matched=0
-# QC040_Bully_2 matched=0
-# QC040_Bully_3 matched=0
-# QC040_Bully_4 matched=0
-# QC040_Bully_5 matched=0
-# QC040_Bully_6 matched=0
-# QC040_Bully_7 matched=0
-# QC040_Bully_8 matched=0
-# QC045_Monty matched=0
-# QC045_Deidre matched=0
-# QC045_Belinda matched=0
-# QC045_Door matched=0
-# QC045_PreludeLookAtTrigger matched=0
-# QC045_StartIntroTrigger matched=0
-# QC045_HeroRoseInsideHouseTrigger matched=0
-# QC045_HeroRoseNearDoorTrigger matched=0
-# QC045_HeroRoseUpstairsTrigger matched=0
-# QC045_DeidreInHouseTrigger matched=0
-# QC045_BelindaNearBalconyDoorTrigger matched=0
-# QC045_HeroOutHouseTrigger matched=0
-# QC050_Derek matched=0
-# QC050_Arfur matched=0
-# QC050_WarrantGround_1 matched=0
-# QC050_WarrantGround_2 matched=0
-# QC050_WarrantGround_3 matched=0
-# QC050_WarrantGround_4 matched=0
-# QC050_HeroNearDerekTrigger matched=0
-# QC050_RoseSpotDogTrigger matched=0
-# QC050_HeroInAlleyTrigger matched=0
-# QC050_HeroPastArfurTrigger matched=0
-# QC055_Betty matched=0
-# QC055_Pete matched=0
-# QC055_Magpie matched=0
-# QC055_NearMagpieTrigger matched=0
-# QC055_MagpieAreaTrigger matched=0
-# QC055_AlleyExclusionZoneRoseTrigger matched=0
+# QC020_Barnum matched=1
+# QC020_HeroNearStartOfAlleyTrigger matched=1
+# QC030_Balthazar matched=1
+# QC030_Arfur matched=1
+# QC040_Rex matched=1
+# QC040_BullyBlocker matched=1
+# QC040_HeroInAlleyTrigger matched=1
+# QC040_LookAtTrigger matched=1
+# QC040_BullyRun1 matched=1
+# QC040_BullyRun2 matched=1
+# QC040_Bully matched=1
+# QC040_Bully_2 matched=1
+# QC040_Bully_3 matched=1
+# QC040_Bully_4 matched=1
+# QC040_Bully_5 matched=1
+# QC040_Bully_6 matched=1
+# QC040_Bully_7 matched=1
+# QC040_Bully_8 matched=1
+# QC045_Monty matched=1
+# QC045_Deidre matched=1
+# QC045_Belinda matched=1
+# QC045_Door matched=1
+# QC045_PreludeLookAtTrigger matched=1
+# QC045_StartIntroTrigger matched=1
+# QC045_HeroRoseInsideHouseTrigger matched=1
+# QC045_HeroRoseNearDoorTrigger matched=1
+# QC045_HeroRoseUpstairsTrigger matched=1
+# QC045_DeidreInHouseTrigger matched=1
+# QC045_BelindaNearBalconyDoorTrigger matched=1
+# QC045_HeroOutHouseTrigger matched=1
+# QC050_Derek matched=1
+# QC050_Arfur matched=1
+# QC050_WarrantGround_1 matched=1
+# QC050_WarrantGround_2 matched=1
+# QC050_WarrantGround_3 matched=1
+# QC050_WarrantGround_4 matched=1
+# QC050_HeroNearDerekTrigger matched=1
+# QC050_RoseSpotDogTrigger matched=1
+# QC050_HeroInAlleyTrigger matched=1
+# QC050_HeroPastArfurTrigger matched=1
+# QC055_Betty matched=1
+# QC055_Pete matched=1
+# QC055_Magpie matched=1
+# QC055_NearMagpieTrigger matched=1
+# QC055_MagpieAreaTrigger matched=1
+# QC055_AlleyExclusionZoneRoseTrigger matched=1
 # QO060_GargoyleStatue matched=0
 # GargoyleKing matched=0
-# QC060_Theresa matched=0
-# QC060_Gatekeeper matched=0
-# QC060_CaravanLookAtStopTrigger matched=0
-# QC060_CaravanLookAtStopTrigger2 matched=0
-# QC060_TargetLockTutorialTrigger matched=0
-# QC060_NearCaravanTrigger matched=0
-# QC060_OffBridgeOuterTrigger matched=0
-# QC060_OffBridgeInnerTrigger matched=0
-# QC060_BigHoleTrigger matched=0
-# QC060_BottomOfDiveTrigger matched=0
-# QC060_BeetleTrigger matched=0
-# QC060_Corridor1Trigger matched=0
-# QC060_Corridor2Trigger matched=0
-# QC060_BowerlakeMarker matched=0
-# QC060_GuildCaveMarker matched=0
-# QC060_Skeleton1 matched=0
-# QC060_Skeleton2 matched=0
-# QC060_Skeleton3 matched=0
-# QC060_ExploreStartTrigger matched=0
-# QC060_ExploreEndTrigger matched=0
-# QC060_ChestLadderRoom matched=0
-# QC060_DropTrigger1 matched=0
-# QC060_FirstRoomBeetle matched=0
-# QC060_FlitRoomTrigger matched=0
-# QC060_FlitPoint1Trigger matched=0
-# QC060_FlitPoint2Trigger matched=0
-# QC060_FlitPoint3Trigger matched=0
-# QC060_ExpressionDoorMessageMarker matched=0
-# QC060_SideRoomTrigger matched=0
-# QC060_HeroAtFirstDoorTrigger matched=0
-# QC060_HeroAtSecondDoorTrigger matched=0
-# QC060_HeroInGuildTrigger matched=0
-# QC060_HeroNearCircleTrigger matched=0
-# QC060_HeroInLightTrigger matched=0
-# QC060_BridgeLightsTrigger matched=0
-# QC060_BigHoleLookAtTrigger matched=0
-# QC060_Corridor3PerceptionTrigger matched=0
-# QC060_ChestOvergrown matched=0
-# QC060_CullisFlitMessageMarker matched=0
-# QC060_FlitDogMessageMarker matched=0
-# QO900_DemonDoor matched=0
-# QO910_DemonDoor matched=0
-# QO920_DemonDoor matched=0
-# QO925_DemonDoor matched=0
-# QO930_DemonDoor matched=0
-# QO940_DemonDoor matched=0
-# QO950_DemonDoor matched=0
-# QO980_DemonDoor matched=0
-# QO990_DemonDoor matched=0
-# QO990_HouseSwitchTrigger matched=0
-# QJ001_JobWoodsmanSign_Active_Ravenscar1 matched=0
-# QJ001_JobWoodsmanSign_Active_Ravenscar2 matched=0
-# QJ001_JobWoodsmanSign_Active_Brightwood1 matched=0
-# QJ002_JobBlacksmithSign_Active_BWSMarket1 matched=0
-# QJ003_JobBartenderSign_Active_Ravenscar1 matched=0
-# QJ003_JobBartenderSign_Active_Bloodstone1 matched=0
-# QJ003_JobBartenderSign_Active_Westcliff1 matched=0
-# QJ003_JobBartenderSign_Active_BWSMarket1 matched=0
-# QJ003_JobBartenderSign_Active_Dunecrest1 matched=0
-# QC065_Bert matched=0
-# QC065_Ernie matched=0
-# QC065_LeaveFarTrigger matched=0
-# QC065_LeaveMidTrigger matched=0
-# QC065_LeaveNearTrigger matched=0
-# QC065_ESA_Door_Guild_Seal matched=0
-# QC065_DogSitRoadblockMarker matched=0
-# QC065_GypsyLeaving_1 matched=0
-# QC065_GypsyLeaving_2 matched=0
-# QC065_GypsyLeaving_4 matched=0
-# QC065_GypsyLeaving_3 matched=0
-# QC065_GypsyLeaving_5 matched=0
-# QO400_Derek matched=0
-# QO400_RevisitTriggerGood matched=0
-# QO060_GargoyleStatue matched=0
-# GargoyleKing matched=0
-# QC070_HillBeetleGenerator matched=0
-# QC070_HeroOnTeleportTrigger matched=0
-# QC070_HeroLeftHillTrigger matched=0
-# QC070_BeetleHill matched=0
-# QC070_ThagDude matched=0
-# QC070_CrescendoMarker matched=0
-# QC070_HeroInCampTrigger matched=0
-# QC070_HeroInCampGateTrigger matched=0
-# ESA_Door_Farmhouse_Breakable matched=0
-# QC070_IntroBandits matched=0
+# QC010_VillagerA matched=1
+# QC010_VillagerB matched=1
 
 # WAITS entered (frame  thread  :primitive) - the tail entries are the GATES:
 0 QO900_DemonDoorDunecrest :WaitFor pred@?:94
@@ -370,35 +351,44 @@
 0 QO990_DemonDoorBloodstone :WaitFor pred@?:41
 0 QO990_DemonDoorBloodstone :WaitFor RETURNED
 0 QC050_Wanted :WaitFor pred@?:97
-1 QO900_DemonDoorDunecrest :WaitFor pred@?:94
-1 QO900_DemonDoorDunecrest :WaitFor RETURNED
-1 QO920_DemonDoorWestcliffPreCave :WaitFor pred@?:34
-1 QO920_DemonDoorWestcliffPreCave :WaitFor RETURNED
-1 QO925_DemonDoorBrightwood_2 :WaitFor pred@?:41
-1 QO925_DemonDoorBrightwood_2 :WaitFor RETURNED
-1 QO930_DemonDoorBowerLake :WaitFor pred@?:35
-1 QO930_DemonDoorBowerLake :WaitFor RETURNED
-1 QO940_DemonDoorBrightwood :WaitFor pred@?:64
-1 QO940_DemonDoorBrightwood :WaitFor RETURNED
-1 QO950_DemonDoorHobbesCave :WaitFor pred@?:34
-1 QO950_DemonDoorHobbesCave :WaitFor RETURNED
-1 QO990_DemonDoorBloodstone :WaitFor pred@?:41
-1 QO990_DemonDoorBloodstone :WaitFor RETURNED
-1 QC065_Roadblock :WaitFor pred@?:93
-1 QC070_Thag :WaitForTimeInSeconds arg=0.8
+0 ? :WaitForTimeInSeconds arg=2
+0 ? :WaitFor pred@?:2766
+0 ? :WaitFor pred@?:4004
+0 ? :WaitForTriggerToFire cutscene=nil
+0 ? :WaitFor pred@?:2991
+0 ? :WaitFor RETURNED
+0 ? :WaitFor pred@?:2995
+0 ? :WaitForTimeInSeconds arg=3
+0 ? :WaitFor pred@?:3703
+0 ? :WaitForTimeInSeconds arg=4
+0 ? :WaitFor pred@?:646
+0 ? :WaitFor pred@?:627
+0 ? :PlayCutscene cutscene=QC055_MagpieIntoSleep
+0 ? :PlayCutscene RETURNED
+1 QC010_Childhood :WaitFor pred@?:635
+119 ? :WaitForTimeInSeconds RETURNED
+119 ? :PlayCutscene cutscene=QC010_JeevesGreet
+119 ? :PlayCutscene cutscene=QC010_GuardMorning
+120 ? :PlayCutscene RETURNED
+179 ? :WaitForTimeInSeconds RETURNED
+179 ? :PlayCutscene cutscene=QC010_JeevesGreet
+180 ? :PlayCutscene RETURNED
+181 ? :PlayCutscene cutscene=QC010_JeevesToStudy
+181 ? :PlayCutscene RETURNED
+239 ? :WaitForTimeInSeconds RETURNED
 # re-entered most (a re-entered wait is polling; a once-entered wait is parked):
-# 1x  0 QC050_Wanted :WaitFor pred@?:97
-# 1x  0 QO900_DemonDoorDunecrest :WaitFor RETURNED
-# 1x  0 QO900_DemonDoorDunecrest :WaitFor pred@?:94
-# 1x  0 QO920_DemonDoorWestcliffPreCave :WaitFor RETURNED
-# 1x  0 QO920_DemonDoorWestcliffPreCave :WaitFor pred@?:34
-# 1x  0 QO925_DemonDoorBrightwood_2 :WaitFor RETURNED
-# 1x  0 QO925_DemonDoorBrightwood_2 :WaitFor pred@?:41
-# 1x  0 QO930_DemonDoorBowerLake :WaitFor RETURNED
-# 1x  0 QO930_DemonDoorBowerLake :WaitFor pred@?:35
-# 1x  0 QO940_DemonDoorBrightwood :WaitFor RETURNED
-# 1x  0 QO940_DemonDoorBrightwood :WaitFor pred@?:64
-# 1x  0 QO950_DemonDoorHobbesCave :WaitFor RETURNED
+# 5x  0 ? :WaitForTriggerToFire cutscene=nil
+# 2x  0 ? :WaitForTimeInSeconds arg=2
+# 2x  119 ? :WaitForTimeInSeconds RETURNED
+# 2x  120 ? :PlayCutscene RETURNED
+# 1x  0 ? :WaitFor RETURNED
+# 1x  0 ? :WaitFor pred@?:2766
+# 1x  0 ? :WaitFor pred@?:2991
+# 1x  0 ? :WaitFor pred@?:2995
+# 1x  0 ? :WaitFor pred@?:3703
+# 1x  0 ? :WaitFor pred@?:4004
+# 1x  0 ? :WaitFor pred@?:627
+# 1x  0 ? :WaitFor pred@?:646
 
 # where the quest coroutines are parked (the gate to open next):
 # [stall] _G.Fable2Scripts.Henchman_SuckExperienceTracker.co_update status=suspended quest=? state=nil at yield@-1<-?@4027
@@ -412,62 +402,192 @@
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.4.co_update status=suspended quest=? state=0 at yield@-1<-?@25
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.5.co_update status=suspended quest=? state=0 at yield@-1<-?@29
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.6.co_update status=suspended quest=? state=0 at yield@-1<-?@24
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.7.co_update status=suspended quest=? state=nil at yield@-1<-?@678
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.8.co_update status=suspended quest=? state=nil at yield@-1<-?@604
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.9.co_update status=suspended quest=? state=nil at yield@-1<-?@1828
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.10.co_update status=suspended quest=? state=nil at yield@-1<-?@989
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.11.ObjTracker.co_update status=suspended quest=QRCS001_CommunityService state=nil at yield@-1<-?@39
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.11.ConditionCheckThread.co_update status=dead quest=? state=nil at ?@239
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.11.co_update status=suspended quest=QRCS001_CommunityService state=nil at yield@-1<-?@164
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.co_update status=suspended quest=QO900_DemonDoorDunecrest state=nil at yield@-1<-?@89
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.13.co_update status=suspended quest=QO910_DemonDoorRavenscar state=nil at yield@-1<-?@34
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.14.co_update status=suspended quest=QO920_DemonDoorWestcliffPreCave state=nil at yield@-1<-?@28
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.15.co_update status=suspended quest=QO925_DemonDoorBrightwood_2 state=nil at yield@-1<-?@34
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.16.co_update status=suspended quest=QO930_DemonDoorBowerLake state=nil at yield@-1<-?@29
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.17.co_update status=suspended quest=QO940_DemonDoorBrightwood state=nil at yield@-1<-?@35
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.18.co_update status=suspended quest=QO950_DemonDoorHobbesCave state=nil at yield@-1<-?@27
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.19.co_update status=suspended quest=QO980_DemonDoorBWSCemetery state=nil at yield@-1<-?@85
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.20.co_update status=suspended quest=QO990_DemonDoorBloodstone state=nil at yield@-1<-?@34
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.21.co_update status=suspended quest=QJ001_JobWoodsman state=nil at yield@-1<-?@100
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.22.co_update status=suspended quest=QJ002_JobBlacksmith state=nil at yield@-1<-?@79
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.23.co_update status=suspended quest=QJ003_JobBartender state=nil at yield@-1<-?@143
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.24.co_update status=suspended quest=QC020_PoseForPicture state=nil at yield@-1<-?@82
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.25.ShootTutorialThread.co_update status=suspended quest=QC030_BeetleHunter state=nil at yield@-1<-?@782
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.25.co_update status=suspended quest=QC030_BeetleHunter state=nil at yield@-1<-?@92
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.26.co_update status=suspended quest=QC040_BulliesAndDog state=0 at yield@-1<-?@59
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.27.GiveLetterEarlyThread.co_update status=suspended quest=? state=nil at yield@-1<-?@1327
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.27.ChildThreads.1.co_update status=suspended quest=QC045_LoveLetter state=0 at yield@-1<-?@1259
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.27.co_update status=suspended quest=QC045_LoveLetter state=0 at yield@-1<-?@79
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.1.co_update status=suspended quest=? state=nil at yield@-1<-?@939
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.2.co_update status=suspended quest=? state=nil at yield@-1<-?@1024
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.co_update status=suspended quest=QC050_Wanted state=nil at yield@-1<-f@764<-WaitFor@7<-?@87
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.1.co_update status=suspended quest=QC055_Wino state=nil at yield@-1<-?@971
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.2.co_update status=suspended quest=? state=nil at yield@-1<-?@1017
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.co_update status=suspended quest=QC055_Wino state=0 at yield@-1<-?@60
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.co_update status=suspended quest=QO060_Gargoyles state=nil at yield@-1<-?@53
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ObjTracker.co_update status=suspended quest=QRCS001_CommunityService state=nil at yield@-1<-?@39
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ConditionCheckThread.co_update status=dead quest=? state=nil at ?@239
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.co_update status=suspended quest=QRCS001_CommunityService state=nil at yield@-1<-?@164
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.32.co_update status=suspended quest=QO900_DemonDoorDunecrest state=nil at yield@-1<-?@89
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.33.co_update status=suspended quest=QO910_DemonDoorRavenscar state=nil at yield@-1<-?@34
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.34.co_update status=suspended quest=QO920_DemonDoorWestcliffPreCave state=nil at yield@-1<-?@28
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.35.co_update status=suspended quest=QO925_DemonDoorBrightwood_2 state=nil at yield@-1<-?@34
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.36.co_update status=suspended quest=QO930_DemonDoorBowerLake state=nil at yield@-1<-?@29
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.37.co_update status=suspended quest=QO940_DemonDoorBrightwood state=nil at yield@-1<-?@35
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.38.co_update status=suspended quest=QO950_DemonDoorHobbesCave state=nil at yield@-1<-?@27
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.39.co_update status=suspended quest=QO980_DemonDoorBWSCemetery state=nil at yield@-1<-?@85
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.40.co_update status=suspended quest=QO990_DemonDoorBloodstone state=nil at yield@-1<-?@34
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.41.co_update status=suspended quest=QJ001_JobWoodsman state=nil at yield@-1<-?@100
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.42.co_update status=suspended quest=QJ002_JobBlacksmith state=nil at yield@-1<-?@79
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.43.co_update status=suspended quest=QJ003_JobBartender state=nil at yield@-1<-?@143
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.44.co_update status=suspended quest=QC065_Roadblock state=nil at yield@-1<-f@764<-WaitFor@7<-?@47
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.45.co_update status=suspended quest=QO060_Gargoyles state=nil at yield@-1<-?@53
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.46.XPCheckThread.co_update status=suspended quest=? state=nil at yield@-1<-?@1186
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.46.co_update status=suspended quest=QC070_Thag state=nil at yield@-1<-f@775<-WaitForTimeInSeconds@7<-?@63
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.7.co_update status=suspended quest=? state=nil at yield@-1<-?@1666
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.8.co_update status=suspended quest=? state=nil at yield@-1<-?@678
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.9.co_update status=suspended quest=? state=nil at yield@-1<-?@604
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.10.co_update status=suspended quest=? state=nil at yield@-1<-?@1828
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.11.co_update status=suspended quest=? state=nil at yield@-1<-?@989
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.QC010_GenericEventManager.co_update status=suspended quest=QC010_Childhood state=0 at yield@-1<-?@4238
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.PackRatThread.co_update status=dead quest=? state=nil at ?@4309
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.1.custom_update status=suspended quest=? state=21 at yield@-1<-?@1411
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.1.co_update status=suspended quest=? state=21 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.2.custom_update status=suspended quest=? state=0 at yield@-1<-?@2532
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.2.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.3.custom_update status=suspended quest=? state=0 at yield@-1<-f@764<-WaitFor@7<-?@2753
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.3.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.4.custom_update status=suspended quest=? state=0 at yield@-1<-?@2867
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.4.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.5.custom_update status=suspended quest=? state=nil at yield@-1<-f@764<-WaitFor@7<-?@4000
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.5.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.6.custom_update status=suspended quest=? state=0 at yield@-1<-f@729<-WaitForTriggerToFire@7<-?@4053
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.6.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.7.custom_update status=suspended quest=? state=nil at yield@-1<-?@2941
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.7.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.8.custom_update status=suspended quest=? state=nil at yield@-1<-f@764<-WaitFor@7<-?@2986
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.8.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.9.custom_update status=suspended quest=? state=2 at yield@-1<-?@3050
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.9.co_update status=suspended quest=? state=2 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.10.custom_update status=suspended quest=? state=16 at yield@-1<-?@3130
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.10.co_update status=suspended quest=? state=16 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.11.custom_update status=suspended quest=? state=0 at yield@-1<-f@764<-WaitFor@7<-?@3696
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.11.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.12.custom_update status=suspended quest=? state=nil at yield@-1<-f@729<-WaitForTriggerToFire@7<-?@3720
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.12.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.14.custom_update status=suspended quest=? state=0 at yield@-1<-?@3742
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.14.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.15.custom_update status=suspended quest=? state=0 at yield@-1<-?@3789
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.15.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.co_update status=suspended quest=QC010_Childhood state=nil at yield@-1<-f@764<-WaitFor@7<-?@401
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.13.ObjTracker.co_update status=suspended quest=QRCS001_CommunityService state=nil at yield@-1<-?@39
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.13.ConditionCheckThread.co_update status=dead quest=? state=nil at ?@239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.13.co_update status=suspended quest=QRCS001_CommunityService state=nil at yield@-1<-?@164
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.14.co_update status=suspended quest=QO900_DemonDoorDunecrest state=nil at yield@-1<-?@89
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.15.co_update status=suspended quest=QO910_DemonDoorRavenscar state=nil at yield@-1<-?@34
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.16.co_update status=suspended quest=QO920_DemonDoorWestcliffPreCave state=nil at yield@-1<-?@28
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.17.co_update status=suspended quest=QO925_DemonDoorBrightwood_2 state=nil at yield@-1<-?@34
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.18.co_update status=suspended quest=QO930_DemonDoorBowerLake state=nil at yield@-1<-?@29
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.19.co_update status=suspended quest=QO940_DemonDoorBrightwood state=nil at yield@-1<-?@35
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.20.co_update status=suspended quest=QO950_DemonDoorHobbesCave state=nil at yield@-1<-?@27
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.21.co_update status=suspended quest=QO980_DemonDoorBWSCemetery state=nil at yield@-1<-?@85
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.22.co_update status=suspended quest=QO990_DemonDoorBloodstone state=nil at yield@-1<-?@34
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.23.co_update status=suspended quest=QJ001_JobWoodsman state=nil at yield@-1<-?@100
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.24.co_update status=suspended quest=QJ002_JobBlacksmith state=nil at yield@-1<-?@79
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.25.co_update status=suspended quest=QJ003_JobBartender state=nil at yield@-1<-?@143
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.26.ChildThreads.1.custom_update status=suspended quest=? state=0 at yield@-1<-?@269
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.26.ChildThreads.1.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.26.ChildThreads.2.custom_update status=suspended quest=? state=nil at yield@-1<-?@883
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.26.ChildThreads.2.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.26.co_update status=suspended quest=QC020_PoseForPicture state=nil at yield@-1<-?@82
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.27.ShootTutorialThread.co_update status=suspended quest=QC030_BeetleHunter state=nil at yield@-1<-?@782
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.27.ChildThreads.1.custom_update status=suspended quest=? state=0 at yield@-1<-?@323
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.27.ChildThreads.1.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.27.ChildThreads.2.custom_update status=suspended quest=? state=0 at yield@-1<-?@543
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.27.ChildThreads.2.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.27.co_update status=suspended quest=QC030_BeetleHunter state=nil at yield@-1<-?@92
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.1.custom_update status=suspended quest=? state=0 at yield@-1<-?@417
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.1.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.2.custom_update status=suspended quest=? state=0 at yield@-1<-?@669
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.2.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.3.custom_update status=suspended quest=? state=nil at yield@-1<-f@764<-WaitFor@7<-?@643
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.3.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.4.custom_update status=suspended quest=? state=nil at yield@-1<-f@764<-WaitFor@7<-?@624
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.4.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.5.custom_update status=suspended quest=? state=nil at yield@-1<-?@842
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.5.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.6.custom_update status=suspended quest=? state=nil at yield@-1<-?@842
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.6.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.7.custom_update status=suspended quest=? state=0 at yield@-1<-?@731
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.7.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.8.custom_update status=suspended quest=? state=nil at yield@-1<-?@792
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.8.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.9.custom_update status=suspended quest=? state=nil at yield@-1<-?@792
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.9.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.10.custom_update status=suspended quest=? state=nil at yield@-1<-?@792
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.10.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.11.custom_update status=suspended quest=? state=nil at yield@-1<-?@792
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.11.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.12.custom_update status=suspended quest=? state=nil at yield@-1<-?@792
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.12.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.13.custom_update status=suspended quest=? state=nil at yield@-1<-?@792
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.13.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.14.custom_update status=suspended quest=? state=nil at yield@-1<-?@792
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.ChildThreads.14.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.28.co_update status=suspended quest=QC040_BulliesAndDog state=0 at yield@-1<-?@59
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.GiveLetterEarlyThread.co_update status=suspended quest=? state=nil at yield@-1<-?@1327
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.1.custom_update status=suspended quest=? state=0 at yield@-1<-?@416
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.1.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.2.custom_update status=suspended quest=? state=0 at yield@-1<-?@572
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.2.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.3.custom_update status=suspended quest=? state=0 at yield@-1<-?@830
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.3.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.4.custom_update status=suspended quest=? state=nil at yield@-1<-?@938
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.4.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.5.custom_update status=suspended quest=? state=nil at yield@-1<-?@997
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.5.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.6.custom_update status=suspended quest=? state=nil at yield@-1<-?@1039
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.6.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.7.custom_update status=suspended quest=? state=nil at yield@-1<-?@1083
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.7.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.8.custom_update status=suspended quest=? state=nil at yield@-1<-?@1112
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.8.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.9.custom_update status=suspended quest=? state=nil at yield@-1<-?@1141
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.9.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.10.custom_update status=suspended quest=? state=nil at yield@-1<-?@1170
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.10.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.11.custom_update status=suspended quest=? state=nil at yield@-1<-?@1220
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.11.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.12.custom_update status=suspended quest=? state=nil at yield@-1<-?@1194
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.12.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.ChildThreads.13.co_update status=suspended quest=QC045_LoveLetter state=0 at yield@-1<-?@1259
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.29.co_update status=suspended quest=QC045_LoveLetter state=0 at yield@-1<-?@79
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.1.custom_update status=suspended quest=? state=0 at yield@-1<-?@339
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.1.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.2.custom_update status=suspended quest=? state=nil at yield@-1<-f@729<-WaitForTriggerToFire@7<-?@875
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.2.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.3.custom_update status=suspended quest=? state=nil at yield@-1<-?@829
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.3.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.4.custom_update status=suspended quest=? state=nil at yield@-1<-f@729<-WaitForTriggerToFire@7<-?@898
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.4.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.5.custom_update status=suspended quest=? state=nil at yield@-1<-f@729<-WaitForTriggerToFire@7<-?@918
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.5.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.6.co_update status=suspended quest=? state=nil at yield@-1<-?@939
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.ChildThreads.7.co_update status=suspended quest=? state=nil at yield@-1<-?@1024
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.30.co_update status=suspended quest=QC050_Wanted state=nil at yield@-1<-f@764<-WaitFor@7<-?@87
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.1.custom_update status=suspended quest=? state=0 at yield@-1<-?@454
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.1.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.2.custom_update status=suspended quest=? state=0 at yield@-1<-?@713
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.2.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.3.custom_update status=suspended quest=? state=nil at yield@-1<-?@873
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.3.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.4.custom_update status=suspended quest=? state=nil at yield@-1<-?@902
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.4.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.5.custom_update status=suspended quest=? state=nil at yield@-1<-?@931
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.5.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.6.co_update status=suspended quest=QC055_Wino state=nil at yield@-1<-?@971
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.ChildThreads.7.co_update status=suspended quest=? state=nil at yield@-1<-?@1017
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.31.co_update status=suspended quest=QC055_Wino state=0 at yield@-1<-?@60
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.32.co_update status=suspended quest=QO060_Gargoyles state=nil at yield@-1<-?@53
 # [stall] _G.Fable2Scripts.Hero_AbilityPowerUpTracker.co_update status=suspended quest=? state=nil at yield@-1<-?@3882
 # [stall] _G.Fable2Scripts.Henchman_DeathTracker.co_update status=suspended quest=? state=nil at yield@-1<-?@3772
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12 id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.QC010_GenericEventManager id=QC010_Childhood state=0 co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.QC010_GenericEventManager.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.QC010_GenericEventManager.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.PackRatThread.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.PackRatThread.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.1.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.1.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.2.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.2.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.3.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.3.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.4.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.4.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.5.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.5.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.6.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.6.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.7.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.7.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.8.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.8.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.9.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.9.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.10.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.10.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.11.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.11.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.12.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.12.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.13 id=QC010_Childhood state=0 co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.14.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.14.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.15.ParentThread id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.15.ParentQuest id=QC010_Childhood state=nil co=suspended update=nil
+# [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.Childhood id=QC010_Childhood state=nil co=suspended update=nil
 # [stall] QC010 OBJECT at _G.Fable2Scripts.Gameflow.DebugQuestStartTable.1 id=QC010_Childhood state=nil co=none update=nil
-# [stall] Gameflow.Childhood = nil
+# [stall] QC010 OBJECT at _G.BaseObjects.QuestManager.CurrentlyRunningQuestsListEnd.prev.prev.value id=QC010_Childhood state=0 co=suspended update=nil
+# [stall] Gameflow.Childhood = table _Name=nil co=suspended state=nil
 # [stall] Gameflow.WeaponNames = table
 # [stall] scan done, QuestManager=table debug=table
 
@@ -488,6 +608,7 @@
 0 Layers.GetActiveScenarioForLevel
 0 LevelExit.GetECType
 0 SearchTools.FilterWithEC
+0 AIManager.SetCanRunMoveAwayFromAreaBehaviour
 0 AIManager.DisableSimBehaviours
 0 QuestTracker.Unlock
 0 QuestTracker.SetAsActive
@@ -504,9 +625,48 @@
 0 GetDog()
 0 Dog.IsInjured
 0 TriggerVolumeExclusionZone.GetECType
+0 GraphEdgeController.SetLocked
 0 QuestTracker.GetPrimaryQuestName
 0 Layers.IsLayerActive
+0 Trigger.GetBoundingRadius
+0 SearchTools.FilterWithinDistanceOfPos
+0 Breakable.GetECType
+0 Navigation.SetIsImportant
+0 PhysicsCharacter.SetAsPushableByHero
+0 OpinionReaction.SetRespondToExpressions
+0 Health.SetAsInvulnerable
+0 ModeManager.AddModeByEnumWithAnimGroupName
+0 Player.SetInterestingHighlightingAsEnabled
+0 Trigger.SetToTriggerOnSpecificEntity
+0 Targeted.SetAsTargetable
+0 GroupMindManager.GetCutsceneGroupMind
+0 GUI.SetDPadEnabled
+0 Timing.SetTimeOfDay
+0 Trigger.IsSpecificTriggerEntityInsideTriggerVolume
 0 Player.RemoveAllScriptRules
+0 Trigger.AreAllTriggerEntitiesInsideTriggerVolume
+0 GUI.AddWorldIcon
+0 Creature.SetAsInteresting
+0 Combat.SetCanFight
+0 Combat.SetCanFlee
+0 Faction.AddTemporaryEntityRelationship
+0 Health.SetCantDie
+0 GetPlayerHenchman()
+0 Mood.SetMoodState
+0 OpinionReaction.IsAvailable
+0 OpinionReaction.SetCanDrawOpinionIcons
+0 AIManager.EnableSimBehaviours
+0 GossipEC.AddLabel
+0 PhysicsCharacter.SetAsAbleToPushCharacters
+0 Villager.SetHome
+0 Building.SetCanAutoCloseDoors
+0 Door.SetOpen
+0 Door.SetLocked
+0 GetBreadcrumbEntity()
+0 Door.SetOpenForEntity
+0 Navigation.SetMovementPaused
+0 GraphicAppearance.SetTintColour
+0 Faction.IsAvailable
 0 IsHeroPlayerPlayingWithSaveGame()
 0 Gender.Get
 0 Player.ChangePlayerEntityType
@@ -516,16 +676,10 @@
 0 Player.SetFastTravelStopActivationAsEnabled
 0 ExperienceOrb.SetAsEnabled
 0 Player.SetExperienceSpendingAsEnabled
-0 GUI.SetDPadEnabled
 0 Player.SetMapScreenAsEnabled
 0 Player.SetPauseMenuInfoPageAsEnabled
 0 Bed.GetECType
 0 Player.SetSafetyModeSuggestable
-0 Health.SetAsInvulnerable
-0 Door.SetOpen
-0 Door.SetLocked
-0 Targeted.SetAsTargetable
-0 Timing.SetTimeOfDay
 0 Timing.SetTimeAsStopped
 0 Inventory.AddItemOfType
 0 Inventory.InstantiateItemOfType
@@ -533,32 +687,16 @@
 0 Carrying.PutEntityInSlot
 0 TutorialManager.CompleteTutorial
 0 GroupEvent.CreateCrowdControl
-0 Age.SetAgeGroup
-0 IsDistanceBetweenThingsOver()
-0 DemonDoor.IsFaceOut
-0 GetPlayerHenchman()
-1 IsLoadedFromSaveGame()
-1 Stats.SetRegionPerceivedRenown
-1 WorldMapInfo.EnableGargoyles
-1 Stats.SetTitleAsFreeToBuy
-1 Age.SetAgeLimit
-1 Age.SetAge
-1 AllowHenchman()
-1 Inventory.GetInitialHeroMeleeWeapon
-1 Inventory.GetInitialHeroRangedWeapon
-1 AmbientPopulationManager.SetInterestingAreasEnabled
-1 Vaulting.SetTutorialAsEnabled
-1 Inventory.RemoveAllItemsOfType
-1 Inventory.RemoveAllItemsOfCategory
-1 Dog.SetDisableNonEssentialBehaviour
-1 Villager.GetECType
-1 FastTravel.SetBlockedTextTag
-1 AmbientPopulationManager.IsAmbientPopulationDisabled
-1 AmbientPopulationManager.DisableAmbientPopulationInLevel
-1 Transient.GetECType
-1 AmbientPopulationManager.AreGuardsDisabled
-1 Village.GetECType
-1 SoundTools.PlayMusic
-1 Player.AddScriptRules
+0 GUI.PlayMovieInternal
+0 Inventory.GetNumberOfItemsOfCategory
+1 GraphicAppearance.SetFadedByCamera
 1 Player.SetOverrideCameraMode
 1 Player.IsAvailable
+1 SoundTools.PlayMusicAndAtmosForLevel
+1 SoundTools.SetMusicAndAtmosToStartOnNextLevelLoad
+1 GUI.UnlockScreenFade
+1 GUI.FadeScreenIn
+120 Follow.FollowEntity
+121 Navigation.IsAvailable
+121 Shard.IsAvailable
+179 SoundTools.PlayMusic

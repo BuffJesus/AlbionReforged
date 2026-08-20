@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <cstdio>
 #include <stdexcept>
 #include <string_view>
 
@@ -421,9 +422,27 @@ void NativeGame::prepare_world() {
 //                                                                 fields instead of looking up
 // A SayLine's TextTag resolves through the game's own localised text, so the port speaks the
 // game's words. FLAGGED: beats are emitted instantly, with no timing, camera or animation.
+std::uint32_t NativeGame::gdb_token_for(std::uint32_t guid) {
+    for (std::size_t i = 0; i < gdb_id_tokens_.size(); ++i)
+        if (gdb_id_tokens_[i] == guid) return static_cast<std::uint32_t>(i + 1);
+    gdb_id_tokens_.push_back(guid);
+    return static_cast<std::uint32_t>(gdb_id_tokens_.size());
+}
+
+std::uint32_t NativeGame::gdb_guid_for_token(std::uint32_t token) const {
+    if (token == 0 || token > gdb_id_tokens_.size()) return 0;
+    return gdb_id_tokens_[token - 1];
+}
+
 int NativeGame::perform_cutscene(std::uint32_t record_id) {
     if (record_id == 0) return 0;
     const auto elements = gdb.field_raw(record_id, "SceneElements", gdb::kTypeRecord);
+    {   // Trace every performance attempt: which record, and whether it had a beat list at all.
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "[cutscene-perform] record 0x%08X elements=%s", record_id,
+                      elements ? "yes" : "NONE");
+        script_log.push_back(buf);
+    }
     if (!elements) return 0;
 
     int performed = 0;
@@ -567,7 +586,12 @@ void NativeGame::tick(double delta_seconds) {
                 for (const auto& c : cutscenes) {
                     if (c.frames_left > 0) continue;
                     perform_cutscene(c.record_id);   // speak its SayLine beats before finishing
-                    messages.post(kIcfs, c.entity, c.entity, static_cast<double>(c.record_id));
+                    // The finish message must carry the SAME token the script will compare
+                    // against (CheckForInteractiveCutsceneFinished tests
+                    // msg:GetExtraDataAsID() == GDB.GetRecord(name):GetID()), so post the token,
+                    // not the GUID.
+                    messages.post(kIcfs, c.entity, c.entity,
+                                  static_cast<double>(gdb_token_for(c.record_id)));
                 }
                 cutscenes.erase(std::remove_if(cutscenes.begin(), cutscenes.end(),
                                                [](const auto& c) { return c.frames_left <= 0; }),

@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <random>
 #include <string>
 
@@ -178,6 +179,11 @@ std::uint64_t ensure_hero(NativeGame& g) {
 // miscfunctions.lua:161-191). Pack a string big-endian into the same int space so a posted type
 // and a queried type agree. Codes are 4 ASCII chars, so this never collides with the small
 // enum values EMessageEventType uses.
+// The handle used for a GDB record that does not exist (a missing type-6 field). It must be
+// NON-ZERO because push_handle maps 0 to nil, and the scripts index the result without checking.
+// rec:GetID() reports 0 for it, which is what "no record" means to the callers.
+constexpr std::uint64_t kNullGdbRecord = 0xFFFFFFFFull;
+
 int message_type_arg(NativeScriptVM& v, int index) {
     const char* s = v.arg_string(index);
     if (s && *s && !(s[0] >= '0' && s[0] <= '9') && s[0] != '-') {
@@ -759,7 +765,12 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
     // (ScriptFunction.StartCutscene, miscfunctions.lua:68) — so the id a record reports IS the
     // key the engine tracks it by, which is exactly the GUID this handle carries.
     vm.register_object_method("GdbRecord", "GetID", [](NativeScriptVM& v) -> int {
-        v.push_number(static_cast<double>(v.arg_handle(1)));
+        auto* g = game_of(v);
+        const std::uint64_t id = v.arg_handle(1);
+        if (!g || id == kNullGdbRecord) { v.push_number(0.0); return 1; }
+        // A dense TOKEN, not the raw GUID — lua_Number is float32 here, which cannot hold a
+        // 32-bit id exactly (see NativeGame::gdb_token_for).
+        v.push_number(static_cast<double>(g->gdb_token_for(static_cast<std::uint32_t>(id))));
         return 1;
     });
     // rec:GetRecord(field) -> the sub-record a type-6 field points at, as another record handle.
@@ -773,8 +784,16 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
                              ? g->gdb.field_raw(static_cast<std::uint32_t>(v.arg_handle(1)), field,
                                                 gdb::kTypeRecord)
                              : std::nullopt;
-        if (!raw) { v.push_nil(); return 1; }
-        v.push_handle("GdbRecord", *raw);
+        // A MISSING field yields a NULL RECORD (guid 0), not nil. Grounded in how the scripts use
+        // it: QuestEntityThreadBase.IsCutsceneInRange does
+        //     local area = cutscene:GetRecord("TriggerArea")   ... area:GetID() ...
+        // with NO nil check, and `TriggerArea` is absent on every childhood cutscene (verified
+        // against interactivecutscenes.gdb) — so retail cannot be returning nil here, or the game
+        // would crash on its own data. The null record answers GetID()=0, which
+        // EntityManager.GetEntityFromRecordID resolves to "no entity", and the code falls through
+        // to its distance test. (GDB.GetRecord(NAME) still returns nil for an unknown NAME — that
+        // one IS nil-checked, which is why GDB.RecordExists exists at all.)
+        v.push_handle("GdbRecord", raw ? *raw : kNullGdbRecord);
         return 1;
     });
     // rec:GetString(field) -> a type-4 field, resolved through the file's interned string table.
@@ -845,20 +864,35 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
     // AIManager:RequestCutsceneOnEntity(entity, recordId, opts) — ScriptFunction.StartCutscene
     // (miscfunctions.lua:64-68) queues the cutscene here, then yields until
     // HasStartedInteractiveCutscene reports it running.
+    // ⚠ ARG POSITIONS: the scripts call this METHOD-style, so `self` (AIManager) is arg 1 —
+    //     AIManager:RequestCutsceneOnEntity(entity, record:GetID(), opts)
+    // (ScriptFunction.StartCutscene, miscfunctions.lua:64-68). Reading the entity from arg 1 and
+    // the id from arg 2 silently yields id 0 and drops every request on the floor, which is
+    // exactly what happened: StartCutscene ran with a good entity and cutscene name, and not one
+    // cutscene was ever queued.
     vm.register_native("AIManager", "RequestCutsceneOnEntity", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
         if (!g) return 0;
-        const auto record_id = static_cast<std::uint32_t>(v.arg_number(2));
+        const std::uint64_t entity = v.arg_handle(2);
+        // arg 3 is the TOKEN rec:GetID() handed out, not the GUID (float32 lua_Number).
+        const auto record_id =
+            g->gdb_guid_for_token(static_cast<std::uint32_t>(v.arg_number(3)));
         if (record_id == 0) return 0;
         for (const auto& c : g->cutscenes)
             if (c.record_id == record_id) return 0;  // already queued
-        g->cutscenes.push_back({v.arg_handle(1), record_id, g->cutscene_frames});
+        g->cutscenes.push_back({entity, record_id, g->cutscene_frames});
+        // Trace: a cutscene reaching REQUEST is the milestone that gates every beat behind it.
+        g->script_log.push_back("[cutscene-request] record 0x" + [record_id] {
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%08X", record_id);
+            return std::string(buf);
+        }());
         return 0;
     });
     vm.register_native("AIManager", "ClearCutsceneOnEntity", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
         if (!g) return 0;
-        const std::uint64_t e = v.arg_handle(1);
+        const std::uint64_t e = v.arg_handle(2);   // method-style: self is arg 1
         g->cutscenes.erase(std::remove_if(g->cutscenes.begin(), g->cutscenes.end(),
                                           [e](const auto& c) { return c.entity == e; }),
                            g->cutscenes.end());
@@ -938,6 +972,33 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
     vm.register_native("GroupMindManager", "GetCutsceneGroupMindContainingEntity",
                        [](NativeScriptVM& v) -> int {
         v.push_nil();
+        return 1;
+    });
+
+    // EntityManager.GetEntityFromRecordID(id) -> the live entity spawned from a GDB record, or
+    // nil. The port keeps no record->entity map, so nothing resolves and nil is the honest answer.
+    // It matters: IsCutsceneInRange asks for the entity behind a cutscene's TriggerArea, and the
+    // auto-stub's truthy black hole made the code believe a trigger-volume entity existed and then
+    // fail its Trigger-EC check — instead of falling through to the distance test it should use.
+    vm.register_native("EntityManager", "GetEntityFromRecordID", [](NativeScriptVM& v) -> int {
+        v.push_nil();
+        return 1;
+    });
+    // IsDistanceBetweenThingsOver(a, b, dist) — the inverse of ...Under, same contract.
+    // QuestEntityThreadBase.ShouldCutsceneTerminate (questmanager.lua:2048) uses it to end a
+    // cutscene when the player walks away: `opts.PlayerDistance and IsDistanceBetweenThingsOver(
+    // self.Entity, QuestManager.HeroEntity, opts.PlayerDistance)`. As a stub it answered TRUTHY —
+    // "the player has already left" — which would terminate every cutscene the moment it started.
+    vm.register_global("IsDistanceBetweenThingsOver", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const TransformComponent* a = g ? entity_transform(*g, v.arg_handle(1)) : nullptr;
+        const TransformComponent* b = g ? entity_transform(*g, v.arg_handle(2)) : nullptr;
+        const double limit = v.arg_number(3);
+        if (!a || !b) { v.push_bool(false); return 1; }
+        const double dx = static_cast<double>(a->position[0]) - b->position[0];
+        const double dy = static_cast<double>(a->position[1]) - b->position[1];
+        const double dz = static_cast<double>(a->position[2]) - b->position[2];
+        v.push_bool(dx * dx + dy * dy + dz * dz > limit * limit);
         return 1;
     });
 

@@ -189,6 +189,21 @@ struct NativeGame {
     // dialogue real and observable; STAGING it is the next step.
     int perform_cutscene(std::uint32_t record_id);
 
+    // GDB record ids handed to SCRIPT must be small integers, not raw GUIDs.
+    // This VM uses float32 as lua_Number (to stay bytecode-compatible with the game's LuaQ), and
+    // a float32 has 24 mantissa bits — so a 32-bit GUID does not survive a round trip: measured,
+    // rec:GetID() on QC010_JeevesGreet (0x8EB51907) came back as 0x8EB51900 and every lookup
+    // missed. Retail tolerates the same rounding because scripts only ever COMPARE ids
+    // (CheckForInteractiveCutsceneFinished tests msg:GetExtraDataAsID() == record:GetID()), so
+    // consistency is what matters, not exactness. We hand out a dense token instead: exact in a
+    // float, and equality still behaves.
+    std::uint32_t gdb_token_for(std::uint32_t guid);      // stable per guid, 1-based, never 0
+    [[nodiscard]] std::uint32_t gdb_guid_for_token(std::uint32_t token) const;
+
+private:
+    std::vector<std::uint32_t> gdb_id_tokens_;            // token-1 -> guid
+public:
+
     // Seed the world's NAMED entities from a cooked `.f2names` sidecar
     // (tools/cook_quest_markers.py): one entity per record, carrying a TransformComponent at the
     // record's world position and its name in `entity_names`. That is what backs a quest's
