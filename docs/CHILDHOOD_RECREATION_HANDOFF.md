@@ -30,11 +30,9 @@ Quest→General→AI tick), scripted Physics/Navigation/Camera natives, hero ani
 `tools/gdb_anim_slots.py`). NPC locomotion is cook-ready but visible NPC animation is render-blocked
 (`docs/NPC_LOCOMOTION_PLAN.md`).
 
-**Current frontier:** getting the childhood's own cutscenes to START. The text system and the beat
-runner both work — a cutscene that performs speaks its real dialogue (§TEXT + DIALOGUE) — but the
-childhood's cutscenes park in `PlayCutscene`'s pre-start in-range wait. The census names its next
-dependencies: `GroupMindManager.GetCutsceneGroupMind` and `IsDistanceBetweenThingsOver`.
-(The earlier `attempt to call method 'GetID'` failure is FIXED — `rec:GetID()` is bound.)
+**Current frontier:** PERFORMING the beats. Cutscenes now start, speak, hold their authored time
+and frame their authored camera (§CUTSCENES RUN) — what is still missing is the acting:
+`PlayAnimation` (219 beats) and `MoveToMarker` (81) are parsed in order but not staged.
 
 ## ▶▶ CUTSCENES RUN: dialogue, TIMING and CAMERA (2026-08-19)
 
@@ -90,13 +88,10 @@ QC010_JeevesGreet -> 5 lines; first =
 ```
 
 Lines land in `NativeGame::spoken_lines` for a subtitle renderer; the census has a DIALOGUE section.
-⚠ FLAGGED: no timing, camera or animation — a beat is emitted instantly.
 
-⚠ **Measured limit:** the childhood's OWN cutscenes still never reach the request stage (0 lines in
-a live run). They park in `PlayCutscene`'s pre-start in-range wait, whose next dependencies the
-census now names: `GroupMindManager.GetCutsceneGroupMind` (22800 calls) and
-`IsDistanceBetweenThingsOver` (10791). Dialogue is proven to work when a cutscene performs; making
-the childhood's cutscenes START is the next chain.
+⚠ SUPERSEDED by §CUTSCENES RUN above: this section's "no timing/camera" and "0 lines in a live run"
+limits are both fixed. The childhood's cutscenes DO start now (the blockers were two port bugs — a
+method-call arg offset and float32 id truncation, see the git log) and beats are timed.
 
 **Quest display names — use the game's chain, there is NO tag convention:**
 `QuestTracker.Register(hero, questName, 'Quest_<Name>')` → a GDB record in `globals.gdb` →
