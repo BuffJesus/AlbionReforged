@@ -79,6 +79,14 @@ public:
     [[nodiscard]] std::optional<std::uint32_t> field_raw(std::uint32_t guid, std::uint32_t field,
                                                          std::uint8_t type) const;
     [[nodiscard]] std::optional<float> field_float(std::uint32_t guid, std::uint32_t field) const;
+    // A type-4 (string) field: its stored value is an fnv1 key into this file's interned STRING
+    // TABLE, which sits right after the name table:
+    //     { u32 0x00010000, u32 byteSize, u32 stringCount }
+    //     stringCount * { u32 fnv1(s), char s[]; 0 }
+    // The same pool also holds the FIELD NAMES, which is what makes a record self-describing.
+    [[nodiscard]] const char* field_string(std::uint32_t guid, std::uint32_t field) const;
+    // The literal for an interned hash (a type-4 value, or a field name), or nullptr.
+    [[nodiscard]] const char* intern(std::uint32_t hash) const;
 
 private:
     [[nodiscard]] std::optional<std::size_t> record_offset(std::uint32_t guid) const;
@@ -96,6 +104,8 @@ private:
     std::size_t body_end_ = 0;
     std::vector<std::size_t> offsets_;                              // record offsets, index-aligned
     std::vector<std::pair<std::uint32_t, std::uint32_t>> names_;    // {fnv1(name), guid}, sorted
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> strings_;  // {fnv1(s), blobOffset}, sorted
+    std::vector<char> string_blob_;
 };
 
 // The set of open .gdb files, searched in order. Retail keeps ONE merged database; searching a
@@ -115,6 +125,8 @@ public:
     // name table that named it — measured: cutscene names resolve into interactivecutscenes.gdb,
     // entity names into globals.gdb).
     [[nodiscard]] std::optional<float> field_float(std::uint32_t guid, std::string_view field) const;
+    // A type-4 string field, resolved through the owning file's string table.
+    [[nodiscard]] const char* field_string(std::uint32_t guid, std::string_view field) const;
     [[nodiscard]] std::optional<std::uint32_t> field_raw(std::uint32_t guid, std::string_view field,
                                                          std::uint8_t type) const;
 

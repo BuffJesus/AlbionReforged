@@ -9,6 +9,7 @@
 #include "f2/native_gdb_hash.h"
 #include "f2/native_gdb.h"
 #include "f2/native_mod_menu.h"
+#include "f2/native_text.h"
 #include "f2/native_physics.h"
 #include "f2/native_camera.h"
 #include "f2/native_player.h"
@@ -394,6 +395,38 @@ static void test_named_entity_sidecar() {
     std::filesystem::remove_all(dir, ec);
 }
 
+// The game's localised text: TextTag -> the real in-game string, through the real native.
+// The strings below are the game's own words, decoded from the user's book.babel by
+// tools/babel_text.py; the runtime ships no text. Skipped if the cooked package is absent.
+static void test_game_text() {
+    const std::filesystem::path data_root =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game";
+    f2::TextTable tt;
+    if (!tt.load(data_root / "cooked/en-uk.f2text")) return;
+    F2_CHECK(tt.size() > 10000);                       // the shipped en-uk table is 56,000 strings
+    F2_CHECK(std::string(tt.get("TEXT_LEVEL_FAIRFAX_CASTLE")) == "Castle Fairfax");
+    F2_CHECK(std::string(tt.get("TEXT_CHARACTER_NAME_THERESA")) == "Theresa");
+    // A cutscene's own dialogue line, reached by the TextTag its SayLine beat carries.
+    F2_CHECK(std::string(tt.get("TEXT_QUEST_QC010_JEEVES_GREET_02"))
+                 .find("Jeeves") != std::string::npos);
+    // An unknown tag returns the TAG, never empty — a missing string stays visible.
+    F2_CHECK(std::string(tt.get("TEXT_NO_SUCH_TAG_AT_ALL")) == "TEXT_NO_SUCH_TAG_AT_ALL");
+
+    const std::filesystem::path bnk =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    if (!std::filesystem::exists(bnk)) return;
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    F2_CHECK(game.boot_game_scripts(data_root) > 0);   // also loads the text package
+    F2_CHECK(game.text.valid());
+    F2_CHECK(game.script_vm->run_source(
+        "assert(GetText('TEXT_LEVEL_FAIRFAX_CASTLE') == 'Castle Fairfax'); "
+        "assert(Text.GetText('TEXT_CHARACTER_NAME_THERESA') == 'Theresa'); "
+        "assert(GetText('TEXT_NOPE') == 'TEXT_NOPE')",
+        "=t_text"));
+    F2_CHECK(game.script_vm->last_error().empty());
+}
+
 // The mod / debug-jump menu, built by REFLECTION over the game's own tables (native_mod_menu.h).
 // Asserts the three sources it discovers and that a failing action REPORTS rather than swallows.
 // The game-data half is skipped when the script bank is absent; the mod half always runs.
@@ -427,11 +460,15 @@ static void test_mod_menu() {
                 if (e.label == "SkipToLuciensStudy") has_lucien = true;
             } else if (e.category == "Quest") {
                 ++quests;
-                if (e.label == "QC010_Childhood") {
+                // The label is the GAME'S OWN name, resolved through its own data:
+                // Quest_QC010_Childhood -> NameTag 'TEXT_QUEST_QC010_NAME' -> "Childhood".
+                if (e.label == "Childhood") {
                     has_childhood = true;
-                    // RegisterDebugQuest recorded the level + start marker (gameflow.lua:274-281).
+                    // RegisterDebugQuest recorded the level + start marker (gameflow.lua:274-281),
+                    // and the description comes from the same record's DescriptionTag.
                     F2_CHECK(e.detail.find("BWSSlums") != std::string::npos);
                     F2_CHECK(e.detail.find("QC010_ChildhoodStart") != std::string::npos);
+                    F2_CHECK(e.detail.find("Bowerstone Old Town") != std::string::npos);
                 }
             }
         }
@@ -439,7 +476,7 @@ static void test_mod_menu() {
                   << " skips, " << quests << " jumpable quests\n";
         int shown = 0;
         for (const auto& e : menu.entries()) {
-            if (e.category != "Skip") continue;
+            if (e.category != "Skip" && e.category != "Quest") continue;
             std::cout << "  [" << e.category << "] " << e.label << "  (" << e.detail << ")\n";
             if (++shown >= 8) break;
         }
@@ -2128,6 +2165,7 @@ int main() {
     test_gameflow_starts_childhood();
     test_cook_scripts_package();
     test_gdb_record_lookup();
+    test_game_text();
     test_mod_menu();
     test_named_entity_sidecar();
     test_childhood_stub_census();

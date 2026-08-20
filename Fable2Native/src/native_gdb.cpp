@@ -76,8 +76,46 @@ bool GdbFile::parse(std::vector<std::uint8_t> bytes) {
         }
     }
 
+    // STRING TABLE, immediately after the name table: { 0x00010000, byteSize, stringCount } then
+    // stringCount * { u32 fnv1(s), NUL-terminated bytes }. It is the value pool for type-4 fields
+    // AND the source of field names, so a record can describe itself.
+    {
+        const std::size_t at = name_base + static_cast<std::size_t>(name_count) * 8;
+        if (at + 12 <= b_.size() && be32(at) == 0x00010000u) {
+            const std::uint32_t n = be32(at + 8);
+            std::size_t off = at + 12;
+            strings_.reserve(n);
+            for (std::uint32_t i = 0; i < n && off + 4 < b_.size(); ++i) {
+                const std::uint32_t h = be32(off);
+                off += 4;
+                const std::size_t start = off;
+                while (off < b_.size() && b_[off] != 0) ++off;
+                if (off >= b_.size()) break;
+                strings_.emplace_back(h, static_cast<std::uint32_t>(string_blob_.size()));
+                string_blob_.insert(string_blob_.end(), b_.begin() + static_cast<std::ptrdiff_t>(start),
+                                    b_.begin() + static_cast<std::ptrdiff_t>(off));
+                string_blob_.push_back(char{0});
+                ++off;  // skip the terminator
+            }
+            std::sort(strings_.begin(), strings_.end(),
+                      [](const auto& a, const auto& c) { return a.first < c.first; });
+        }
+    }
+
     ok_ = true;
     return true;
+}
+
+const char* GdbFile::intern(std::uint32_t hash) const {
+    const auto it = std::lower_bound(strings_.begin(), strings_.end(), hash,
+                                     [](const auto& e, std::uint32_t v) { return e.first < v; });
+    if (it == strings_.end() || it->first != hash) return nullptr;
+    return string_blob_.data() + it->second;
+}
+
+const char* GdbFile::field_string(std::uint32_t guid, std::uint32_t field) const {
+    const auto raw = field_raw(guid, field, kTypeString);
+    return raw ? intern(*raw) : nullptr;
 }
 
 bool GdbFile::schema_at(std::size_t record, std::size_t& schema_off, std::uint32_t& field_count) const {
@@ -188,6 +226,19 @@ std::optional<std::uint32_t> GdbDatabase::field_raw(std::uint32_t guid, std::str
     for (const auto& f : files_)
         if (auto v = f.field_raw(guid, fh, type)) return v;
     return std::nullopt;
+}
+
+const char* GdbDatabase::field_string(std::uint32_t guid, std::string_view field) const {
+    const std::uint32_t fh = fnv1(field);
+    // The value's intern pool belongs to whichever file holds the record, but a cross-file value
+    // can resolve elsewhere, so fall back to scanning every file's pool for the key.
+    for (const auto& f : files_)
+        if (const char* s = f.field_string(guid, fh)) return s;
+    for (const auto& f : files_)
+        if (const auto raw = f.field_raw(guid, fh, gdb::kTypeString))
+            for (const auto& g : files_)
+                if (const char* s = g.intern(*raw)) return s;
+    return nullptr;
 }
 
 std::optional<float> GdbDatabase::field_float(std::uint32_t guid, std::string_view field) const {

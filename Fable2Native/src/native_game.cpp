@@ -91,6 +91,13 @@ int NativeGame::boot_game_scripts(const std::filesystem::path& data_root) {
         gdb.add(data_root / rel);
     }
 
+    // The localised text table. Cook it with tools/babel_text.py from the user's own
+    // data/language/<locale>/text/book.babel; the runtime never ships strings. Absent is fine —
+    // GetText then answers with the tag, exactly as the game does for an unknown tag.
+    for (const char* rel : {"cooked/en-uk.f2text", "cooked/text.f2text"}) {
+        if (text.load(data_root / rel)) break;
+    }
+
     // The camera scripts are engine-loaded, not script-loaded: camera/camerasetupscript.lua is
     // just a list of AddCameraScriptFile(...) calls and nothing in the shipped scripts runs it
     // (see the AddCameraScriptFile binding for the evidence). Run it here, before the auto-stub,

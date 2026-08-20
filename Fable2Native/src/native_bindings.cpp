@@ -777,6 +777,20 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         v.push_handle("GdbRecord", *raw);
         return 1;
     });
+    // rec:GetString(field) -> a type-4 field, resolved through the file's interned string table.
+    // This is how authored data names other data: a quest's GDB record carries
+    // NameTag='TEXT_QUEST_QC010_NAME' / DescriptionTag='TEXT_QUEST_QC010_DESCRIPTION', which
+    // GetText then turns into the player-facing "Childhood" and its blurb.
+    vm.register_object_method("GdbRecord", "GetString", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const char* field = v.arg_string(2);
+        const char* s = (g && field && *field)
+                            ? g->gdb.field_string(static_cast<std::uint32_t>(v.arg_handle(1)), field)
+                            : nullptr;
+        if (!s) { v.push_nil(); return 1; }
+        v.push_string(s);
+        return 1;
+    });
     vm.register_object_method("GdbRecord", "GetFloat", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
         const char* field = v.arg_string(2);
@@ -873,6 +887,28 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
                                           [e](const auto& c) { return e == 0 || c.entity == e; }),
                            g->cutscenes.end());
         return 0;
+    });
+
+    // GetText(tag) — the game's localised text. Everything player-visible is addressed by TAG in
+    // both the scripts and the authored data (a cutscene SayLine carries
+    // TextTag='TEXT_QUEST_QC010_JEEVES_GREET_02', a level 'TEXT_LEVEL_FAIRFAX_CASTLE'), so this is
+    // what makes the port speak in the game's own words. An unknown tag returns the tag itself,
+    // which is what retail does and keeps a missing string visible rather than blank.
+    vm.register_global("GetText", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const char* tag = v.arg_string(1);
+        if (!g || !tag || !*tag) { v.push_string(tag ? tag : ""); return 1; }
+        const char* s = g->text.find(tag);
+        v.push_string(s ? s : tag);
+        return 1;
+    });
+    // The same lookup as a class method — the scripts reach it both ways.
+    vm.register_native("Text", "GetText", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const char* tag = v.arg_string(1);
+        const char* s = (g && tag && *tag) ? g->text.find(tag) : nullptr;
+        v.push_string(s ? s : (tag ? tag : ""));
+        return 1;
     });
 
     // AddCameraScriptFile(name) — the camera-script loader. `camera/camerasetupscript.lua` is a

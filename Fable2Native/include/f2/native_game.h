@@ -13,6 +13,7 @@
 #include "native_script.h"
 #include "native_bnk.h"
 #include "native_gdb.h"
+#include "native_text.h"
 #include "native_message.h"
 
 #include <array>
@@ -67,6 +68,12 @@ struct NativeGame {
     // interactivecutscenes.gdb from <data_root>/data; a level's own gdb should be added FIRST when
     // one is cooked, so a level override wins over the global archetype.
     gdb::GdbDatabase gdb;
+
+    // The game's localised text (TextTag -> real string), cooked by tools/babel_text.py from
+    // data/language/<locale>/text/book.babel. Everything player-visible is addressed by TAG in the
+    // scripts and the authored data, so this is what makes the port speak in the game's own words
+    // rather than in identifiers. Empty is fine: GetText then returns the tag.
+    TextTable text;
 
     // Game-script substrate (populated by boot_game_scripts). The message-event bus quests
     // poll; the hero entity handle GetPlayerHero() returns; per-entity display names for

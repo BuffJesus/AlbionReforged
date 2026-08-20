@@ -49,7 +49,27 @@ if Gameflow and type(rawget(Gameflow, 'DebugQuestStartTable')) == 'table' then
   table.sort(rows, function(a, b) return a.q < b.q end)
   for _, r in ipairs(rows) do
     local detail = tostring(r.lv or '?') .. ' / ' .. tostring(r.mk or '?')
-    add('Quest', r.q, 'Gameflow:StartQuest(' ..
+    -- Show the GAME'S OWN name for the quest, not the internal identifier. The chain is the
+    -- game's: QuestTracker.Register(hero, questName, 'Quest_<Name>') names a GDB record whose
+    -- NameTag/DescriptionTag are TextTags, which GetText resolves against the player's language
+    -- (e.g. Quest_QC010_Childhood -> TEXT_QUEST_QC010_NAME -> 'Childhood'). Falls back to the
+    -- identifier when a quest has no record, so nothing is invented.
+    local label = r.q
+    local ok, rec = pcall(function() return GDB.GetRecord('Quest_' .. tostring(r.q)) end)
+    if ok and rec then
+      local ok2, nt = pcall(function() return rec:GetString('NameTag') end)
+      if ok2 and type(nt) == 'string' and nt ~= '' then
+        local disp = GetText(nt)
+        if type(disp) == 'string' and disp ~= '' and disp ~= nt then label = disp end
+      end
+      -- Keep the level/marker (useful when jumping) AND the game's own description.
+      local ok3, dt = pcall(function() return rec:GetString('DescriptionTag') end)
+      if ok3 and type(dt) == 'string' and dt ~= '' then
+        local d = GetText(dt)
+        if type(d) == 'string' and d ~= '' and d ~= dt then detail = d .. '  |  ' .. detail end
+      end
+    end
+    add('Quest', label, 'Gameflow:StartQuest(' ..
         (type(r.k) == 'number' and tostring(r.k) or string.format('%q', tostring(r.k))) .. ')',
         detail)
   end
