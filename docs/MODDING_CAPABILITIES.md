@@ -248,3 +248,36 @@ as a worked template: they write `Gameflow.ChildhoodResolutionEvil` (which the g
 the post-childhood scenario — `Chapter2Slums` evil vs `Chapter2Posh` good) and
 `Gameflow.ChildhoodVars.WantedCompleted`. Those are the same two writes the recomp's menu made
 behind an in-world sign, minus the HUD/toaster hack.
+
+## ★ The game's TEXT is readable and moddable (2026-08-19) — `book.babel` solved
+
+The long-standing blocker ("the bulk-text compression codec is unknown") is closed: it is **plain
+zlib**. `data/language/<locale>/text/book.babel` is an index of `{fnv1(TextTag), blockKey, offset}`
+over 333 zlib blocks of UTF-16BE strings (each with a `u32` code-unit length prefix).
+
+```
+python Fable2Native/tools/babel_text.py <book.babel> --tag TEXT_LEVEL_FAIRFAX_CASTLE
+python Fable2Native/tools/babel_text.py <book.babel> --grep "beetle"     # search DECODED text
+python Fable2Native/tools/babel_text.py <book.babel> --cook out.f2text   # runtime package
+```
+
+Everything player-visible is addressed by **TextTag** in both the scripts and the authored data, so
+this is what lets the port speak in the game's own words — and in the player's own language, since
+the table is per-locale. The runtime ships no text; it is cooked from the user's own files.
+
+In-game: `GetText(tag)` / `Text.GetText(tag)`. An unknown tag returns the tag, so a missing string
+is visible rather than blank.
+
+**Quest names and descriptions** come from the game's own chain — there is *no*
+`TEXT_QUEST_<NAME>` convention, so don't invent one:
+
+```
+QuestTracker.Register(hero, questName, "Quest_<Name>")
+    -> GDB record  Quest_QC010_Childhood   (globals.gdb)
+        NameTag        = "TEXT_QUEST_QC010_NAME"        -> "Childhood"
+        DescriptionTag = "TEXT_QUEST_QC010_DESCRIPTION" -> "Winter is here, and life on the
+                                                            streets of Bowerstone Old Town..."
+```
+
+Read it with `rec:GetString(field)` (Lua) or `gdb_record_dump.py` (offline). This is how the mod
+menu shows real quest names instead of internal identifiers — a mod can do exactly the same.
