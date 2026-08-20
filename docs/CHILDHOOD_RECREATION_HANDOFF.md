@@ -34,6 +34,37 @@ Quest→General→AI tick), scripted Physics/Navigation/Camera natives, hero ani
 lookup into `StartCutscene`/`IsInteractiveCutsceneWaitingForMe` and fails there on
 `attempt to call method 'GetID' (a nil value)` — an entity handle the ICS path expects.
 
+## ▶▶ TEXT + DIALOGUE (2026-08-19) — `book.babel` CRACKED, cutscene beats speak
+
+**The codec was plain zlib.** `data/language/<locale>/text/book.babel` = an index of
+`{fnv1(TextTag), blockKey, offsetInBlock}` over 333 zlib blocks of UTF-16BE strings (each with a
+`u32` code-unit length prefix). The game's dialogue, quest names and UI strings are all readable,
+in the player's own language. Tool: `tools/babel_text.py` (decode / `--grep` the decoded text /
+`--cook` a runtime package). Runtime: `native_text.h` + the `GetText(tag)` native; an unknown tag
+returns the tag, as retail does.
+
+**Cutscene beats now perform.** `NativeGame::perform_cutscene` walks a cutscene record's
+`SceneElements` and speaks each `SayLine` (Character / CharacterToTalkTo / TextTag):
+
+```
+QC010_JeevesGreet -> 5 lines; first =
+  QC010_EscortGuardFairfax: "Evening, Jeeves. Here are the children Lord Lucien asked for."
+```
+
+Lines land in `NativeGame::spoken_lines` for a subtitle renderer; the census has a DIALOGUE section.
+⚠ FLAGGED: no timing, camera or animation — a beat is emitted instantly.
+
+⚠ **Measured limit:** the childhood's OWN cutscenes still never reach the request stage (0 lines in
+a live run). They park in `PlayCutscene`'s pre-start in-range wait, whose next dependencies the
+census now names: `GroupMindManager.GetCutsceneGroupMind` (22800 calls) and
+`IsDistanceBetweenThingsOver` (10791). Dialogue is proven to work when a cutscene performs; making
+the childhood's cutscenes START is the next chain.
+
+**Quest display names — use the game's chain, there is NO tag convention:**
+`QuestTracker.Register(hero, questName, 'Quest_<Name>')` → a GDB record in `globals.gdb` →
+`NameTag`/`DescriptionTag` → babel. e.g. `Quest_QC010_Childhood` → `TEXT_QUEST_QC010_NAME` →
+**"Childhood"**. The mod menu uses exactly this.
+
 ## ▶▶ ROOT CAUSE FOUND + FIXED (2026-08-19): `Gameflow:Init()` ran on the INACTIVE branch
 
 The childhood "started" yet nothing ever played because **`NativeGame::start_new_game` called
