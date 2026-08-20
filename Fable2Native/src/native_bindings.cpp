@@ -880,7 +880,15 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         if (record_id == 0) return 0;
         for (const auto& c : g->cutscenes)
             if (c.record_id == record_id) return 0;  // already queued
-        g->cutscenes.push_back({entity, record_id, g->cutscene_frames});
+        NativeGame::PendingCutscene pending;
+        pending.entity = entity;
+        pending.record_id = record_id;
+        pending.beats = g->build_cutscene_beats(record_id);
+        // Authored lead-in + the gap the cutscene wants between its elements.
+        pending.timer = g->gdb.field_float(record_id, "DelayInSeconds").value_or(0.0f);
+        pending.element_delay =
+            g->gdb.field_float(record_id, "ElementDelayInSeconds").value_or(0.0f);
+        g->cutscenes.push_back(std::move(pending));
         // Trace: a cutscene reaching REQUEST is the milestone that gates every beat behind it.
         g->script_log.push_back("[cutscene-request] record 0x" + [record_id] {
             char buf[16];

@@ -434,6 +434,110 @@ std::uint32_t NativeGame::gdb_guid_for_token(std::uint32_t token) const {
     return gdb_id_tokens_[token - 1];
 }
 
+// Read a cutscene's authored beat list. Field order in the schema IS play order (verified: the
+// SayLine beats of QC010_JeevesGreet come out _02, _04, _10, _20, _30). Beat schemas, all decoded
+// from the game's own data with tools/gdb_record_dump.py:
+//     SayLine                 { Character, CharacterToTalkTo, TextTag, WaitUntilComplete }
+//     Wait                    { TimeToWait }                      <- authored seconds
+//     SetLookAtCamera         { PositionEntity, FocusEntity }     <- each a marker record whose
+//                                PhysicsSimpleComponent.Position is the camera pose
+//     PlayAnimation           { Character, AnimationName, CharacterToFace }
+//     StartLookingAtCharacter { Character, CharacterToLookAt }
+// Kinds we do not stage yet are still recorded (duration 0) so the ORDER and count stay honest.
+std::vector<NativeGame::CutsceneBeat> NativeGame::build_cutscene_beats(std::uint32_t record_id) const {
+    std::vector<CutsceneBeat> out;
+    const auto elements = gdb.field_raw(record_id, "SceneElements", gdb::kTypeRecord);
+    if (!elements) return out;
+
+    // A type-7 field is also a record reference; a camera anchor's position lives on its
+    // PhysicsSimpleComponent (the same component the level markers use).
+    auto anchor_pos = [this](std::uint32_t anchor, std::array<float, 3>& out_pos) {
+        const auto phys = gdb.field_raw(anchor, "PhysicsSimpleComponent", gdb::kTypeRecord);
+        if (!phys) return false;
+        const auto pos = gdb.field_raw(*phys, "Position", gdb::kTypeRecord);
+        if (!pos) return false;
+        const auto x = gdb.field_float(*pos, "X");
+        const auto y = gdb.field_float(*pos, "Y");
+        const auto z = gdb.field_float(*pos, "Z");
+        if (!x || !y || !z) return false;
+        out_pos = {*x, *z, *y};   // game(x,y,z) -> world {x,z,y}
+        return true;
+    };
+
+    for (const auto& field : gdb.fields(*elements)) {
+        const char* kind = gdb.intern(field.name_hash);
+        if (!kind || std::string_view(kind) == "parent") continue;
+        if (field.type != gdb::kTypeRecord && field.type != 7) continue;
+
+        CutsceneBeat beat;
+        beat.kind = kind;
+        if (const char* c = gdb.field_string(field.value, "Character")) beat.character = c;
+        if (const char* c = gdb.field_string(field.value, "CharacterToTalkTo")) beat.listener = c;
+
+        if (beat.kind == "SayLine" || beat.kind.find("Talks") != std::string::npos ||
+            beat.kind.find("Speaks") != std::string::npos) {
+            if (const char* tag = gdb.field_string(field.value, "TextTag")) {
+                beat.tag = tag;
+                beat.text = text.get(tag);
+                beat.duration = say_line_base_seconds +
+                                say_line_per_char_seconds * static_cast<double>(beat.text.size());
+            }
+        } else if (beat.kind == "Wait") {
+            if (const auto t = gdb.field_float(field.value, "TimeToWait")) beat.duration = *t;
+        } else if (beat.kind == "SetLookAtCamera") {
+            const auto p = gdb.field_raw(field.value, "PositionEntity", 7);
+            const auto fo = gdb.field_raw(field.value, "FocusEntity", 7);
+            if (p && fo && anchor_pos(*p, beat.cam_pos) && anchor_pos(*fo, beat.cam_focus))
+                beat.has_camera = true;
+        }
+        out.push_back(std::move(beat));
+    }
+    return out;
+}
+
+// Drive the running cutscenes. Each holds the scene for its beat's authored duration, then plays
+// the next; when the beats run out the cutscene posts its finish message (see the ICFS note in
+// native_game.h) and retires.
+void NativeGame::update_cutscenes(double dt) {
+    if (cutscenes.empty()) return;
+    constexpr int kIcfs = ('I' << 24) | ('C' << 16) | ('F' << 8) | 'S';
+
+    for (auto& c : cutscenes) {
+        c.timer -= dt;
+        while (c.timer <= 0.0 && c.next < c.beats.size()) {
+            const CutsceneBeat& beat = c.beats[c.next++];
+            if (!beat.tag.empty()) {
+                script_log.push_back("[say] " + beat.character + ": " + beat.text);
+                spoken_lines.push_back({beat.character, beat.listener, beat.tag, beat.text});
+            }
+            if (beat.has_camera) {
+                // The authored cutscene camera: sit at PositionEntity, look at FocusEntity.
+                camera.position = beat.cam_pos;
+                const float dx = beat.cam_focus[0] - beat.cam_pos[0];
+                const float dy = beat.cam_focus[1] - beat.cam_pos[1];
+                const float dz = beat.cam_focus[2] - beat.cam_pos[2];
+                camera.yaw = std::atan2(dx, dz);
+                const float flat = std::sqrt(dx * dx + dz * dz);
+                camera.pitch = (flat > 1e-4f) ? std::atan2(dy, flat) : 0.0f;
+                camera_scripted = true;   // the follow-cam yields while a cutscene frames the shot
+            } else if (beat.kind == "ClearCamera") {
+                camera_scripted = false;
+            }
+            c.timer += beat.duration > 0.0 ? beat.duration : c.element_delay;
+        }
+    }
+
+    for (const auto& c : cutscenes) {
+        if (c.next >= c.beats.size() && c.timer <= 0.0)
+            messages.post(kIcfs, c.entity, c.entity, static_cast<double>(gdb_token_for(c.record_id)));
+    }
+    cutscenes.erase(std::remove_if(cutscenes.begin(), cutscenes.end(),
+                                   [](const PendingCutscene& c) {
+                                       return c.next >= c.beats.size() && c.timer <= 0.0;
+                                   }),
+                    cutscenes.end());
+}
+
 int NativeGame::perform_cutscene(std::uint32_t record_id) {
     if (record_id == 0) return 0;
     const auto elements = gdb.field_raw(record_id, "SceneElements", gdb::kTypeRecord);
@@ -573,30 +677,12 @@ void NativeGame::tick(double delta_seconds) {
         // steps join in P2. The front-end always ticks (menus/loading overlays).
         frontend.tick(simulation_step);
         if (mode == GameMode::InWorld) {
-            // Retire queued cutscenes BEFORE the scripts run, so a thread polling
-            // CheckForInteractiveCutsceneFinished sees the finish message on the very next resume.
-            // A cutscene completes by posting a message whose extra-data id is its RECORD GUID:
-            // 'ICFS' = finished successfully (miscfunctions.lua:161-191). 'ICFU' would report
-            // failure; nothing here fails, so only ICFS is posted.
-            // ⚠ FLAGGED: this retires the cutscene without PERFORMING it — see the note on
-            // NativeGame::cutscenes. Quests advance; nothing is staged, spoken or animated.
-            if (!cutscenes.empty()) {
-                constexpr int kIcfs = ('I' << 24) | ('C' << 16) | ('F' << 8) | 'S';
-                for (auto& c : cutscenes) --c.frames_left;
-                for (const auto& c : cutscenes) {
-                    if (c.frames_left > 0) continue;
-                    perform_cutscene(c.record_id);   // speak its SayLine beats before finishing
-                    // The finish message must carry the SAME token the script will compare
-                    // against (CheckForInteractiveCutsceneFinished tests
-                    // msg:GetExtraDataAsID() == GDB.GetRecord(name):GetID()), so post the token,
-                    // not the GUID.
-                    messages.post(kIcfs, c.entity, c.entity,
-                                  static_cast<double>(gdb_token_for(c.record_id)));
-                }
-                cutscenes.erase(std::remove_if(cutscenes.begin(), cutscenes.end(),
-                                               [](const auto& c) { return c.frames_left <= 0; }),
-                                cutscenes.end());
-            }
+            // Drive cutscenes BEFORE the scripts run, so a thread polling
+            // CheckForInteractiveCutsceneFinished sees the finish message on its next resume.
+            // Beats now play over TIME (authored Wait.TimeToWait / ElementDelayInSeconds, and a
+            // flagged stand-in for a spoken line's voice-over length) and the camera follows the
+            // authored SetLookAtCamera anchors — see build_cutscene_beats.
+            update_cutscenes(simulation_step);
 
             script_systems.tick(simulation_step);
 

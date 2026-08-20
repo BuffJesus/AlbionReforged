@@ -161,13 +161,39 @@ struct NativeGame {
     // without playing its SceneElements (the beat list: SayLine speakers/TextTags, SetEntityMode
     // animation groups — readable via tools/gdb_record_dump.py). So quests advance beat to beat,
     // but nothing is staged, spoken or animated yet. Performing the beats is the next step.
+    // One authored beat, read from a cutscene's SceneElements (schema order IS play order).
+    struct CutsceneBeat {
+        std::string kind;        // 'SayLine', 'Wait', 'SetLookAtCamera', 'ClearCamera', ...
+        std::string character;   // speaker / subject, an entity NAME
+        std::string listener;    // CharacterToTalkTo
+        std::string tag;         // TextTag for a spoken line
+        std::string text;        // the resolved line
+        double duration = 0.0;   // seconds this beat holds the cutscene
+        std::array<float, 3> cam_pos{};    // SetLookAtCamera: where the camera sits
+        std::array<float, 3> cam_focus{};  // ...and what it looks at
+        bool has_camera = false;
+    };
     struct PendingCutscene {
         std::uint64_t entity = 0;
         std::uint32_t record_id = 0;
-        int frames_left = 0;
+        std::vector<CutsceneBeat> beats;
+        std::size_t next = 0;      // index of the beat to perform when `timer` runs out
+        double timer = 0.0;        // seconds left before the next beat
+        double element_delay = 0.0;  // ElementDelayInSeconds, inserted between beats
     };
     std::vector<PendingCutscene> cutscenes;
-    int cutscene_frames = 1;  // ticks a stand-in cutscene "plays" for before it reports finished
+
+    // How long a spoken line holds the scene. ⚠ FLAGGED as the ONE invented number here: every
+    // other timing value is authored (Wait.TimeToWait, DelayInSeconds, ElementDelayInSeconds), but
+    // a SayLine's real length is the length of its VOICE-OVER, and the speech audio is not decoded
+    // yet. The beat's authored `WaitUntilComplete` flag says "hold until the line finishes"; this
+    // is a readable-subtitle stand-in for that duration, not a measurement.
+    double say_line_base_seconds = 1.2;
+    double say_line_per_char_seconds = 0.045;
+
+    // Build a cutscene's beat list from its authored SceneElements. Public so a test can inspect
+    // what was parsed without running the sim.
+    [[nodiscard]] std::vector<CutsceneBeat> build_cutscene_beats(std::uint32_t record_id) const;
 
     // A line a cutscene beat actually SPOKE, in order. Produced by performing a cutscene's
     // SceneElements: each `SayLine` beat carries Character / CharacterToTalkTo / TextTag, and the
@@ -183,8 +209,12 @@ struct NativeGame {
     };
     std::vector<SpokenLine> spoken_lines;
 
-    // Perform one cutscene record's SceneElements. Currently performs SayLine (-> spoken_lines);
-    // other beat kinds are counted but not staged.
+    // Advance every running cutscene by `dt`, performing beats as their time comes and posting
+    // the finish message when a cutscene runs out of beats. Called from tick().
+    void update_cutscenes(double dt);
+
+    // Perform one cutscene record's beats IMMEDIATELY (no timing) — used by tests and as the
+    // fallback when a cutscene has no timed run.
     // ⚠ FLAGGED: no timing, no camera, no animation — a beat is emitted instantly. This makes the
     // dialogue real and observable; STAGING it is the next step.
     int perform_cutscene(std::uint32_t record_id);

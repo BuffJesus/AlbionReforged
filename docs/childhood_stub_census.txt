@@ -14,7 +14,7 @@
 #
 # calls  native
 43203	IsLevelLoaded()
-23758	GroupMindManager.GetCutsceneGroupMind
+22800	GroupMindManager.GetCutsceneGroupMind
 2401	CommunityService.GetCurrentStage
 2400	Trigger.IsSpecificTriggerEntityInsideTriggerVolume
 2399	GameVersion.IsDLCDownloaded
@@ -44,7 +44,6 @@
 12	Health.SetCantDie
 11	Mood.SetMoodState
 11	OpinionReaction.IsAvailable
-10	Faction.IsAvailable
 9	GossipEC.AddLabel
 8	Gossip.ActivateGossipItem
 8	Player.RemoveAllScriptRules
@@ -52,6 +51,7 @@
 8	SearchTools.FilterWithEC
 8	Targeted.SetAsTargetable
 7	AIManager.EnableSimBehaviours
+5	Faction.IsAvailable
 4	Door.SetLocked
 4	Door.SetOpen
 4	GraphicAppearance.SetTintColour
@@ -72,12 +72,8 @@
 2	GetDog()
 2	Inventory.AddItemOfType
 2	Inventory.InstantiateItemOfType
-2	Layers.DeactivateLayer
 2	LevelExit.GetECType
-2	Navigation.IsAvailable
-2	PhysicsCharacter.SetAsAbleToPushCharacters
 2	Player.IsAvailable
-2	Shard.IsAvailable
 2	Stats.SetChapterProgress
 2	Timing.SetTimeOfDay
 1	AmbientPopulationManager.SetCrimeEnabled
@@ -94,7 +90,6 @@
 1	Dog.IsInjured
 1	Door.SetOpenForEntity
 1	ExperienceOrb.SetAsEnabled
-1	Follow.FollowEntity
 1	GUI.FadeScreenIn
 1	GUI.FadeScreenOut
 1	GUI.LockScreenFade
@@ -109,7 +104,10 @@
 1	Inventory.GetNumberOfItemsOfCategory
 1	Kynapse.SetIsAbstractEntity
 1	Layers.ActivateScenario
+1	Layers.DeactivateLayer
 1	ModeManager.AddModeByEnumWithAnimGroupName
+1	Navigation.IsAvailable
+1	PhysicsCharacter.SetAsAbleToPushCharacters
 1	Player.ChangePlayerEntityType
 1	Player.DisableFullPauseMenu
 1	Player.SetExperienceSpendingAsEnabled
@@ -123,6 +121,7 @@
 1	QuestTracker.SetAsActive
 1	QuestTracker.Unlock
 1	SearchTools.FilterWithinDistanceOfPos
+1	Shard.IsAvailable
 1	SoundTools.PlayMusic
 1	SoundTools.PlayMusicAndAtmosForLevel
 1	SoundTools.SetMusicAndAtmosToStartOnNextLevelLoad
@@ -146,7 +145,7 @@
 
 # SPIN SET - calls in the last 60 frames (per frame in brackets). These are the GATES:
 # 4320	[72/frame]	IsLevelLoaded()
-# 2400	[40/frame]	GroupMindManager.GetCutsceneGroupMind
+# 2280	[38/frame]	GroupMindManager.GetCutsceneGroupMind
 # 240	[4/frame]	CommunityService.GetCurrentStage
 # 240	[4/frame]	GameVersion.IsDLCDownloaded
 # 240	[4/frame]	Trigger.IsSpecificTriggerEntityInsideTriggerVolume
@@ -159,44 +158,14 @@
 # 120	[2/frame]	QuestTracker.GetPrimaryQuestName
 # 120	[2/frame]	Trigger.AreAllTriggerEntitiesInsideTriggerVolume
 
-# DIALOGUE spoken (37 lines) - speaker: line [tag]:
+# DIALOGUE spoken (7 lines) - speaker: line [tag]:
 # QC010_EscortGuardFairfax: Evening, Jeeves. Here are the children Lord Lucien asked for.  [TEXT_QUEST_QC010_JEEVES_GREET_02]
-# QC010_Jeeves: Excellent!  [TEXT_QUEST_QC010_JEEVES_GREET_04]
-# QC010_Jeeves: TEXT_QUEST_QC010_JEEVES_GREET_10  [TEXT_QUEST_QC010_JEEVES_GREET_10]
-# QC010_Rose: Hello, sir.  [TEXT_QUEST_QC010_JEEVES_GREET_20]
-# QC010_Jeeves: If you'd follow me please.  [TEXT_QUEST_QC010_JEEVES_GREET_30]
 # QC010_Guard: Ooh. All right, settle down, there's a nice... angry stray dog...  [TEXT_QUEST_QC010_GUARD_MORNING_10]
+# QC010_Jeeves: Excellent!  [TEXT_QUEST_QC010_JEEVES_GREET_04]
 # QC010_Rose: Quiet, boy.  [TEXT_QUEST_QC010_GUARD_MORNING_20]
+# QC010_Jeeves: TEXT_QUEST_QC010_JEEVES_GREET_10  [TEXT_QUEST_QC010_JEEVES_GREET_10]
 # QC010_Rose: What do you want?  [TEXT_QUEST_QC010_GUARD_MORNING_30]
 # QC010_Guard: I work for Lord Lucien, miss. And he would very much like to see you in his castle.  [TEXT_QUEST_QC010_GUARD_MORNING_40]
-# QC010_Guard: I've been sent to collect you.  [TEXT_QUEST_QC010_GUARD_MORNING_50]
-# QC010_EscortGuardFairfax: Evening, Jeeves. Here are the children Lord Lucien asked for.  [TEXT_QUEST_QC010_JEEVES_GREET_02]
-# QC010_Jeeves: Excellent!  [TEXT_QUEST_QC010_JEEVES_GREET_04]
-# QC010_Jeeves: TEXT_QUEST_QC010_JEEVES_GREET_10  [TEXT_QUEST_QC010_JEEVES_GREET_10]
-# QC010_Rose: Hello, sir.  [TEXT_QUEST_QC010_JEEVES_GREET_20]
-# QC010_Jeeves: If you'd follow me please.  [TEXT_QUEST_QC010_JEEVES_GREET_30]
-# QC010_Rose: We look up at this castle every day and think how nice it is; we both do.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_10]
-# QC010_Rose: But inside it's even more beautiful than I imagined.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_20]
-# QC010_Jeeves: It is quite wonderful, isn't it?  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_30]
-# QC010_Jeeves: Ah, hello, Master Garth.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_40]
-# QC010_Jeeves: Huh. Man of few words.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_50]
-# QC010_Rose: Where is the grand dining hall?  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_60]
-# QC010_Jeeves: Oh, in the north wing. Lord Lucien hasn't been in there since... Since the tragic deaths of Lady Fairfax and little Amelia.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_70]
-# QC010_Rose: Oh, I heard. That was so awful.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_90]
-# QC010_Jeeves: Yes, he misses them terribly.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_100]
-# QC010_Rose: So... where does he eat?  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_110]
-# QC010_Jeeves: Actually, he takes most of his meals in his study.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_120]
-# QC010_Jeeves: He's in there working all hours, doing research...  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_130]
-# QC010_Rose: What does he research?  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_140]
-# QC010_Jeeves: History, mostly. Lord Lucien is quite keen on antiquities of all sorts, but he is chiefly interested in things relating to the Old Kingdom.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_150]
-# QC010_Rose: There was a trader in Old Town who said his stuff was from the Old Kingdom.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_170]
-# QC010_Jeeves: Yes... yes, I believe Lord Lucien... heard about that.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_180]
-# QC010_Rose: We bought a piece of it and we made a wish and now we're here!  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_190]
-# QC010_Jeeves: That's wonderful. Now, when you meet Lord Lucien, you must show respect at all times.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_200]
-# QC010_Jeeves: Address him as "my lord." Speak only when spoken to.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_210]
-# QC010_Rose: Yes sir.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_220]
-# QC010_Jeeves: And do not mention Lady Fairfax or Amelia.  [TEXT_QUEST_QC010_JEEVES_TO_STUDY_230]
-# QC010_Jeeves: Here we are. Lord Lucien? The children are here.  [TEXT_QUEST_QC010_LUCIEN_INTRO_20]
 
 # ENTITY POSITIONS (cutscene in-range depends on these):
 # hero  201.102 52.857 91.8186
@@ -205,9 +174,8 @@
 # QC010_ChildhoodStart  201.295 52.8238 91.705   dist_to_hero=0.226573
 # QC010_HeroInCrowdMarker  175.074 49.4009 144.723   dist_to_hero=59.0618
 
-# THE GAME'S OWN Debug.Error calls (17 distinct):
+# THE GAME'S OWN Debug.Error calls (16 distinct):
 # 2x  ?:0: attempt to compare number with table
-# 1x  Entity: QC010_Guard has been asked to move but has no nav EC
 # 1x  Entity: QC030_Arfur has been asked to move but has no nav EC
 # 1x  GetEntityWithName failed to find 'FF_Door_Luciens'.
 # 1x  GetEntityWithName failed to find 'FF_Door_Luciens_2'.
@@ -223,18 +191,10 @@
 # 1x  GetEntityWithName failed to find 'QO950_DemonDoor'.
 # 1x  GetEntityWithName failed to find 'QO980_DemonDoor'.
 # 1x  GetEntityWithName failed to find 'QO990_DemonDoor'.
-# [cutscene-perform] record 0xAD0C745B elements=yes
-# [cutscene-perform] record 0x8EB51907 elements=yes
-# [cutscene-perform] record 0x86F97E85 elements=yes
-# [cutscene-perform] record 0x8EB51907 elements=yes
-# [cutscene-perform] record 0xD8B70661 elements=yes
-# [cutscene-perform] record 0x48E2D490 elements=yes
 # [gate] StartCutscene entity=true cutscene=QC055_MagpieIntoSleep
 # [gate] ShouldCutsceneTerminate=false
 # [gate] StartCutscene entity=true cutscene=QC010_JeevesGreet
 # [gate] StartCutscene entity=true cutscene=QC010_GuardMorning
-# [gate] StartCutscene entity=true cutscene=QC010_JeevesToStudy
-# [gate] StartCutscene entity=true cutscene=QC010_LucienIntro
 
 # ENTITY THREADS started (name matched=N). matched=0 => that branch NEVER runs:
 # GenericTriggerMarker matched=0
@@ -369,18 +329,14 @@
 119 ? :WaitForTimeInSeconds RETURNED
 119 ? :PlayCutscene cutscene=QC010_JeevesGreet
 119 ? :PlayCutscene cutscene=QC010_GuardMorning
-120 ? :PlayCutscene RETURNED
 179 ? :WaitForTimeInSeconds RETURNED
 179 ? :PlayCutscene cutscene=QC010_JeevesGreet
-180 ? :PlayCutscene RETURNED
-181 ? :PlayCutscene cutscene=QC010_JeevesToStudy
-181 ? :PlayCutscene RETURNED
 239 ? :WaitForTimeInSeconds RETURNED
 # re-entered most (a re-entered wait is polling; a once-entered wait is parked):
 # 5x  0 ? :WaitForTriggerToFire cutscene=nil
 # 2x  0 ? :WaitForTimeInSeconds arg=2
 # 2x  119 ? :WaitForTimeInSeconds RETURNED
-# 2x  120 ? :PlayCutscene RETURNED
+# 1x  0 ? :PlayCutscene cutscene=QC055_MagpieIntoSleep
 # 1x  0 ? :WaitFor RETURNED
 # 1x  0 ? :WaitFor pred@?:2766
 # 1x  0 ? :WaitFor pred@?:2991
@@ -409,8 +365,8 @@
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.11.co_update status=suspended quest=? state=nil at yield@-1<-?@989
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.QC010_GenericEventManager.co_update status=suspended quest=QC010_Childhood state=0 at yield@-1<-?@4238
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.PackRatThread.co_update status=dead quest=? state=nil at ?@4309
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.1.custom_update status=suspended quest=? state=21 at yield@-1<-?@1411
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.1.co_update status=suspended quest=? state=21 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.1.custom_update status=suspended quest=? state=20 at yield@-1<-f@1382<-PlayCutscene@7<-?@1411
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.1.co_update status=suspended quest=? state=20 at yield@-1<-?@1239
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.2.custom_update status=suspended quest=? state=0 at yield@-1<-?@2532
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.2.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.3.custom_update status=suspended quest=? state=0 at yield@-1<-f@764<-WaitFor@7<-?@2753
@@ -425,10 +381,10 @@
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.7.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.8.custom_update status=suspended quest=? state=nil at yield@-1<-f@764<-WaitFor@7<-?@2986
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.8.co_update status=suspended quest=? state=nil at yield@-1<-?@1239
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.9.custom_update status=suspended quest=? state=2 at yield@-1<-?@3050
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.9.co_update status=suspended quest=? state=2 at yield@-1<-?@1239
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.10.custom_update status=suspended quest=? state=16 at yield@-1<-?@3130
-# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.10.co_update status=suspended quest=? state=16 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.9.custom_update status=suspended quest=? state=0 at yield@-1<-f@1382<-PlayCutscene@7<-?@3050
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.9.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.10.custom_update status=suspended quest=? state=10 at yield@-1<-f@1382<-PlayCutscene@7<-?@3130
+# [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.10.co_update status=suspended quest=? state=10 at yield@-1<-?@1239
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.11.custom_update status=suspended quest=? state=0 at yield@-1<-f@764<-WaitFor@7<-?@3696
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.11.co_update status=suspended quest=? state=0 at yield@-1<-?@1239
 # [stall] _G.Fable2Scripts.Gameflow.ChildThreads.12.ChildThreads.12.custom_update status=suspended quest=? state=nil at yield@-1<-f@729<-WaitForTriggerToFire@7<-?@3720
@@ -696,7 +652,6 @@
 1 SoundTools.SetMusicAndAtmosToStartOnNextLevelLoad
 1 GUI.UnlockScreenFade
 1 GUI.FadeScreenIn
-120 Follow.FollowEntity
-121 Navigation.IsAvailable
-121 Shard.IsAvailable
 179 SoundTools.PlayMusic
+239 Navigation.IsAvailable
+239 Shard.IsAvailable

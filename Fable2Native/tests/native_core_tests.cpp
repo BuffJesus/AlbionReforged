@@ -455,6 +455,85 @@ static void test_cutscene_saylines() {
               << first.speaker << ": " << first.text << "\n";
 }
 
+// Cutscene TIMING and CAMERA, both from authored data.
+// Beat kinds and their schemas were decoded from the game's own records:
+//   Wait { TimeToWait }  ·  SetLookAtCamera { PositionEntity, FocusEntity }  ·  SayLine { ... }
+// and a cutscene carries DelayInSeconds / ElementDelayInSeconds. This drives a real cutscene that
+// uses all three and checks the beats parse, the camera takes the authored pose, and the lines are
+// PACED rather than dumped. Skipped if game data is absent.
+static void test_cutscene_timing_and_camera() {
+    const std::filesystem::path data_root = "D:/Documents/Fable2RE/Fable2Recomp/assets/game";
+    if (!std::filesystem::exists(data_root / "data/gamescripts_r.bnk")) return;
+
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    F2_CHECK(game.boot_game_scripts(data_root) > 0);
+
+    // This cutscene's literal name is not in the string table, so address it by GUID. Its beats
+    // are MoveToMarker, ClearCamera, SetLookAtCamera, Wait, PauseMovement, SayLine.
+    constexpr std::uint32_t kCamCutscene = 0xF7EDCB99u;
+    if (!game.gdb.fields(kCamCutscene).empty()) {
+        const auto beats = game.build_cutscene_beats(kCamCutscene);
+        F2_CHECK(beats.size() >= 5);
+
+        bool saw_camera = false, saw_wait = false;
+        for (const auto& b : beats) {
+            if (b.kind == "SetLookAtCamera") {
+                saw_camera = true;
+                F2_CHECK(b.has_camera);
+                // Authored game(151.887, 154.677, 49.681) -> world {x,z,y}.
+                F2_CHECK(std::fabs(b.cam_pos[0] - 151.887f) < 0.01f);
+                F2_CHECK(std::fabs(b.cam_pos[1] - 49.681f) < 0.01f);
+                F2_CHECK(std::fabs(b.cam_pos[2] - 154.677f) < 0.01f);
+                F2_CHECK(std::fabs(b.cam_focus[0] - 152.831f) < 0.01f);
+            } else if (b.kind == "Wait") {
+                saw_wait = true;
+                F2_CHECK(b.duration > 0.0);      // TimeToWait, authored seconds
+            }
+        }
+        F2_CHECK(saw_camera && saw_wait);
+
+        // Run it: queue the cutscene and tick. The camera must take the authored pose and the
+        // follow-cam must yield to it.
+        f2::NativeGame::PendingCutscene pending;
+        pending.entity = 0;
+        pending.record_id = kCamCutscene;
+        pending.beats = beats;
+        game.cutscenes.push_back(pending);
+        game.mode = f2::GameMode::InWorld;
+        game.external_input = true;
+        const auto before = game.camera.position;
+        for (int i = 0; i < 10; ++i) game.tick(1.0 / 60.0);
+        F2_CHECK(game.camera.position != before);
+        F2_CHECK(std::fabs(game.camera.position[0] - 151.887f) < 0.01f);
+        F2_CHECK(game.camera_scripted);          // the scripted camera owns the shot
+        // ...and it points AT the focus: yaw = atan2(dx, dz) of focus-minus-position.
+        const float dx = 152.831f - 151.887f, dz = 153.059f - 154.677f;
+        F2_CHECK(std::fabs(game.camera.yaw - std::atan2(dx, dz)) < 0.01f);
+    }
+
+    // PACING: a spoken beat holds the scene, so lines accumulate over time instead of all at once.
+    const auto jeeves = game.gdb.guid_for_name("QC010_JeevesGreet");
+    if (jeeves) {
+        game.spoken_lines.clear();
+        f2::NativeGame::PendingCutscene talk;
+        talk.entity = 0;
+        talk.record_id = *jeeves;
+        talk.beats = game.build_cutscene_beats(*jeeves);
+        F2_CHECK(!talk.beats.empty());
+        game.cutscenes.push_back(talk);
+        game.mode = f2::GameMode::InWorld;
+        game.tick(1.0 / 60.0);
+        const std::size_t after_one_frame = game.spoken_lines.size();
+        F2_CHECK(after_one_frame >= 1);          // the first line lands immediately
+        F2_CHECK(after_one_frame < talk.beats.size());   // but NOT all of them
+        for (int i = 0; i < 60 * 30; ++i) game.tick(1.0 / 60.0);
+        F2_CHECK(game.spoken_lines.size() > after_one_frame);   // the rest follow over time
+        std::cout << "[cutscene] paced: " << after_one_frame << " line(s) on frame 1, "
+                  << game.spoken_lines.size() << " after 30s" << std::endl;
+    }
+}
+
 // The mod / debug-jump menu, built by REFLECTION over the game's own tables (native_mod_menu.h).
 // Asserts the three sources it discovers and that a failing action REPORTS rather than swallows.
 // The game-data half is skipped when the script bank is absent; the mod half always runs.
@@ -2331,6 +2410,7 @@ int main() {
     test_gdb_record_lookup();
     test_game_text();
     test_cutscene_saylines();
+    test_cutscene_timing_and_camera();
     test_mod_menu();
     test_named_entity_sidecar();
     test_childhood_stub_census();
