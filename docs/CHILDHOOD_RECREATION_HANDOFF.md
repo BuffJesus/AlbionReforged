@@ -36,6 +36,42 @@ childhood's cutscenes park in `PlayCutscene`'s pre-start in-range wait. The cens
 dependencies: `GroupMindManager.GetCutsceneGroupMind` and `IsDistanceBetweenThingsOver`.
 (The earlier `attempt to call method 'GetID'` failure is FIXED — `rec:GetID()` is bound.)
 
+## ▶▶ CUTSCENES RUN: dialogue, TIMING and CAMERA (2026-08-19)
+
+The childhood speaks, on the clock, with the camera the level authors framed.
+
+**Beat schemas, all decoded from the game's own records** (`tools/gdb_record_dump.py`):
+
+| beat | fields | status |
+|---|---|---|
+| `SayLine` | Character, CharacterToTalkTo, TextTag, WaitUntilComplete | spoken |
+| `Wait` | TimeToWait (authored seconds) | held |
+| `SetLookAtCamera` | PositionEntity, FocusEntity — each a marker record whose `PhysicsSimpleComponent.Position` is the pose | camera placed + aimed |
+| `PlayAnimation` / `MoveToMarker` / `StartLookingAtCharacter` / `SetEntityMode` / … | Character, AnimationName, … | parsed in order, NOT staged |
+
+plus cutscene-level `DelayInSeconds` (lead-in) and `ElementDelayInSeconds` (gap between beats).
+Schema field order IS play order (verified: JeevesGreet's lines come out _02, _04, _10, _20, _30).
+
+Beat-kind survey over all 2460 cutscenes with SceneElements: SayLine 2509, RoseTalks 265,
+PlayAnimation 219, PersonSpeaks 178, Wait 149, SetEntityMode 130, ScriptCallback 105, Sync 93,
+MoveToMarker 81.
+
+`build_cutscene_beats` parses once; `update_cutscenes` drives each running cutscene per tick and
+posts the finish message when the beats run out.
+
+⚠ **The one invented number:** a SayLine's real length is its VOICE-OVER, and the speech audio is
+not decoded — so `say_line_base_seconds` / `say_line_per_char_seconds` stand in for the beat's
+authored `WaitUntilComplete`. Every other timing value is the game's own.
+
+**Measured:** 37 instant, repeating lines → PACED (7 lines over 10 s, 20 over 50 s; 1 line on
+frame 1 → 6 after 30 s). Covered by `test_cutscene_timing_and_camera`, which asserts the beat
+parse, the exact authored camera pose, the aim at its focus, and that lines do not all land at once.
+
+### ▶ NEXT for cutscenes
+`PlayAnimation` (219 beats) and `MoveToMarker` (81) are parsed but not staged — those are what turn
+a spoken scene into a performed one. The hero/NPC animation path already exists
+(`AnimationPlayer`, cooked clips), so `PlayAnimation` is the natural next beat kind.
+
 ## ▶▶ TEXT + DIALOGUE (2026-08-19) — `book.babel` CRACKED, cutscene beats speak
 
 **The codec was plain zlib.** `data/language/<locale>/text/book.babel` = an index of
