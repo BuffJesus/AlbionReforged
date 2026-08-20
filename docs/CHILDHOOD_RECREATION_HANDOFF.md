@@ -65,10 +65,42 @@ authored `WaitUntilComplete`. Every other timing value is the game's own.
 frame 1 → 6 after 30 s). Covered by `test_cutscene_timing_and_camera`, which asserts the beat
 parse, the exact authored camera pose, the aim at its focus, and that lines do not all land at once.
 
+### ▶ PlayAnimation + MoveToMarker — DONE
+```
+MoveToMarker  { Character, MarkerToMoveTo -> PhysicsSimpleComponent.Position, Range,
+                MovementSpeed, FaceMarkerDirection, WaitUntilComplete }
+PlayAnimation { Character, AnimationName, CharacterToFace, PlayIntoAndOutof }
+```
+`MoveToMarker` moves the character to the authored marker (destination + arrival `Range`).
+`PlayAnimation` resolves its clip through the character's OWN record —
+`entity -> AnimationManagerComponent -> Animations -> <AnimationName>` — which comes in two shapes:
+the clip key DIRECTLY (type-4 field whose **RAW u32 is the bank key**, the convention
+`tools/gdb_anim_slots.py` uses for the hero), or a type-6 sub-record of slots
+(`RoseWarmingUp -> {Pose, Idle}`).
+⚠ That raw value is NOT a string-pool reference — `gdb_record_dump` prints it as `0x....` only as a
+fallback for an unpooled value. Treating it as interned resolves nothing.
+
+Reaching an entity's authored data needs its record id at runtime, so `.f2names` gained a `gdbGuid`
+column (`entity_gdb_guid`, 1158 known).
+
+**Measured live, from the childhood's own cutscenes:**
+```
+QC055_Magpie    anim=SitOnFloorIdleSleepInto  clip=0x8B21D0C6   resolved
+QC010_Rose      move                                            Rose walks her beat
+CreatureDogHero anim=AttackSnarlBark/Loop                       the dog in the cold open
+```
+⚠ The dog's clips do NOT resolve — `CreatureDogHero` is created at runtime by
+`Debug.CreateEntityAt`, so it has no authored record. Anything SPAWNED rather than placed behaves
+the same until archetype instantiation lands.
+
+⚠ FLAGGED: `MoveToMarker` sets the transform directly (no pathing, nav mesh unused), and a staged
+animation is RECORDED in `NativeGame::staged_actions` but only the hero has cooked clips, so an
+NPC's cue is not visible yet. The census reports staged actions + resolved clip so both stay
+measurable.
+
 ### ▶ NEXT for cutscenes
-`PlayAnimation` (219 beats) and `MoveToMarker` (81) are parsed but not staged — those are what turn
-a spoken scene into a performed one. The hero/NPC animation path already exists
-(`AnimationPlayer`, cooked clips), so `PlayAnimation` is the natural next beat kind.
+Make a staged animation VISIBLE for NPCs (needs the NPC character-mesh + clip cook — ENV-owned),
+and give `MoveToMarker` real pathing via the existing nav agent.
 
 ## ▶▶ TEXT + DIALOGUE (2026-08-19) — `book.babel` CRACKED, cutscene beats speak
 
