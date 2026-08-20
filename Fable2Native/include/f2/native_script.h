@@ -94,6 +94,12 @@ public:
     // Load + run a chunk. run_source takes Lua text; run_bytecode takes compiled LuaQ
     // (the game's scripts). Both return false + set last_error() on a load/runtime error.
     bool run_source(const char* source, const char* chunk_name = "=chunk");
+
+    // Read a global STRING back out of the VM (empty if unset or not a string). The port mostly
+    // pushes data INTO Lua; this is the small reverse channel a C++ service needs when it asks a
+    // script chunk to report something — e.g. the mod menu discovering entries by reflection over
+    // the game's own tables.
+    [[nodiscard]] std::string global_string(const char* name) const;
     bool run_bytecode(const void* data, std::size_t size, const char* chunk_name = "=bytecode");
 
     // Load + run a file (Lua source OR compiled LuaQ — auto-detected). The basis for

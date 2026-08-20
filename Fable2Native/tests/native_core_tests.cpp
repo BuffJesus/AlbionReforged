@@ -8,6 +8,7 @@
 #include "f2/native_world.h"
 #include "f2/native_gdb_hash.h"
 #include "f2/native_gdb.h"
+#include "f2/native_mod_menu.h"
 #include "f2/native_physics.h"
 #include "f2/native_camera.h"
 #include "f2/native_player.h"
@@ -391,6 +392,99 @@ static void test_named_entity_sidecar() {
                         game.script_vm->last_error().c_str()), false));
     F2_CHECK(game.script_vm->last_error().empty());
     std::filesystem::remove_all(dir, ec);
+}
+
+// The mod / debug-jump menu, built by REFLECTION over the game's own tables (native_mod_menu.h).
+// Asserts the three sources it discovers and that a failing action REPORTS rather than swallows.
+// The game-data half is skipped when the script bank is absent; the mod half always runs.
+static void test_mod_menu() {
+    const std::filesystem::path bnk_path =
+        "D:/Documents/Fable2RE/Fable2Recomp/assets/game/data/gamescripts_r.bnk";
+    const std::filesystem::path data_root = bnk_path.parent_path().parent_path();
+
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    f2::ModMenu menu;
+
+    if (std::filesystem::exists(bnk_path)) {
+        F2_CHECK(game.boot_game_scripts(data_root) > 0);
+        F2_CHECK(game.load_quest_scripts() > 0);   // quest modules define the ChildhoodVars skips
+        game.start_new_game(/*female=*/false);     // Gameflow:Init fills DebugQuestStartTable
+        // The ChildhoodVars.SkipTo* functions are defined by qc010_childhood.lua, which the
+        // gameflow only require()s when it starts that quest — so drive a few ticks first. This
+        // is also the honest behaviour of the menu: it lists what is actually loaded right now.
+        for (int i = 0; i < 8; ++i) game.script_vm->run_source("QuestManager.Update()", "=t_mm");
+        F2_CHECK(menu.rebuild(*game.script_vm) > 0);
+
+        // 1. The game's OWN skip functions, discovered — not hardcoded here.
+        //    (qc010_childhood.lua:174-237 defines SkipToWino/SkipToLL/SkipToLL2/
+        //     SkipToBuyMusicBox/SkipToLuciensStudy on Gameflow.ChildhoodVars.)
+        int skips = 0, quests = 0;
+        bool has_lucien = false, has_childhood = false;
+        for (const auto& e : menu.entries()) {
+            if (e.category == "Skip") {
+                ++skips;
+                if (e.label == "SkipToLuciensStudy") has_lucien = true;
+            } else if (e.category == "Quest") {
+                ++quests;
+                if (e.label == "QC010_Childhood") {
+                    has_childhood = true;
+                    // RegisterDebugQuest recorded the level + start marker (gameflow.lua:274-281).
+                    F2_CHECK(e.detail.find("BWSSlums") != std::string::npos);
+                    F2_CHECK(e.detail.find("QC010_ChildhoodStart") != std::string::npos);
+                }
+            }
+        }
+        std::cout << "[modmenu] " << menu.entries().size() << " entries: " << skips
+                  << " skips, " << quests << " jumpable quests\n";
+        int shown = 0;
+        for (const auto& e : menu.entries()) {
+            if (e.category != "Skip") continue;
+            std::cout << "  [" << e.category << "] " << e.label << "  (" << e.detail << ")\n";
+            if (++shown >= 8) break;
+        }
+        F2_CHECK(skips >= 5 && has_lucien);       // the childhood's own skip family
+        F2_CHECK(quests > 10 && has_childhood);   // the gameflow's jumpable-quest table
+
+        // The shipped CHOICE entries (registered through the public API, so they also serve as a
+        // mod template) write the game's own gameflow variables.
+        std::size_t evil_choice = menu.entries().size();
+        for (std::size_t i = 0; i < menu.entries().size(); ++i)
+            if (menu.entries()[i].category == "Choice" &&
+                menu.entries()[i].label.find("Arfur") != std::string::npos) evil_choice = i;
+        F2_CHECK(evil_choice < menu.entries().size());
+        F2_CHECK(menu.invoke(*game.script_vm, evil_choice));
+        F2_CHECK(game.script_vm->run_source(
+            "assert(Gameflow.ChildhoodResolutionEvil == true); "
+            "assert(Gameflow.ChildhoodVars.WantedCompleted == true)", "=t_choice"));
+        F2_CHECK(game.script_vm->last_error().empty());
+    }
+
+    // 2. A mod extends the menu from Lua, with no C++ change.
+    F2_CHECK(game.script_vm->run_source(
+        "__f2_modmenu_ran = false "
+        "ModMenu.Register('Mod', 'Test Entry', function() __f2_modmenu_ran = true end, 'detail')",
+        "=t_modreg"));
+    F2_CHECK(menu.rebuild(*game.script_vm) > 0);
+    std::size_t mod_index = menu.entries().size();
+    for (std::size_t i = 0; i < menu.entries().size(); ++i)
+        if (menu.entries()[i].label == "Test Entry") mod_index = i;
+    F2_CHECK(mod_index < menu.entries().size());
+    F2_CHECK(menu.invoke(*game.script_vm, mod_index));
+    F2_CHECK(game.script_vm->run_source("assert(__f2_modmenu_ran == true)", "=t_modran"));
+    F2_CHECK(game.script_vm->last_error().empty());
+
+    // 3. A failing action REPORTS its error instead of failing silently.
+    F2_CHECK(game.script_vm->run_source(
+        "ModMenu.Register('Mod', 'Boom', function() error('kaboom') end)", "=t_modboom"));
+    F2_CHECK(menu.rebuild(*game.script_vm) > 0);
+    std::size_t boom = menu.entries().size();
+    for (std::size_t i = 0; i < menu.entries().size(); ++i)
+        if (menu.entries()[i].label == "Boom") boom = i;
+    F2_CHECK(boom < menu.entries().size());
+    F2_CHECK(!menu.invoke(*game.script_vm, boom));
+    F2_CHECK(menu.last_error().find("kaboom") != std::string::npos);
+    F2_CHECK(!menu.invoke(*game.script_vm, 99999));   // out of range is reported, not a crash
 }
 
 // GDB name resolution through the real natives: the two-step lookup the game uses.
@@ -2034,6 +2128,7 @@ int main() {
     test_gameflow_starts_childhood();
     test_cook_scripts_package();
     test_gdb_record_lookup();
+    test_mod_menu();
     test_named_entity_sidecar();
     test_childhood_stub_census();
     test_stage2_control();

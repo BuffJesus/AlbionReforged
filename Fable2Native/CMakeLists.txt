@@ -45,6 +45,7 @@ add_library(f2native_core STATIC
     src/native_script.cpp
     src/native_bnk.cpp
     src/native_gdb.cpp
+    src/native_mod_menu.cpp
     src/native_bindings.cpp
     src/native_frontend.cpp
     src/native_install.cpp

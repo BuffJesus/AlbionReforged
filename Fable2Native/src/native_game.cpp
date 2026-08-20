@@ -155,6 +155,47 @@ int NativeGame::boot_game_scripts(const std::filesystem::path& data_root) {
         "function Camera.SetDirection(dir) Camera.__SetDirection(dir.x, dir.y, dir.z) end",
         "=stage2_control");
 
+    // ModMenu.Register(category, label, fn [, detail]) — the mod-facing half of the mod/debug-jump
+    // menu (native_mod_menu.h). Defined in Lua because it captures a Lua FUNCTION; ModMenu::rebuild
+    // discovers these alongside the game's OWN skip functions (Gameflow.ChildhoodVars.SkipTo*) and
+    // every quest the gameflow registers as jumpable (Gameflow.DebugQuestStartTable). A mod script
+    // loaded through NativeGame::load_mods can therefore extend the menu with no C++ change:
+    //     ModMenu.Register("Mod", "Give 1000 gold", function() Money.Give(GetPlayerHero(), 1000) end)
+    script_vm->run_source(
+        "__f2_modmenu_entries = __f2_modmenu_entries or {} "
+        "ModMenu = ModMenu or {} "
+        "function ModMenu.Register(category, label, fn, detail) "
+        "  if type(fn) ~= 'function' then return false end "
+        "  __f2_modmenu_entries[#__f2_modmenu_entries + 1] = "
+        "    {category = category or 'Mod', label = label or 'mod entry', fn = fn, detail = detail} "
+        "  return true end",
+        "=modmenu_api");
+
+    // The childhood CHOICE entries, registered through the very same public API a mod uses — so
+    // they double as a worked template (copy this shape in a mod script to add your own).
+    // Both variables are the GAME'S OWN and their effect is verified, not guessed:
+    //   Gameflow.ChildhoodResolutionEvil selects which BWSSlums scenario the gameflow activates
+    //   after the childhood — Chapter2Slums (evil) vs Chapter2Posh (good), gameflow.txt around the
+    //   ChildhoodResolutionEvil branch — i.e. this is literally "where the warrants went".
+    //   Gameflow.ChildhoodVars.WantedCompleted marks the warrants sub-quest resolved
+    //   (qc010_childhood.lua's SkipTo* functions set the same flag).
+    // The recomp's mod menu made the same two writes behind an in-world sign; here they are menu
+    // entries, so there is no HUD/toaster hack and the choice is reversible before it is used.
+    script_vm->run_source(
+        // NOTE: no `Gameflow` guard here — Gameflow does not exist yet at boot; the
+        // closures resolve it when the entry is INVOKED, which is the point.
+        "if ModMenu and ModMenu.Register then "
+        "  ModMenu.Register('Choice', \"Old Town's fate: warrants to Derek (good)\", function() "
+        "    Gameflow.ChildhoodResolutionEvil = false "
+        "    if Gameflow.ChildhoodVars then Gameflow.ChildhoodVars.WantedCompleted = true end "
+        "  end, 'post-childhood scenario becomes Chapter2Posh') "
+        "  ModMenu.Register('Choice', \"Old Town's fate: warrants to Arfur (evil)\", function() "
+        "    Gameflow.ChildhoodResolutionEvil = true "
+        "    if Gameflow.ChildhoodVars then Gameflow.ChildhoodVars.WantedCompleted = true end "
+        "  end, 'post-childhood scenario becomes Chapter2Slums') "
+        "end",
+        "=modmenu_choices");
+
     // Wire the registered manager Update callbacks into the tick, retail Quest->General->AI
     // order. The managers are pure Lua; the native tick just resumes each one's Update.
     NativeScriptVM* vm = script_vm.get();

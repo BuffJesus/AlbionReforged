@@ -401,6 +401,16 @@ bool NativeScriptVM::call_method(const char* global, const char* method, double 
     return true;                               // found + invoked (runtime error -> last_error)
 }
 
+std::string NativeScriptVM::global_string(const char* name) const {
+    if (!state_ || !name) return {};
+    lua_State* s = cur_();
+    lua_getglobal(s, name);
+    const char* v = lua_tostring(s, -1);
+    std::string out = v ? v : "";
+    lua_pop(s, 1);
+    return out;
+}
+
 void NativeScriptVM::log_stub_miss(const char* name) {
     if (name && *name) stub_misses_.emplace_back(name);
 }
