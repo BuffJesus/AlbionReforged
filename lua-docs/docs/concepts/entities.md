@@ -32,17 +32,22 @@ to it at gameflow init. The runtime binds the entity methods quests use most:
 
 | Method | Backed by |
 |---|---|
-| `GetPosition()` / `SetPosition(x,y,z)` | the entity's transform |
+| `GetPosition()` | the entity's transform, as a **`CVector3`** (one value, not three scalars) |
+| `GetPositionXYZ()` | the same transform as three plain numbers |
+| `SetPosition(x,y,z)` | move the entity |
 | `GetName()` | a per-entity name table |
 | `GetID()` / `GetIDFromEntity(e)` | the entity uid |
 | `IsAlive()` | health component (alive unless killed) |
 | `Kill()` | sets health to zero |
 
-Spawning goes through `Debug.CreateEntityAt(class, name, x, y, z)`, which creates a
+Spawning goes through `Debug.CreateEntityAt(class, name, pos)` — the game's own
+calls pass a **`CVector3`** as the third argument
+(`Debug.CreateEntityAt("ObjectLimboInventory", "", CVector3(0, 0, 0))` in
+`gameflow`), so the binding accepts a vector as well as three scalars. It creates a
 native entity with a transform and returns its handle. (The `class` → GDB archetype
-resolution is a flagged stand-in until the GDB cook is wired.)
+resolution is a flagged stand-in — see below.)
 
-## Entity search — the current gap
+## Entity search — now real
 
 Quests find world entities by name via `SearchTools`:
 
@@ -54,14 +59,40 @@ function QuestThreadBase.GetAllEntitiesWithName(self, name, area)
 end
 ```
 
-Today `SearchTools.GetSearchResults` returns an **empty list** — no named world
-entities are streamed yet — so `StartNewEntityThread` finds nothing to spawn. This
-is why the entity-thread half of a quest (the QuestGiver / EvilTwin sub-threads in
-`MyFirstQuest`) is a flagged stand-in. Wiring real entity search + world streaming
-is the [next frontier](../status.md#next-frontier); the quest's own logic already
-runs.
+This **works**: the name filter resolves against the world's named entities, so a
+quest's `StartNewEntityThread` spawns a real entity thread per match. Names come
+from the cooked level cast, `Debug.CreateEntityAt`, and the hero.
+
+**Flagged:** only the *name* filter is honoured — `StartNewSearch`'s area and
+`FilterWithScriptFilter` are no-ops. A script filter *narrows* a set, so leaving it
+a no-op keeps the name-filtered set intact rather than dropping it; an area filter
+would only ever remove matches. Both are conservative in the direction that keeps a
+quest running.
+
+!!! tip "`matched=0` is a diagnosis, not a crash"
+    `StartNewEntityThread` spawns **one thread per match** and silently does nothing
+    when there are none. The [stub census](../getting-started/run-the-scripts.md)
+    reports the match count per entity thread, so a branch that never runs is
+    visible instead of invisible.
+
+## Where the cast comes from
+
+The authored cast of a quest is [GDB data](authored-data.md), not script data.
+`tools/cook_quest_markers.py` extracts it into the runtime's named-entity table,
+carrying each entity's `gdbGuid` so animation slots and components stay reachable.
+
+!!! warning "Creatures and markers carry position on *different* components"
+    A **marker**'s position is on `PhysicsSimpleComponent` (FNV-1
+    `0x619F96CF`) — *not* `SimpleTransformComponent`, as older notes claimed.
+    A **creature**'s is on `PhysicsSimulationCharacterNavigatorComponent.Position`.
+    Reading only the first is why the cast once looked position-less.
+
+**Flagged — the structural gap:** anything *spawned at runtime* (`Debug.CreateEntityAt`,
+e.g. `CreatureDogHero`) has **no authored record**, so no mesh, no AI, and no
+resolvable animation. Closing it means archetype instantiation from GDB
+(`ghidra_out/gdb_instantiation_re.txt`) — the biggest remaining item.
 
 !!! note "Where"
     Object bridge: `Fable2Native/src/native_script.cpp` (`push_handle`,
     `arg_handle`, `register_object_method`). Entity + `SearchTools` bindings:
-    `Fable2Native/src/native_bindings.cpp`.
+    `Fable2Native/src/native_bindings.cpp`. Cast cook: `tools/cook_quest_markers.py`.

@@ -26,6 +26,12 @@ quest. Read them in order for the full picture, or jump to what you need.
 -   **[Entities & the object model](entities.md)** — how entities/quests/events cross
     the C++↔Lua boundary as first-class objects.
 
+-   **[Authored data: GDB & text](authored-data.md)** — the record database and
+    `book.babel` localised text, where the game's cast, positions and words live.
+
+-   **[Cutscenes](cutscenes.md)** — the request/finish protocol and the authored
+    `SceneElements` beat list Lua only *schedules*.
+
 -   **[The auto-stub](auto-stub.md)** — how unimplemented natives are absorbed so the
     game's scripts run, without breaking the game's own globals.
 
@@ -36,6 +42,7 @@ quest. Read them in order for the full picture, or jump to what you need.
 ```
  Auto-stub ─────────────────────────────────────────────┐ (absorbs unimplemented natives)
  Quests / gameflow  (the game's Lua)                     │
+ GDB records · book.babel text  (the authored data)      │
  QuestManager · GeneralScriptManager · AIManager  (Lua)  │
  Native API  (GetPlayerHero, MessageEvents, entities …)  │  ← the C++ boundary
  NativeScriptVM  (embedded Lua 5.1, object bridge)       │

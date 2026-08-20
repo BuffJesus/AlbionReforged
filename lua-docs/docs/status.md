@@ -1,6 +1,6 @@
 # Honest status
 
-*Last updated: 2026-08-16.*
+*Last updated: 2026-08-19.*
 
 This page says exactly what works, what is a deliberate stand-in, and what the
 next frontier is. Nothing here is aspirational — if it's listed as working, there
@@ -28,6 +28,22 @@ is a test or a repro behind it.
 - [x] **The message-event bus.** Quests can poll `MessageEvents.IsMessagePosted` /
   `IsMessageSentTo` / `IsMessageSentBy`, read `Event` payloads, and be released by
   a posted message. See [Message events](concepts/message-events.md).
+- [x] **The real first quest runs.** `QC010` (the childhood opener) runs its own
+  `Update`, reaches its beats, and drives the opening — not a demo quest, the
+  game's own chapter one.
+- [x] **Entity search is real.** `SearchTools.FilterWithName` resolves against the
+  world's named entities, so `StartNewEntityThread` spawns a thread per real match.
+  See [Entities](concepts/entities.md#entity-search--now-real).
+- [x] **Authored data is readable.** The **GDB** database (records, name table,
+  string table, `parent` inheritance) and **`book.babel`** localised text (the codec
+  is plain zlib) are both decoded and bound to Lua. See
+  [Authored data](concepts/authored-data.md).
+- [x] **The port speaks the game's words.** A cutscene's `SayLine` resolves its
+  `TextTag` through babel, so dialogue is the shipped English, not placeholders.
+- [x] **Cutscenes play on authored timing.** The `SceneElements` beat list is read
+  in authored order and paced by authored durations; `SetLookAtCamera` frames the
+  authored camera, and `PlayAnimation` / `MoveToMarker` are staged on the named
+  character. See [Cutscenes](concepts/cutscenes.md).
 
 ## Deliberate stand-ins (flagged)
 
@@ -37,29 +53,44 @@ in the source.
 
 | Stand-in | Why | Replaced by |
 |---|---|---|
-| `StartNewEntityThread` neutralized in the quest demo | Entity threads need the world entity-search / streaming system | Real `SearchTools` results once world streaming lands |
+| Runtime-spawned entities have no archetype | `Debug.CreateEntityAt` makes a transform, not a GDB-built entity, so there is no mesh/AI/animation | Archetype instantiation from GDB (`ghidra_out/gdb_instantiation_re.txt`) |
+| `SearchTools` area + script filters are no-ops | Only the name filter is backed; both others would only *narrow* a set | Real spatial search + predicate filters |
+| `MoveToMarker` sets the transform directly | No navmesh pathing yet | Real pathing on the nav motor |
+| `SayLine` duration is base + per-character | The retail duration comes from the VO asset's length | Wiring the dialogue audio |
+| Staged NPC animation is recorded, not visible | Character mesh + clip cook is owned by the environment track | The ENV-owned character cook |
+| The cooked stage is `chapter2slums` | The childhood is authored on `bwsslums/defaultscenario` (different heightfield / `.genv` / models / entity GDB, per the game's own `.list`) | Cooking `bwsslums/defaultscenario` (ENV) |
 | Save / permanents registration neutralized | `AddQuestToPermanentsTables` reaches into the save subsystem | Wiring the save/permanents system |
-| `SearchTools.*` returns an empty result set | No named world entities are streamed yet | Entity streaming + a real search index |
 | `GetPlatform()` / `Platform` constants | Arbitrary but self-consistent | A real platform identity if ever needed |
 
-The quest's own `Update` / `WaitFor` / completion is **100% the game's real code**
-— only the two dependencies above are stubbed.
+The quest logic itself — `Update`, `WaitFor`, the beat sequencing, the dialogue
+choice — is **100% the game's real code and the game's real data**. What is stubbed
+is the *world* underneath it.
 
 ## Next frontier
 
-- [ ] **Entity search + streaming** so `StartNewEntityThread` spawns real entity
-  threads (the QuestGiver/EvilTwin pattern in `MyFirstQuest`).
-- [ ] **The `GeneralScriptManager` boot-coroutine path** (a boot script schedules a
-  coroutine the general manager can't yet resume cleanly).
-- [ ] **The childhood chapter (`QC010_Childhood`)** end-to-end — the real first
-  quest, which needs GUI message boxes, gameflow position, and the interaction
-  chain.
-- [ ] **The save/permanents subsystem** so quest state persists.
+Ranked — biggest structural gap first:
+
+1. [ ] **Archetype instantiation from GDB** — anything spawned at runtime
+   (`Debug.CreateEntityAt`, e.g. `CreatureDogHero`) has no authored record, so no
+   mesh, no AI, no resolvable animation. The largest remaining item.
+2. [ ] **Make a staged NPC animation visible** — needs the ENV-owned character-mesh
+   + clip cook.
+3. [ ] **Real pathing for `MoveToMarker`**.
+4. [ ] **Cook `bwsslums/defaultscenario`** so the childhood plays on its own stage.
+5. [ ] **The last silent errors** — `DummyObjects` enum *values* need RE, two
+   natives must return real numbers, and one nil index is still unattributed.
+6. [ ] **The save/permanents subsystem** so quest state persists.
 
 ## How claims are verified
 
 - **Boot + quest run:** `f2native_core_tests` (`test_boot_game_scripts`,
-  `test_run_real_quest`) — `EXIT=0`, asserts the quest's completion print.
+  `test_run_real_quest`) — `EXIT=0`, asserts the quest's completion print. The suite
+  is green both with and without a loaded world.
+- **The real quest:** `test_childhood_stub_census` runs `QC010` for a frame horizon
+  and writes `docs/childhood_stub_census.txt` — dialogue spoken, staged actions,
+  entity-thread match counts, and any **silent** coroutine error. Every quest bug on
+  this track was found there. See
+  [the census](getting-started/run-the-scripts.md#the-stub-census--the-measurement-harness).
 - **App stability:** both the D3D12 and Vulkan front-ends launch with
   `--scripting --game-scripts` and stay alive.
 - **Ground truth:** every script referenced here was decompiled from the game's own

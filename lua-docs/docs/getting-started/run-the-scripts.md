@@ -57,7 +57,8 @@ registered via `SetQuestUpdateFunction` / `SetGeneralScriptManager` /
     - `MyFirstQuest` to its own completion print.
 
 !!! warning "Stubbed (flagged)"
-    - `StartNewEntityThread` (needs entity search/streaming).
+    - Runtime-spawned entities have no GDB archetype (no mesh / AI / animation).
+    - `SearchTools` honours the **name** filter only (no area, no script filter).
     - Save / permanents registration.
 
     See the [status page](../status.md) for the full list.
@@ -69,3 +70,31 @@ The runtime overrides Lua's global `print` to capture into
 stdout. The **missing-native worklist** (`vm.stub_misses()`) is the ranked list of
 natives the loaded scripts called that the runtime doesn't implement yet — the
 to-do list for deeper coverage.
+
+## The stub census — the measurement harness
+
+Before theorising about a quest, **measure it**. `test_childhood_stub_census` boots
+the scripts, runs a real quest for a horizon of frames, and writes
+`docs/childhood_stub_census.txt` containing:
+
+- the **call ranking** of stubbed natives and a **first-call timeline**;
+- the **spin set** (natives hammered every frame — usually a wait that never exits);
+- **silent coroutine errors**, with traceback and the last stubbed native called
+  before the death — the only way to see an error the managers discard;
+- **waits entered**, and **entity threads with their match counts**
+  (`matched=0` = a branch that never runs);
+- **dialogue actually spoken**, **staged actions**, entity positions and distance to
+  the hero;
+- the game's **own `Debug.Error` calls**.
+
+Knobs:
+
+| Env var | Effect |
+|---|---|
+| `FABLE2NATIVE_CENSUS_SCENE` | path to a cooked `.f2scene` — measure with the world live |
+| `FABLE2NATIVE_CENSUS_NAMES` | extra entity names to track |
+| `FABLE2NATIVE_CENSUS_FRAMES` | raise the horizon (default 10 s at 60 Hz) |
+| `FABLE2NATIVE_CENSUS_SKIP_CUTSCENES` | diagnostic arm: make `PlayCutscene` return immediately |
+
+Every quest bug on this track was found with this harness; static reading of the
+decompiled loops sent us down the wrong branch twice.

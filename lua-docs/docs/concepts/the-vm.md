@@ -79,6 +79,34 @@ This affects **every** native invoked from a quest coroutine, which is most of
 them. It was the final bug between "the quest coroutine runs" and "the quest
 completes and prints."
 
+## Pitfalls
+
+Two port-bug classes have silently dropped work more than once. Check both **first**
+whenever a native "does nothing":
+
+!!! danger "Scripts call natives method-style — `self` is argument 1"
+    `AIManager:RequestCutsceneOnEntity(entity, id, opts)` puts the *manager table*
+    in argument 1 and the entity in argument 2. A binding that reads the entity from
+    argument 1 gets a table, the id reads back as `0`, and every call is dropped —
+    with **no error**, because nothing threw. When a native looks correct but has no
+    effect, print the argument count and types before theorising.
+
+!!! danger "`lua_Number` is `float32` — 32-bit ids do not round-trip"
+    The 360's Lua was built with `float32` numbers, so anything above 2²⁴ loses low
+    bits: `0x8EB51907` comes back as `0x8EB51900`. Never pass a hash, GUID, or uid
+    through Lua as a *number*. Two working answers:
+
+    - **Object ids** cross as **lightuserdata** inside a handle table.
+    - **Record ids** cross as **dense tokens** — small sequential integers mapped
+      back to GUIDs host-side (`gdb_token_for` / `gdb_guid_for_token`).
+
+A third, less obvious one: a native that returns the *wrong shape* fails just as
+quietly. `Entity:GetPosition()` returns **one `CVector3`**, not three numbers,
+because the game's own scripts write
+`QuestManager.HeroEntity:GetPosition() + CVector3(0, 0, 24)` — that `+` only works
+if the left operand is a vector. Return-value *fidelity* matters as much as the
+value.
+
 ## Capturing output
 
 The VM overrides the global `print` to append into a host-visible log

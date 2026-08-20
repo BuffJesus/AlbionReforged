@@ -92,6 +92,8 @@ nav:
       - concepts/quests.md
       - concepts/message-events.md
       - concepts/entities.md
+      - concepts/authored-data.md
+      - concepts/cutscenes.md
       - concepts/auto-stub.md
   - Reference:
       - reference/native-api.md

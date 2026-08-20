@@ -7,12 +7,15 @@ that scripting layer to PC: it reads the game's own script bank, loads the same
 bytecode into an embedded Lua 5.1 VM, and runs the game's real managers and
 quests on native systems — no reimplementation of the scripts themselves.
 
-!!! success "Milestone: the game's own scripts run"
-    The shipped example quest `MyFirstQuest` runs its **real** `Update` coroutine
-    through the **real** `QuestManager` to its own `print("Terminating quest now")`
-    completion — on the native runtime. 160 miscellaneous scripts + the quest bank
-    (QuestManager + 27 quest modules + gameflow) load with **0 missing natives**
-    at boot.
+!!! success "Milestone: the game's first chapter plays its opening"
+    `QC010` — the **childhood opener**, the game's own first quest — runs its real
+    `Update`, finds its real cast, **speaks the game's own dialogue** (`book.babel`
+    is decoded), paces its cutscene beats on **authored** timing, and frames its
+    **authored** camera. 160 miscellaneous scripts + the quest bank (QuestManager +
+    27 quest modules + gameflow) load with **0 missing natives** at boot.
+
+    What's stubbed is the *world* underneath — see the
+    [honest status](status.md).
 
 ## What this documents
 
@@ -30,7 +33,8 @@ loads and runs it):
 -   :material-lightbulb-on: **[Concepts](concepts/index.md)**
 
     The formats and systems: BNK container, LuaQ bytecode, the embedded VM,
-    managers, quests, message events, entities, the auto-stub.
+    managers, quests, message events, entities, the GDB/text authored data,
+    cutscenes, the auto-stub.
 
 -   :material-book-open-variant: **[Reference](reference/native-api.md)**
 
@@ -57,9 +61,13 @@ loads and runs it):
         ▼
   Real managers drive real coroutines each tick
    QuestManager.Update / GeneralScriptManager.Update / AIManager.Update
-        │  natives ← the runtime provides GetPlayerHero, MessageEvents, entities …
+        │  natives ← the runtime provides GetPlayerHero, MessageEvents, entities,
+        │             GDB records, localised text, cutscene requests …
         ▼
   Quests run their bytecode: Update → WaitFor → message poll → completion
+        │  the WHAT is authored data, not script: GDB beat lists + book.babel text
+        ▼
+  A cutscene plays: authored beats, authored timing, authored camera, real words
 ```
 
 ## Design stance

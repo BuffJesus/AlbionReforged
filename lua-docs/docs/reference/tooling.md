@@ -63,6 +63,50 @@ python tools/lua_mod/bnk_repack.py <bnk> --roundtrip out.bnk
 Reads all entries and can rebuild the container (replacing/adding entries),
 recompressing only what changed — the basis for script mods.
 
+## Reading the authored data
+
+These live in `Fable2Native/tools/` and turn the game's data tables back into text.
+See [Authored data](../concepts/authored-data.md).
+
+```bash
+# Any GDB record by name, with readable field names and nested sub-records
+python Fable2Native/tools/gdb_record_dump.py <level.gdb> QC010_JeevesGreet
+
+# A named level entity's record, component fields resolved to component names
+python Fable2Native/tools/gdb_entity_dump.py <level.save> <level.gdb> QC010_Rose
+
+# Localised text: tag -> the real in-game string (the codec is plain zlib)
+python Fable2Native/tools/babel_text.py <book.babel> --tag TEXT_LEVEL_FAIRFAX_CASTLE
+python Fable2Native/tools/babel_text.py <book.babel> --grep FAIRFAX     # search decoded text
+python Fable2Native/tools/babel_text.py <book.babel> --cook out.f2text  # runtime lookup package
+
+# Cook a level's named quest entities/markers into the .f2names sidecar
+python Fable2Native/tools/cook_quest_markers.py <level> --out <level>.f2names
+
+# Which animation slots a character's record actually declares
+python Fable2Native/tools/gdb_anim_slots.py <level.gdb> QC010_Rose
+```
+
+## Diagnosing scripts
+
+```bash
+# Derive the ENGINE-PROVIDED script globals from the game's own bytecode
+# (what the Ghidra native catalog alone couldn't resolve)
+python Fable2Native/tools/script_engine_globals.py <bnk>
+
+# A traceback says "<?:764>" — which script defines that function?
+python Fable2Native/tools/find_proto_by_line.py <bnk> 764
+```
+
+`find_proto_by_line.py` exists because a **stripped** LuaQ proto still keeps
+`linedefined` / `lastlinedefined`. That makes a traceback's `<?:N>` an exact
+fingerprint, and it is the fastest way to attribute a
+[silently swallowed coroutine error](../concepts/quests.md#errors-inside-a-quest-coroutine-are-swallowed).
+
+!!! warning "…and then read the function"
+    `f@764` looked like a quest predicate; it is `questmanager.lua`'s internal
+    `WaitFor` yield helper. The fingerprint tells you *where*, not *what*.
+
 ## Which banks?
 
 | Bank | Contents |
