@@ -30,9 +30,11 @@ Quest→General→AI tick), scripted Physics/Navigation/Camera natives, hero ani
 `tools/gdb_anim_slots.py`). NPC locomotion is cook-ready but visible NPC animation is render-blocked
 (`docs/NPC_LOCOMOTION_PLAN.md`).
 
-**Current frontier:** the interactive-cutscene machinery. `PlayCutscene` now runs through its GDB
-lookup into `StartCutscene`/`IsInteractiveCutsceneWaitingForMe` and fails there on
-`attempt to call method 'GetID' (a nil value)` — an entity handle the ICS path expects.
+**Current frontier:** getting the childhood's own cutscenes to START. The text system and the beat
+runner both work — a cutscene that performs speaks its real dialogue (§TEXT + DIALOGUE) — but the
+childhood's cutscenes park in `PlayCutscene`'s pre-start in-range wait. The census names its next
+dependencies: `GroupMindManager.GetCutsceneGroupMind` and `IsDistanceBetweenThingsOver`.
+(The earlier `attempt to call method 'GetID'` failure is FIXED — `rec:GetID()` is bound.)
 
 ## ▶▶ TEXT + DIALOGUE (2026-08-19) — `book.babel` CRACKED, cutscene beats speak
 
