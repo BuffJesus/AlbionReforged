@@ -395,12 +395,31 @@ int NativeGame::load_named_entities(const std::filesystem::path& path) {
         } catch (const std::exception&) {
             continue;   // a malformed row is skipped, not fatal
         }
-        NativeEntity& e = world.entities.create_entity();
-        auto tf = std::make_unique<TransformComponent>();
-        tf->position = {v[0], v[1], v[2]};
-        tf->rotation = {0.0f, v[3], 0.0f};  // yaw about world up
-        e.add_component(std::move(tf));
-        entity_names[e.uid] = name;
+        // OVERRIDE, don't duplicate. A name already present is MOVED rather than added again, so
+        // loading a second .f2names on top of the cooked one is a clean override — which is how a
+        // mod adjusts or adds named entities (drop a small .f2names listing only what it changes).
+        // Duplicating instead would silently break the game's own lookups: StartNewEntityThread
+        // spawns one thread PER MATCHING ENTITY (questmanager.lua:942), so a duplicated name would
+        // run a quest's branch twice.
+        std::uint64_t uid = 0;
+        for (const auto& [existing_uid, existing_name] : entity_names) {
+            if (existing_name == name) { uid = existing_uid; break; }
+        }
+        if (uid != 0) {
+            NativeEntity* existing = world.entities.find(uid);
+            if (TransformComponent* tf =
+                    existing ? existing->get<TransformComponent>(kTypeIdTransform) : nullptr) {
+                tf->position = {v[0], v[1], v[2]};
+                tf->rotation = {0.0f, v[3], 0.0f};
+            }
+        } else {
+            NativeEntity& e = world.entities.create_entity();
+            auto tf = std::make_unique<TransformComponent>();
+            tf->position = {v[0], v[1], v[2]};
+            tf->rotation = {0.0f, v[3], 0.0f};  // yaw about world up
+            e.add_component(std::move(tf));
+            entity_names[e.uid] = name;
+        }
         ++seeded;
     }
     return seeded;

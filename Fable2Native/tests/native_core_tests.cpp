@@ -338,6 +338,27 @@ static void test_named_entity_sidecar() {
     F2_CHECK(game.load_named_entities(file) == 2);          // the malformed row is dropped
     F2_CHECK(game.load_named_entities(dir / "nope.f2names") == 0);  // absent = 0, not a crash
 
+    // MOD OVERRIDE: a second .f2names listing only what it changes MOVES the existing entity
+    // rather than adding a duplicate. Duplicating would silently break the game's own lookups —
+    // StartNewEntityThread spawns one thread PER MATCHING ENTITY (questmanager.lua:942), so a
+    // duplicated name would run a quest branch twice.
+    const auto override_file = dir / "mod.f2names";
+    {
+        std::ofstream f(override_file);
+        f << "F2NAMES 1\n"
+          << "QC010_HeroInCrowdMarker\t1.0\t2.0\t3.0\t0.5\tmarker\n"
+          << "ModAddedMarker\t9.0\t9.0\t9.0\t0.0\tmarker\n";
+    }
+    F2_CHECK(game.load_named_entities(override_file) == 2);
+    std::size_t named_hero_markers = 0;
+    for (const auto& [uid, nm] : game.entity_names)
+        if (nm == "QC010_HeroInCrowdMarker") ++named_hero_markers;
+    F2_CHECK(named_hero_markers == 1);   // moved, not duplicated
+    bool mod_added = false;
+    for (const auto& [uid, nm] : game.entity_names)
+        if (nm == "ModAddedMarker") mod_added = true;
+    F2_CHECK(mod_added);                 // a mod can also ADD names
+
     // SearchTools lives in register_game_systems_api, which boot_game_scripts installs — so the
     // script round-trip below needs the user's script bank. Without it, the C++ seeding above is
     // still verified and the rest is skipped.
@@ -358,11 +379,13 @@ static void test_named_entity_sidecar() {
         "local r = SearchTools.GetSearchResults(h); "
         "assert(r and #r == 1, 'marker not found'); "
         // GetPosition returns a CVector3 (the retail contract — see the binding's citation).
+        // The mod override above moved this marker, so assert the OVERRIDDEN position — that is
+        // the contract: the last .f2names loaded wins, in place.
         "local p = r[1]:GetPosition(); "
-        "assert(math.abs(p:GetX() - 175.0739) < 0.01 and math.abs(p:GetY() - 49.4009) < 0.01 and "
-        "       math.abs(p:GetZ() - 144.7233) < 0.01, 'wrong position'); "
+        "assert(math.abs(p:GetX() - 1.0) < 0.01 and math.abs(p:GetY() - 2.0) < 0.01 and "
+        "       math.abs(p:GetZ() - 3.0) < 0.01, 'override not applied'); "
         "local x, y, z = r[1]:GetPositionXYZ(); "
-        "assert(math.abs(x - 175.0739) < 0.01 and math.abs(z - 144.7233) < 0.01, 'wrong xyz'); "
+        "assert(math.abs(x - 1.0) < 0.01 and math.abs(z - 3.0) < 0.01, 'wrong xyz'); "
         "assert(r[1]:GetName() == 'QC010_HeroInCrowdMarker')",
         "=t_names") || (std::fprintf(stderr, "names: %s\n",
                         game.script_vm->last_error().c_str()), false));

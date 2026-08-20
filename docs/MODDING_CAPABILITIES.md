@@ -157,3 +157,60 @@ and `fable2-babel-text-system.md`; native inventory from `ghidra_out/lua_natives
 The capability map now applies to both the frozen oracle and the standalone PC runtime. The
 public modding contract is implemented in `Fable2Native` with C++23 services, stable IDs, native
 packages, scripts, events, menus, and save data; oracle hooks are transitional adapters only.
+
+## ★ GDB is now READABLE — cutscenes, dialogue and archetypes (2026-08-19)
+
+The game's authored data lives in `.gdb` files, which were previously a wall of 32-bit hashes.
+Both of the file's own tables are now decoded, so records read as text — and *that* is the
+prerequisite for authoring them.
+
+| table | what it maps | why a modder cares |
+|---|---|---|
+| **name table** | `fnv1(name)` → record GUID | look a record up **by name**, exactly as the game's `GDB.GetRecord(name)` does |
+| **string table** | `fnv1(s)` → `s` | resolves type-4 string VALUES *and* the **field names**, so records self-describe |
+
+A record key is an editor-assigned opaque GUID, not a hash of the name — the name table is the
+indirection. Layout + verification: `Fable2Native/include/f2/native_gdb.h`.
+
+**Read any record:**
+
+```
+python Fable2Native/tools/gdb_record_dump.py <file.gdb> <RecordName> [--depth N] [--inherit]
+python Fable2Native/tools/gdb_record_dump.py <file.gdb> --grep QC010_      # search record names
+python Fable2Native/tools/gdb_entity_dump.py <level.save> <level.gdb> --grep QC010_
+```
+
+Which turns an interactive cutscene into its actual script:
+
+```
+QC010_JeevesGreet  (guid 0x8EB51907)
+    UseCutsceneCamera          bool    = 0
+    SceneElements              record
+        SayLine                record
+            Character              string  = 'QC010_EscortGuardFairfax'
+            CharacterToTalkTo      string  = 'QC010_Jeeves'
+            TextTag                string  = 'TEXT_QUEST_QC010_JEEVES_GREET_02'
+```
+
+So **cutscenes and dialogue are authored data**, not code: beats (`SayLine`, `SetEntityMode`),
+their speakers, their animation groups, and their text tags. Writing is already possible —
+`Fable2AssetBrowser/source/src/Level/GdbEdit.cpp` writes this same layout and round-trips.
+
+**In-game, from Lua** (mods loaded via `NativeGame::load_mods` get these too):
+`GDB.RecordExists(name)`, `GDB.GetRecord(name)` → a record handle with
+`:GetID() / :GetFloat(field) / :GetInt(field) / :GetBool(field)`.
+⚠ No string getter yet — that needs the string table on the C++ side.
+
+## ★ Named entities and markers are a text sidecar a mod can override
+
+`Fable2Native/tools/cook_quest_markers.py` cooks a level's named entities into a `.f2names`
+sidecar — a plain tab-separated table (`name  x  y  z  yaw  kind`), deliberately human-readable
+and diffable rather than a binary blob. It carries both kinds of `.save` registry entry: **markers**
+(placed, position read from their transform component) and **declared entities** (a GDB record but
+no position — script-placed, e.g. `QC010_Rose`).
+
+`NativeGame::load_named_entities` is **override-by-name**: loading a second `.f2names` on top of
+the cooked one MOVES an existing name rather than duplicating it, and adds names it has not seen.
+So a mod ships a small file listing only what it changes. (Duplicating would be silently harmful:
+`StartNewEntityThread` spawns one thread *per matching entity*, so a duplicated name would run a
+quest branch twice.) Covered by `test_named_entity_sidecar`.
