@@ -1,0 +1,48 @@
+name: Lua docs
+
+# Build the Albion Reforged Lua documentation site (MkDocs Material) and publish it
+# to GitHub Pages. Triggers on pushes to main that touch the docs, and on demand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lua-docs/**"
+      - ".github/workflows/lua-docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress one.
+concurrency:
+  group: lua-docs
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install docs dependencies
+        run: pip install -r lua-docs/requirements-docs.txt
+      - name: Build site
+        run: mkdocs build --strict --site-dir ../site
+        working-directory: lua-docs
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

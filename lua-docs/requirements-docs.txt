@@ -1,0 +1,7 @@
+# Build dependencies for the Albion Reforged Lua docs site.
+#   pip install -r requirements-docs.txt
+#   mkdocs serve        # live preview at http://127.0.0.1:8000
+#   mkdocs build        # static site into ./site
+mkdocs==1.6.1
+mkdocs-material==9.5.49
+pymdown-extensions>=10.0
