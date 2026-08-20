@@ -136,6 +136,32 @@ struct NativeGame {
     // value.
     int day_count = 0;
 
+    // ---- Interactive-cutscene director (minimal) ----
+    // The scripts drive cutscenes through a request/poll/finish protocol, all of it recovered from
+    // the game's own code:
+    //   ScriptFunction.StartCutscene (miscfunctions.lua:19-68)
+    //       AIManager:RequestCutsceneOnEntity(entity, record:GetID(), opts)
+    //       ... yields until ScriptFunction.HasStartedInteractiveCutscene(entity, name)
+    //   ScriptFunction.CheckForInteractiveCutsceneFinished (miscfunctions.lua:161-191)
+    //       for msg in MessageEvents.GetAllMessages('ICFS', sinceId) do
+    //           if msg:GetExtraDataAsID() == GDB.GetRecord(name):GetID() then return true end
+    //       -- and 'ICFU' the same way, meaning finished UNSUCCESSFULLY
+    // So a cutscene completes by POSTING a message whose extra-data id is the cutscene RECORD's
+    // GUID: 'ICFS' for success, 'ICFU' for failure.
+    //
+    // ⚠ FLAGGED — this director satisfies the PROTOCOL, it does not PERFORM the cutscene. A
+    // requested cutscene is reported started, then finished (ICFS) after `cutscene_frames` ticks,
+    // without playing its SceneElements (the beat list: SayLine speakers/TextTags, SetEntityMode
+    // animation groups — readable via tools/gdb_record_dump.py). So quests advance beat to beat,
+    // but nothing is staged, spoken or animated yet. Performing the beats is the next step.
+    struct PendingCutscene {
+        std::uint64_t entity = 0;
+        std::uint32_t record_id = 0;
+        int frames_left = 0;
+    };
+    std::vector<PendingCutscene> cutscenes;
+    int cutscene_frames = 1;  // ticks a stand-in cutscene "plays" for before it reports finished
+
     // Seed the world's NAMED entities from a cooked `.f2names` sidecar
     // (tools/cook_quest_markers.py): one entity per record, carrying a TransformComponent at the
     // record's world position and its name in `entity_names`. That is what backs a quest's

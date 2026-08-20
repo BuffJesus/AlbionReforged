@@ -173,6 +173,22 @@ std::uint64_t ensure_hero(NativeGame& g) {
     return g.hero_uid;
 }
 
+// A message type argument: usually a numeric EMessageEventType, but the cutscene protocol uses
+// 4-char codes ('ICFS' finished-successfully / 'ICFU' finished-unsuccessfully,
+// miscfunctions.lua:161-191). Pack a string big-endian into the same int space so a posted type
+// and a queried type agree. Codes are 4 ASCII chars, so this never collides with the small
+// enum values EMessageEventType uses.
+int message_type_arg(NativeScriptVM& v, int index) {
+    const char* s = v.arg_string(index);
+    if (s && *s && !(s[0] >= '0' && s[0] <= '9') && s[0] != '-') {
+        std::uint32_t packed = 0;
+        for (int i = 0; i < 4 && s[i]; ++i)
+            packed = (packed << 8) | static_cast<std::uint8_t>(s[i]);
+        return static_cast<int>(packed);
+    }
+    return static_cast<int>(v.arg_number(index));
+}
+
 TransformComponent* entity_transform(NativeGame& g, std::uint64_t uid) {
     NativeEntity* e = g.world.entities.find(uid);
     return e ? e->get<TransformComponent>(kTypeIdTransform) : nullptr;
@@ -539,8 +555,19 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         v.push_new_table();           // empty {} — no activations (satisfies both pairs() and ~=0)
         return 1;
     });
+    // GetAllMessages(type, afterId) -> array of Event handles with id > afterId. `type` is a
+    // 4-char code in the cutscene path ('ICFS'/'ICFU', miscfunctions.lua:161-191) and a numeric
+    // EMessageEventType elsewhere; a string is packed big-endian into the same int space so post
+    // and query agree (see message_type_arg).
     vm.register_native("MessageEvents", "GetAllMessages", [](NativeScriptVM& v) -> int {
-        v.push_new_table();           // empty {} — nothing to iterate
+        auto* g = game_of(v);
+        if (!g) { v.push_new_table(); return 1; }
+        const int type = message_type_arg(v, 1);
+        const auto after = static_cast<std::uint32_t>(v.arg_number(2));
+        std::vector<std::uint64_t> ids;
+        for (const GameMessage& m : g->messages.all())
+            if (m.id > after && m.type == type) ids.push_back(m.id);
+        v.push_handle_list("Event", ids.data(), ids.size());
         return 1;
     });
 
@@ -557,6 +584,16 @@ void register_game_systems_api(NativeScriptVM& vm, NativeGame& /*game*/) {
 
     vm.register_object_method("Event", "GetID", [](NativeScriptVM& v) -> int {
         v.push_number(static_cast<double>(v.arg_handle(1)));
+        return 1;
+    });
+    // GetExtraDataAsID() — the payload read as an identifier. The cutscene-finished check compares
+    // it against a GDB record's GUID (miscfunctions.lua:176), so it must come back as an exact
+    // integer, not a float that has drifted.
+    vm.register_object_method("Event", "GetExtraDataAsID", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const GameMessage* m = g ? g->messages.by_id(static_cast<std::uint32_t>(v.arg_handle(1)))
+                                 : nullptr;
+        v.push_number(m ? static_cast<double>(static_cast<std::uint32_t>(m->extra)) : 0.0);
         return 1;
     });
     vm.register_object_method("Event", "GetExtraDataAsNumber", [](NativeScriptVM& v) -> int {
@@ -725,6 +762,21 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         v.push_number(static_cast<double>(v.arg_handle(1)));
         return 1;
     });
+    // rec:GetRecord(field) -> the sub-record a type-6 field points at, as another record handle.
+    // Used to walk authored structure, e.g. QuestEntityThreadBase.IsCutsceneInRange
+    // (questmanager.lua:2070) does `cutscene:GetRecord("TriggerArea")`, and SceneElements holds a
+    // cutscene's beat list the same way.
+    vm.register_object_method("GdbRecord", "GetRecord", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const char* field = v.arg_string(2);
+        const auto raw = (g && field && *field)
+                             ? g->gdb.field_raw(static_cast<std::uint32_t>(v.arg_handle(1)), field,
+                                                gdb::kTypeRecord)
+                             : std::nullopt;
+        if (!raw) { v.push_nil(); return 1; }
+        v.push_handle("GdbRecord", *raw);
+        return 1;
+    });
     vm.register_object_method("GdbRecord", "GetFloat", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
         const char* field = v.arg_string(2);
@@ -773,6 +825,54 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
     vm.register_native("AIManager", "GetRequestedCutsceneOnEntity", [](NativeScriptVM& v) -> int {
         v.push_nil();
         return 1;
+    });
+
+    // ---- the cutscene request/poll side (the finish side is posted by NativeGame::tick) ----
+    // AIManager:RequestCutsceneOnEntity(entity, recordId, opts) — ScriptFunction.StartCutscene
+    // (miscfunctions.lua:64-68) queues the cutscene here, then yields until
+    // HasStartedInteractiveCutscene reports it running.
+    vm.register_native("AIManager", "RequestCutsceneOnEntity", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (!g) return 0;
+        const auto record_id = static_cast<std::uint32_t>(v.arg_number(2));
+        if (record_id == 0) return 0;
+        for (const auto& c : g->cutscenes)
+            if (c.record_id == record_id) return 0;  // already queued
+        g->cutscenes.push_back({v.arg_handle(1), record_id, g->cutscene_frames});
+        return 0;
+    });
+    vm.register_native("AIManager", "ClearCutsceneOnEntity", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (!g) return 0;
+        const std::uint64_t e = v.arg_handle(1);
+        g->cutscenes.erase(std::remove_if(g->cutscenes.begin(), g->cutscenes.end(),
+                                          [e](const auto& c) { return c.entity == e; }),
+                           g->cutscenes.end());
+        return 0;
+    });
+    // HasStartedInteractiveCutscene(entity, name) — true once the request is queued. StartCutscene
+    // polls this and returns as soon as it is true (miscfunctions.lua:69-77).
+    vm.register_native("ScriptFunction", "HasStartedInteractiveCutscene", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const char* name = v.arg_string(2);
+        bool started = false;
+        if (g && name && *name) {
+            if (const auto guid = g->gdb.guid_for_name(name)) {
+                for (const auto& c : g->cutscenes)
+                    if (c.record_id == *guid) { started = true; break; }
+            }
+        }
+        v.push_bool(started);
+        return 1;
+    });
+    vm.register_native("ScriptFunction", "StopAnyInteractiveCutscene", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        if (!g) return 0;
+        const std::uint64_t e = v.arg_handle(1);
+        g->cutscenes.erase(std::remove_if(g->cutscenes.begin(), g->cutscenes.end(),
+                                          [e](const auto& c) { return e == 0 || c.entity == e; }),
+                           g->cutscenes.end());
+        return 0;
     });
 
     // AddCameraScriptFile(name) — the camera-script loader. `camera/camerasetupscript.lua` is a

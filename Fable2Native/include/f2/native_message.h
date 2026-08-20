@@ -41,6 +41,11 @@ public:
 
     [[nodiscard]] std::uint32_t most_recent_id() const noexcept { return last_id_; }
 
+    // Every retained message, oldest first. GetAllMessages(type, afterId) scans this — the
+    // cutscene-finished protocol needs the whole matching set, not just the newest
+    // (miscfunctions.lua:161-191).
+    [[nodiscard]] const std::vector<GameMessage>& all() const noexcept { return messages_; }
+
     // Newest message of `type` with id > after_id, optionally constrained to a recipient
     // (to) and/or sender (by) uid. 0 for to/by means "don't care". Null if none.
     [[nodiscard]] const GameMessage* find(int type, std::uint32_t after_id,

@@ -465,6 +465,25 @@ void NativeGame::tick(double delta_seconds) {
         // steps join in P2. The front-end always ticks (menus/loading overlays).
         frontend.tick(simulation_step);
         if (mode == GameMode::InWorld) {
+            // Retire queued cutscenes BEFORE the scripts run, so a thread polling
+            // CheckForInteractiveCutsceneFinished sees the finish message on the very next resume.
+            // A cutscene completes by posting a message whose extra-data id is its RECORD GUID:
+            // 'ICFS' = finished successfully (miscfunctions.lua:161-191). 'ICFU' would report
+            // failure; nothing here fails, so only ICFS is posted.
+            // ⚠ FLAGGED: this retires the cutscene without PERFORMING it — see the note on
+            // NativeGame::cutscenes. Quests advance; nothing is staged, spoken or animated.
+            if (!cutscenes.empty()) {
+                constexpr int kIcfs = ('I' << 24) | ('C' << 16) | ('F' << 8) | 'S';
+                for (auto& c : cutscenes) --c.frames_left;
+                for (const auto& c : cutscenes) {
+                    if (c.frames_left <= 0)
+                        messages.post(kIcfs, c.entity, c.entity, static_cast<double>(c.record_id));
+                }
+                cutscenes.erase(std::remove_if(cutscenes.begin(), cutscenes.end(),
+                                               [](const auto& c) { return c.frames_left <= 0; }),
+                                cutscenes.end());
+            }
+
             script_systems.tick(simulation_step);
 
             // Entity/brain: tick the live NPCs (ACT layer) against the hero as target/
