@@ -118,6 +118,24 @@ const char* GdbFile::field_string(std::uint32_t guid, std::uint32_t field) const
     return raw ? intern(*raw) : nullptr;
 }
 
+std::vector<GdbFile::Field> GdbFile::fields(std::uint32_t guid) const {
+    std::vector<Field> out;
+    const auto rec = record_offset(guid);
+    if (!rec) return out;
+    std::size_t schema_off = 0;
+    std::uint32_t fc = 0;
+    if (!schema_at(*rec, schema_off, fc)) return out;
+    const std::size_t hashes = schema_off + 4;
+    const std::size_t descs = hashes + static_cast<std::size_t>(fc) * 4;
+    out.reserve(fc);
+    for (std::uint32_t i = 0; i < fc; ++i) {
+        out.push_back({be32(hashes + static_cast<std::size_t>(i) * 4),
+                       static_cast<std::uint8_t>(be32(descs + static_cast<std::size_t>(i) * 4) >> 24),
+                       be32(*rec + 4 + static_cast<std::size_t>(i) * 4)});
+    }
+    return out;
+}
+
 bool GdbFile::schema_at(std::size_t record, std::size_t& schema_off, std::uint32_t& field_count) const {
     if (record + 4 > body_end_) return false;
     schema_off = schema_base_ + be32(record);
@@ -238,6 +256,20 @@ const char* GdbDatabase::field_string(std::uint32_t guid, std::string_view field
         if (const auto raw = f.field_raw(guid, fh, gdb::kTypeString))
             for (const auto& g : files_)
                 if (const char* s = g.intern(*raw)) return s;
+    return nullptr;
+}
+
+std::vector<GdbFile::Field> GdbDatabase::fields(std::uint32_t guid) const {
+    for (const auto& f : files_) {
+        auto v = f.fields(guid);
+        if (!v.empty()) return v;
+    }
+    return {};
+}
+
+const char* GdbDatabase::intern(std::uint32_t hash) const {
+    for (const auto& f : files_)
+        if (const char* s = f.intern(hash)) return s;
     return nullptr;
 }
 

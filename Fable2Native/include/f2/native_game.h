@@ -169,6 +169,26 @@ struct NativeGame {
     std::vector<PendingCutscene> cutscenes;
     int cutscene_frames = 1;  // ticks a stand-in cutscene "plays" for before it reports finished
 
+    // A line a cutscene beat actually SPOKE, in order. Produced by performing a cutscene's
+    // SceneElements: each `SayLine` beat carries Character / CharacterToTalkTo / TextTag, and the
+    // TextTag resolves through the game's own localised text — e.g. QC010_JeevesGreet's first beat
+    // is QC010_EscortGuardFairfax -> QC010_Jeeves: "Evening, Jeeves. Here are the children Lord
+    // Lucien asked for." Anything that draws subtitles reads this; it is also what makes the
+    // childhood's dialogue observable in a headless test.
+    struct SpokenLine {
+        std::string speaker;      // Character (the entity NAME as authored)
+        std::string listener;     // CharacterToTalkTo, may be empty
+        std::string tag;          // the TextTag, kept so a UI can re-resolve per locale
+        std::string text;         // the resolved line (or the tag when the table lacks it)
+    };
+    std::vector<SpokenLine> spoken_lines;
+
+    // Perform one cutscene record's SceneElements. Currently performs SayLine (-> spoken_lines);
+    // other beat kinds are counted but not staged.
+    // ⚠ FLAGGED: no timing, no camera, no animation — a beat is emitted instantly. This makes the
+    // dialogue real and observable; STAGING it is the next step.
+    int perform_cutscene(std::uint32_t record_id);
+
     // Seed the world's NAMED entities from a cooked `.f2names` sidecar
     // (tools/cook_quest_markers.py): one entity per record, carrying a TransformComponent at the
     // record's world position and its name in `entity_names`. That is what backs a quest's

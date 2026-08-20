@@ -88,6 +88,17 @@ public:
     // The literal for an interned hash (a type-4 value, or a field name), or nullptr.
     [[nodiscard]] const char* intern(std::uint32_t hash) const;
 
+    // One field as stored on a record.
+    struct Field {
+        std::uint32_t name_hash = 0;
+        std::uint8_t type = 0;
+        std::uint32_t value = 0;
+    };
+    // Every field a record declares, IN ORDER. Enumeration matters because a schema may repeat a
+    // field name — a cutscene's SceneElements holds several `SayLine` entries, one per beat — so a
+    // find-by-hash lookup would only ever see the first. Does NOT follow `parent`.
+    [[nodiscard]] std::vector<Field> fields(std::uint32_t guid) const;
+
 private:
     [[nodiscard]] std::optional<std::size_t> record_offset(std::uint32_t guid) const;
     [[nodiscard]] bool schema_at(std::size_t record, std::size_t& schema_off,
@@ -127,6 +138,10 @@ public:
     [[nodiscard]] std::optional<float> field_float(std::uint32_t guid, std::string_view field) const;
     // A type-4 string field, resolved through the owning file's string table.
     [[nodiscard]] const char* field_string(std::uint32_t guid, std::string_view field) const;
+    // Every field of a record, in order, from whichever file holds it (see GdbFile::fields).
+    [[nodiscard]] std::vector<GdbFile::Field> fields(std::uint32_t guid) const;
+    // The interned literal for a hash, from any open file (field names and type-4 values).
+    [[nodiscard]] const char* intern(std::uint32_t hash) const;
     [[nodiscard]] std::optional<std::uint32_t> field_raw(std::uint32_t guid, std::string_view field,
                                                          std::uint8_t type) const;
 

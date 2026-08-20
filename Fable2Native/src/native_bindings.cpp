@@ -911,6 +911,36 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         return 1;
     });
 
+    // IsDistanceBetweenThingsUnder(a, b, dist) -> are two entities closer than `dist`?
+    // The cutscene in-range gate falls back to exactly this
+    // (QuestEntityThreadBase.IsCutsceneInRange, questmanager.lua:2098:
+    //  IsDistanceBetweenThingsUnder(self.Entity, QuestManager.HeroEntity,
+    //                               cutscene:GetFloat("MaxRangeFromPlayer")))
+    // so it must be a REAL distance, not a stub: a stub answers truthy and every proximity test in
+    // the game silently passes. Missing either entity answers false (they cannot be near).
+    vm.register_global("IsDistanceBetweenThingsUnder", [](NativeScriptVM& v) -> int {
+        auto* g = game_of(v);
+        const TransformComponent* a = g ? entity_transform(*g, v.arg_handle(1)) : nullptr;
+        const TransformComponent* b = g ? entity_transform(*g, v.arg_handle(2)) : nullptr;
+        const double limit = v.arg_number(3);
+        if (!a || !b || limit <= 0.0) { v.push_bool(false); return 1; }
+        const double dx = static_cast<double>(a->position[0]) - b->position[0];
+        const double dy = static_cast<double>(a->position[1]) - b->position[1];
+        const double dz = static_cast<double>(a->position[2]) - b->position[2];
+        v.push_bool(dx * dx + dy * dy + dz * dz <= limit * limit);
+        return 1;
+    });
+    // GroupMindManager:GetCutsceneGroupMindContainingEntity(...) -> the cutscene group mind an
+    // entity belongs to, or nil. The port has no group-mind system, so nothing contains anything
+    // and nil is the honest answer — whereas the auto-stub's truthy black-hole made
+    // IsCutsceneInRange short-circuit into `groupMind:IsPlayerInRange()` on a black hole, i.e. an
+    // invented "yes". FLAGGED: revisit when group minds exist.
+    vm.register_native("GroupMindManager", "GetCutsceneGroupMindContainingEntity",
+                       [](NativeScriptVM& v) -> int {
+        v.push_nil();
+        return 1;
+    });
+
     // AddCameraScriptFile(name) — the camera-script loader. `camera/camerasetupscript.lua` is a
     // list of calls to this native ("CameraFunctions.lua", "CameraValues.lua", "SimpleCamera.lua",
     // …), i.e. the camera scripts are loaded by the ENGINE, not by any game script: nothing in the

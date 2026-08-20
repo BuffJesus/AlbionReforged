@@ -427,6 +427,34 @@ static void test_game_text() {
     F2_CHECK(game.script_vm->last_error().empty());
 }
 
+// Performing a cutscene's authored beats: SceneElements -> SayLine -> the game's real dialogue.
+// This is the whole chain end to end — GDB name table -> record -> enumerate beats -> TextTag ->
+// localised text — on a real childhood cutscene. Skipped if game data is absent.
+static void test_cutscene_saylines() {
+    const std::filesystem::path data_root = "D:/Documents/Fable2RE/Fable2Recomp/assets/game";
+    if (!std::filesystem::exists(data_root / "data/gamescripts_r.bnk")) return;
+
+    f2::NativeGame game;
+    F2_CHECK(game.enable_scripting());
+    F2_CHECK(game.boot_game_scripts(data_root) > 0);
+    const auto guid = game.gdb.guid_for_name("QC010_JeevesGreet");
+    if (!guid) return;                       // no cutscene data on this install
+
+    const int said = game.perform_cutscene(*guid);
+    F2_CHECK(said >= 3);                     // that cutscene is a multi-line exchange
+    F2_CHECK(game.spoken_lines.size() == static_cast<std::size_t>(said));
+
+    // The first beat, in the game's own words.
+    const auto& first = game.spoken_lines.front();
+    F2_CHECK(first.speaker == "QC010_EscortGuardFairfax");
+    F2_CHECK(first.listener == "QC010_Jeeves");
+    F2_CHECK(first.tag == "TEXT_QUEST_QC010_JEEVES_GREET_02");
+    if (game.text.valid())
+        F2_CHECK(first.text.find("Jeeves") != std::string::npos);   // "Evening, Jeeves. ..."
+    std::cout << "[cutscene] QC010_JeevesGreet spoke " << said << " lines; first = "
+              << first.speaker << ": " << first.text << "\n";
+}
+
 // The mod / debug-jump menu, built by REFLECTION over the game's own tables (native_mod_menu.h).
 // Asserts the three sources it discovers and that a failing action REPORTS rather than swallows.
 // The game-data half is skipped when the script bank is absent; the mod half always runs.
@@ -952,6 +980,22 @@ static void test_childhood_stub_census() {
         for (const auto& [name, count] : spin) {
             std::cout << "  " << count << "x  " << name << "\n";
             if (++shown >= 12) break;
+        }
+    }
+
+    // DIALOGUE actually spoken. Each line came from a cutscene's authored SayLine beat, with its
+    // TextTag resolved through the game's own localised text — so this is the childhood speaking
+    // in the game's words, not a stand-in.
+    {
+        f << "\n# DIALOGUE spoken (" << game.spoken_lines.size()
+          << " lines) - speaker: line [tag]:\n";
+        for (const auto& l : game.spoken_lines)
+            f << "# " << l.speaker << ": " << l.text << "  [" << l.tag << "]\n";
+        std::cout << "[census] dialogue spoken: " << game.spoken_lines.size() << " lines\n";
+        int shown = 0;
+        for (const auto& l : game.spoken_lines) {
+            std::cout << "  " << l.speaker << ": " << l.text << "\n";
+            if (++shown >= 6) break;
         }
     }
 
@@ -2166,6 +2210,7 @@ int main() {
     test_cook_scripts_package();
     test_gdb_record_lookup();
     test_game_text();
+    test_cutscene_saylines();
     test_mod_menu();
     test_named_entity_sidecar();
     test_childhood_stub_census();

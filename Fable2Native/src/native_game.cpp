@@ -7,6 +7,7 @@
 #include <cmath>
 #include <fstream>
 #include <stdexcept>
+#include <string_view>
 
 namespace f2 {
 
@@ -408,6 +409,46 @@ void NativeGame::prepare_world() {
     camera_controller.pitch = -0.3f;
 }
 
+// Walk a cutscene record's authored beat list and perform what we can.
+//
+// Structure (readable with tools/gdb_record_dump.py, decoded from the game's own data):
+//     QC010_JeevesGreet
+//       UseCutsceneCamera bool
+//       SceneElements     record
+//           SayLine       record  { Character, CharacterToTalkTo, TextTag }
+//           SayLine       record  { ... }            <- the SAME field name repeats, one per beat,
+//           SetEntityMode record  { Character, AnimationGroup }   which is why this ENUMERATES
+//                                                                 fields instead of looking up
+// A SayLine's TextTag resolves through the game's own localised text, so the port speaks the
+// game's words. FLAGGED: beats are emitted instantly, with no timing, camera or animation.
+int NativeGame::perform_cutscene(std::uint32_t record_id) {
+    if (record_id == 0) return 0;
+    const auto elements = gdb.field_raw(record_id, "SceneElements", gdb::kTypeRecord);
+    if (!elements) return 0;
+
+    int performed = 0;
+    for (const auto& beat : gdb.fields(*elements)) {
+        if (beat.type != gdb::kTypeRecord) continue;
+        const char* kind = gdb.intern(beat.name_hash);
+        if (!kind || std::string_view(kind) == "parent") continue;
+        if (std::string_view(kind) != "SayLine") continue;   // other beat kinds: not staged yet
+
+        const char* tag = gdb.field_string(beat.value, "TextTag");
+        if (!tag || !*tag) continue;
+        const char* who = gdb.field_string(beat.value, "Character");
+        const char* to = gdb.field_string(beat.value, "CharacterToTalkTo");
+        SpokenLine line;
+        line.speaker = who ? who : "";
+        line.listener = to ? to : "";
+        line.tag = tag;
+        line.text = text.get(tag);   // the tag itself when the table has no such string
+        script_log.push_back("[say] " + line.speaker + ": " + line.text);
+        spoken_lines.push_back(std::move(line));
+        ++performed;
+    }
+    return performed;
+}
+
 int NativeGame::load_named_entities(const std::filesystem::path& path) {
     std::ifstream f(path);
     if (!f) return 0;
@@ -524,8 +565,9 @@ void NativeGame::tick(double delta_seconds) {
                 constexpr int kIcfs = ('I' << 24) | ('C' << 16) | ('F' << 8) | 'S';
                 for (auto& c : cutscenes) --c.frames_left;
                 for (const auto& c : cutscenes) {
-                    if (c.frames_left <= 0)
-                        messages.post(kIcfs, c.entity, c.entity, static_cast<double>(c.record_id));
+                    if (c.frames_left > 0) continue;
+                    perform_cutscene(c.record_id);   // speak its SayLine beats before finishing
+                    messages.post(kIcfs, c.entity, c.entity, static_cast<double>(c.record_id));
                 }
                 cutscenes.erase(std::remove_if(cutscenes.begin(), cutscenes.end(),
                                                [](const auto& c) { return c.frames_left <= 0; }),
