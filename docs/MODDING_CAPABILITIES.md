@@ -214,3 +214,37 @@ the cooked one MOVES an existing name rather than duplicating it, and adds names
 So a mod ships a small file listing only what it changes. (Duplicating would be silently harmful:
 `StartNewEntityThread` spawns one thread *per matching entity*, so a duplicated name would run a
 quest branch twice.) Covered by `test_named_entity_sidecar`.
+
+## ★ Mod / debug-jump menu — `ModMenu.Register` (2026-08-19)
+
+`Fable2Native/include/f2/native_mod_menu.h` is the native replacement for the recomp's pause-menu
+"Mod Menu". It is a **model** (a renderer draws whatever `entries()` reports), and it is built by
+reflection over the game's own tables rather than a hardcoded list:
+
+| source | what it yields |
+|---|---|
+| `Gameflow.ChildhoodVars.SkipTo*` | the game's **own** skip functions — `SkipToWino`, `SkipToLL`, `SkipToLL2`, `SkipToBuyMusicBox`, `SkipToLuciensStudy` |
+| `Gameflow.DebugQuestStartTable` | every quest the gameflow registers as jumpable, with its level + start marker |
+| `ModMenu.Register` | whatever mods add |
+
+Measured on real game data: **72 entries** (5 skips + 65 jumpable quests + the shipped choices).
+Because it is discovery, the list cannot drift from the data, and a skip runs the *game's* code —
+setting real sub-quest flags, the gold counter, Rose's follow state, the level handoff — instead of
+a state we guessed at.
+
+**Add your own entry from a mod script** (loaded via `NativeGame::load_mods`):
+
+```lua
+ModMenu.Register("Mod", "Give 1000 gold", function()
+  Money.Give(GetPlayerHero(), 1000)
+end, "optional detail text")
+```
+
+Every action runs under `pcall` and a failure is **reported** (`ModMenu::last_error()`), never
+swallowed — silent failure is what hid the childhood's frame-0 death for this entire project.
+
+The childhood's "where do the warrants go" choice ships as two *registered* entries, so they double
+as a worked template: they write `Gameflow.ChildhoodResolutionEvil` (which the gameflow uses to pick
+the post-childhood scenario — `Chapter2Slums` evil vs `Chapter2Posh` good) and
+`Gameflow.ChildhoodVars.WantedCompleted`. Those are the same two writes the recomp's menu made
+behind an in-world sign, minus the HUD/toaster hack.
