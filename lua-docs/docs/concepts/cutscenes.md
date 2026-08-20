@@ -26,7 +26,7 @@ data. The two codes are four-character constants:
 
 The waiting quest matches the message's `GetExtraDataAsID()` against the scene it
 requested — which is precisely why record ids must cross as
-[tokens, not raw GUIDs](authored-data.md#gdb--the-game-database).
+[tokens, not raw GUIDs](authored-data.md#gdb-the-game-database).
 
 !!! danger "`self` is argument 1"
     `AIManager:RequestCutsceneOnEntity(...)` is a **method** call — the entity is

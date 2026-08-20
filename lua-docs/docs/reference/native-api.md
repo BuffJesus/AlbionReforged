@@ -132,5 +132,5 @@ game scripts): `Game.Elapsed/GetTimeStep/SetChapter/GetChapter`,
     After a boot + quest run, `vm.stub_misses()` is the ranked list of natives the
     loaded scripts actually called but the runtime doesn't implement — the
     highest-value work items, straight from the game's own usage. The
-    [stub census](../getting-started/run-the-scripts.md#the-stub-census--the-measurement-harness)
+    [stub census](../getting-started/run-the-scripts.md#the-stub-census-the-measurement-harness)
     is the fuller version.

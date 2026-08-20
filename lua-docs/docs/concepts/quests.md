@@ -28,7 +28,7 @@ Three things to notice:
 2. **Entity threads.** `StartNewEntityThread(name, subtype)` searches the world for
    entities with `name` and spawns a sub-thread per match — **one thread per match,
    and nothing at all when there are none**. It now resolves against real named
-   world entities (see [entities](entities.md#entity-search--now-real)).
+   world entities (see [entities](entities.md#entity-search-now-real)).
 3. **The wait.** `WaitFor(pred)` yields the coroutine every frame until `pred()`
    becomes truthy, then falls through. Here `pred` reads `MyFirstQuest.QuestOver` —
    the **type's** field, not the instance's.

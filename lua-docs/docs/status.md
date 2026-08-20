@@ -33,7 +33,7 @@ is a test or a repro behind it.
   game's own chapter one.
 - [x] **Entity search is real.** `SearchTools.FilterWithName` resolves against the
   world's named entities, so `StartNewEntityThread` spawns a thread per real match.
-  See [Entities](concepts/entities.md#entity-search--now-real).
+  See [Entities](concepts/entities.md#entity-search-now-real).
 - [x] **Authored data is readable.** The **GDB** database (records, name table,
   string table, `parent` inheritance) and **`book.babel`** localised text (the codec
   is plain zlib) are both decoded and bound to Lua. See
@@ -90,7 +90,7 @@ Ranked — biggest structural gap first:
   and writes `docs/childhood_stub_census.txt` — dialogue spoken, staged actions,
   entity-thread match counts, and any **silent** coroutine error. Every quest bug on
   this track was found there. See
-  [the census](getting-started/run-the-scripts.md#the-stub-census--the-measurement-harness).
+  [the census](getting-started/run-the-scripts.md#the-stub-census-the-measurement-harness).
 - **App stability:** both the D3D12 and Vulkan front-ends launch with
   `--scripting --game-scripts` and stay alive.
 - **Ground truth:** every script referenced here was decompiled from the game's own
