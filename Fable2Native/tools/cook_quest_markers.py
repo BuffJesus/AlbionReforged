@@ -116,7 +116,7 @@ def cook(level: str, game_dir: Path, out_path: Path, f2tool: Path, markerdump: P
     skipped = 0
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from gdb_anim_slots import GdbView  # the verified GDB reader
+        from gdb_anim_slots import GdbView, fnv1  # the verified GDB reader
         import re as _re
         xml = save_p.read_text(encoding="latin-1", errors="replace")
         registry = {m.group(1): int(m.group(2), 16) for m in
@@ -125,15 +125,54 @@ def cook(level: str, game_dir: Path, out_path: Path, f2tool: Path, markerdump: P
         globals_gdb = game_dir / "data" / "Globals" / "globals.gdb"
         if globals_gdb.is_file():
             views.append(GdbView(globals_gdb.read_bytes()))
+        # A CREATURE carries its authored placement on the character-navigator component, NOT on
+        # the PhysicsSimple component the marker pass follows — which is why creatures looked
+        # position-less. Verified on QC010_Rose:
+        #   PhysicsSimulationCharacterNavigatorComponent -> Position { X=200.013, Y=91.422,
+        #                                                              Z=52.731 }
+        # which lands right beside the QC010_ChildhoodStart marker, as it should. Read it here so
+        # the cast is placed where the level authors put it.
+        import struct as _struct
+        NAV = fnv1("PhysicsSimulationCharacterNavigatorComponent")
+        POS, ROT = fnv1("Position"), fnv1("Rotation")
+        AXIS = {a: fnv1(a) for a in ("X", "Y", "Z")}
+
+        def _vec(view, rec_guid, field_hash):
+            """{X,Y,Z} floats off a type-6 sub-record, or None."""
+            sub = view.find_field(rec_guid, field_hash, 6)
+            if sub is None:
+                return None
+            out = {}
+            for axis, ah in AXIS.items():
+                raw = view.find_field(sub, ah, 3)
+                if raw is None:
+                    return None
+                out[axis] = _struct.unpack(">f", _struct.pack(">I", raw))[0]
+            return out
+
+        placed_creatures = 0
         for name, guid in sorted(registry.items()):
             if name in placed:
                 continue
-            if any(v.ok and v.lookup(guid) is not None for v in views):
-                records.append({"name": name, "pos": [0.0, 0.0, 0.0], "yaw": 0.0,
-                                "kind": "entity"})
-                declared += 1
-            else:
+            owner = next((v for v in views if v.ok and v.lookup(guid) is not None), None)
+            if owner is None:
                 skipped += 1
+                continue
+            pos, yaw = [0.0, 0.0, 0.0], 0.0
+            nav = owner.find_field(guid, NAV, 6)
+            if nav is not None:
+                p3 = _vec(owner, nav, POS)
+                if p3 and (p3["X"] or p3["Y"] or p3["Z"]):
+                    # game(x,y,z) -> world {x,z,y}, the same swap the marker pass applies
+                    pos = [p3["X"], p3["Z"], p3["Y"]]
+                    placed_creatures += 1
+                r3 = _vec(owner, nav, ROT)
+                if r3:
+                    yaw = r3["Y"]
+            records.append({"name": name, "pos": pos, "yaw": yaw, "kind": "entity"})
+            declared += 1
+        log(f"  declared entities: {declared} ({placed_creatures} had an authored "
+            f"navigator position)")
     except Exception as exc:  # noqa: BLE001 — the marker pass is still valid without this
         log("  declared-entity pass skipped (%s: %s)" % (type(exc).__name__, exc))
 

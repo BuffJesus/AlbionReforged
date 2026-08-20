@@ -144,6 +144,34 @@
 
 # DIALOGUE spoken (0 lines) - speaker: line [tag]:
 
+# ENTITY POSITIONS (cutscene in-range depends on these):
+# hero  0 0 0
+
+# THE GAME'S OWN Debug.Error calls (23 distinct):
+# 2x  ?:0: attempt to compare number with table
+# 1x  ?:0: attempt to index a nil value
+# 2x  ?:0: attempt to index global 'DummyObjects' (a nil value)
+# 1x  GetEntityWithName failed to find 'BLExitToBLThagCave'.
+# 2x  GetEntityWithName failed to find 'BLExitToBMkt'.
+# 2x  GetEntityWithName failed to find 'BLExitToBW'.
+# 1x  GetEntityWithName failed to find 'BowerstoneMarketExit_Gate'.
+# 1x  GetEntityWithName failed to find 'NewObjectBuildingBWSHouse1_20'.
+# 1x  GetEntityWithName failed to find 'QC010_VillagerA'.
+# 1x  GetEntityWithName failed to find 'QC030_GraphEdge1'.
+# 1x  GetEntityWithName failed to find 'QC055_BreakableSearchMarker'.
+# 1x  GetEntityWithName failed to find 'QC070_ObjectFurnitureKeyframedChestWooden'.
+# 2398x  GetEntityWithName failed to find 'QO060_DoorOpenTrigger'.
+# 2x  GetEntityWithName failed to find 'QO900_DemonDoor'.
+# 2x  GetEntityWithName failed to find 'QO910_DemonDoor'.
+# 2x  GetEntityWithName failed to find 'QO920_DemonDoor'.
+# 2x  GetEntityWithName failed to find 'QO925_DemonDoor'.
+# 2x  GetEntityWithName failed to find 'QO930_DemonDoor'.
+# 2x  GetEntityWithName failed to find 'QO940_DemonDoor'.
+# 2x  GetEntityWithName failed to find 'QO950_DemonDoor'.
+# 2x  GetEntityWithName failed to find 'QO980_DemonDoor'.
+# 2x  GetEntityWithName failed to find 'QO990_DemonDoor'.
+# 1x  No village with the name:GypsyVillagefound in ScriptFunction.SetVillageShopsCanOpen
+
 # ENTITY THREADS started (name matched=N). matched=0 => that branch NEVER runs:
 # GenericTriggerMarker matched=0
 # GilesPortcullis matched=0

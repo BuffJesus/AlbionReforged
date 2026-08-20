@@ -644,6 +644,25 @@ static void test_childhood_stub_census() {
     F2_CHECK(game.load_quest_scripts() > 0);
     f2::NativeScriptVM& vm = *game.script_vm;
 
+    // HARNESS SETUP: put the hero on the childhood's OWN authored start marker. The gameflow
+    // registers the quest as
+    //   RegisterDebugQuest(DebugQC010, 'QC010_Childhood', 'Childhood', 'BWSSlums',
+    //                      'QC010_ChildhoodStart')
+    // so that marker IS where this quest begins. It matters because the cooked scene we drive is
+    // chapter2slums (the POST-childhood scenario, see docs/CHILDHOOD_LEVEL_EVIDENCE.md), whose
+    // PlayerStart sits ~79 units away — far outside a cutscene's MaxRangeFromPlayer of 10, so
+    // every proximity-gated beat would stall for a reason that is an artifact of the wrong stage
+    // rather than a missing system. Not needed once defaultscenario is cooked.
+    for (const auto& [uid, nm] : game.entity_names) {
+        if (nm != "QC010_ChildhoodStart") continue;
+        f2::NativeEntity* e = game.world.entities.find(uid);
+        if (auto* t = e ? e->get<f2::TransformComponent>(f2::kTypeIdTransform) : nullptr) {
+            game.player.set_position(t->position);
+            std::cout << "[census] hero moved to QC010_ChildhoodStart" << std::endl;
+        }
+        break;
+    }
+
     // NOTE ordering: every probe below is installed BEFORE start_new_game. A quest instance
     // snapshots its base-class methods when it is created, so wrapping QuestThreadBase after the
     // childhood already exists leaves that instance holding the UNWRAPPED originals — which is
@@ -995,6 +1014,56 @@ static void test_childhood_stub_census() {
         int shown = 0;
         for (const auto& l : game.spoken_lines) {
             std::cout << "  " << l.speaker << ": " << l.text << "\n";
+            if (++shown >= 6) break;
+        }
+    }
+
+    // WHERE the cutscene participants actually are. A cutscene's in-range gate falls back to
+    // IsDistanceBetweenThingsUnder(self.Entity, hero, MaxRangeFromPlayer) (questmanager.lua:2098),
+    // so a participant left at the origin can never satisfy it. Print the hero + a few named
+    // entities so the distance is a measured number, not an assumption.
+    {
+        f << "\n# ENTITY POSITIONS (cutscene in-range depends on these):\n";
+        const auto hero_pos = game.player.position();
+        const char* eol = "\n";
+        f << "# hero  " << hero_pos[0] << " " << hero_pos[1] << " " << hero_pos[2] << eol;
+        std::cout << "[census] hero at " << hero_pos[0] << "," << hero_pos[1] << ","
+                  << hero_pos[2] << eol;
+        for (const char* want : {"QC010_Rose", "QC010_Theresa", "QC010_ChildhoodStart",
+                                 "QC010_HeroInCrowdMarker"}) {
+            for (const auto& [uid, nm] : game.entity_names) {
+                if (nm != want) continue;
+                f2::NativeEntity* e = game.world.entities.find(uid);
+                auto* t = e ? e->get<f2::TransformComponent>(f2::kTypeIdTransform) : nullptr;
+                if (!t) continue;
+                const double dx = t->position[0] - hero_pos[0];
+                const double dy = t->position[1] - hero_pos[1];
+                const double dz = t->position[2] - hero_pos[2];
+                const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                f << "# " << nm << "  " << t->position[0] << " " << t->position[1] << " "
+                  << t->position[2] << "   dist_to_hero=" << dist << eol;
+                std::cout << "  " << nm << " dist_to_hero=" << dist << eol;
+                break;
+            }
+        }
+    }
+
+    // The GAME'S OWN diagnostics. Scripts call Debug.Error when they detect a broken setup
+    // ("Unable to find a cutscene called X", "Entity specified as trigger volume has no Trigger
+    // EC", ...). Those are the engine telling us exactly what it is missing, so surface them.
+    {
+        std::map<std::string, int> errs;
+        for (const auto& line : game.script_log) {
+            const std::size_t tag = line.find("[Debug.Error] ");
+            if (tag != std::string::npos) ++errs[line.substr(tag + 14)];
+        }
+        const char* nl = "\n";
+        f << nl << "# THE GAME'S OWN Debug.Error calls (" << errs.size() << " distinct):" << nl;
+        for (const auto& [msg, n] : errs) f << "# " << n << "x  " << msg << nl;
+        std::cout << "[census] game Debug.Error: " << errs.size() << " distinct" << std::endl;
+        int shown = 0;
+        for (const auto& [msg, n] : errs) {
+            std::cout << "  " << n << "x  " << msg << std::endl;
             if (++shown >= 6) break;
         }
     }
