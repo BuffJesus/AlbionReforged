@@ -717,6 +717,14 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
         v.push_handle("GdbRecord", *guid);
         return 1;
     });
+    // rec:GetID() -> the record's GUID. The cutscene path passes it straight to the AI manager:
+    //     AIManager:RequestCutsceneOnEntity(entity, record:GetID(), opts)
+    // (ScriptFunction.StartCutscene, miscfunctions.lua:68) — so the id a record reports IS the
+    // key the engine tracks it by, which is exactly the GUID this handle carries.
+    vm.register_object_method("GdbRecord", "GetID", [](NativeScriptVM& v) -> int {
+        v.push_number(static_cast<double>(v.arg_handle(1)));
+        return 1;
+    });
     vm.register_object_method("GdbRecord", "GetFloat", [](NativeScriptVM& v) -> int {
         auto* g = game_of(v);
         const char* field = v.arg_string(2);
@@ -749,6 +757,21 @@ void register_boot_api(NativeScriptVM& vm, NativeGame& /*game*/) {
                                                 gdb::kTypeBool)
                              : std::nullopt;
         v.push_bool(raw.has_value() && *raw != 0);
+        return 1;
+    });
+
+    // AIManager:GetRequestedCutsceneOnEntity(entity) -> the cutscene currently queued on that
+    // entity, or nil. The scripts treat a NON-nil answer as an error state:
+    //     if AIManager:GetRequestedCutsceneOnEntity(e) then
+    //         Debug.Error("attempting to start a cutscene on " .. e:GetName() ..
+    //                     " but they are already waiting to start one!")
+    // (miscfunctions.lua:50-63 StartCutscene, and again in StartInteractiveCutscene). The port has
+    // no cutscene director, so nothing is ever queued and the honest answer is nil — whereas the
+    // auto-stub's black-hole value is TRUTHY and made every cutscene take that error branch.
+    // FLAGGED: this is correct only while no director exists; once one does, it must report what
+    // that director has queued.
+    vm.register_native("AIManager", "GetRequestedCutsceneOnEntity", [](NativeScriptVM& v) -> int {
+        v.push_nil();
         return 1;
     });
 

@@ -58,6 +58,7 @@ class GdbView:
         if not self._build_offsets():
             return
         self._build_name_table()
+        self._build_string_table()
         self.ok = True
 
     # ---- NAME TABLE: name -> record GUID -------------------------------------------------
@@ -92,6 +93,42 @@ class GdbView:
         except Exception:  # noqa: BLE001 — a file without a usable name table just has none
             self.name_pairs = []
             self._name_keys = []
+
+    # ---- STRING TABLE: fnv1(s) -> the literal string ------------------------------------
+    # Right after the name table sits an interned string pool:
+    #     { u32 0x00010000, u32 byteSize, u32 stringCount }
+    #     stringCount * { u32 fnv1(s), char s[]; '\0' }
+    # It serves two purposes: it is the value pool for type-4 (string) fields, AND it contains the
+    # FIELD NAMES, so a record's opaque field hashes become readable — `BackgroundCutscene`,
+    # `UseCutsceneCamera`, `SceneElements`, and `parent` (which is what 0x5F6317D5 really is).
+    # Verified: every entry self-checks, fnv1(s) == stored hash, 7483/7483 in interactivecutscenes.
+    def _build_string_table(self):
+        self.strings = {}
+        try:
+            if not self.name_pairs:
+                return
+            name_count = _be(self.b, 0x10)
+            offset_base = self.hash_base + self.count * 4
+            name_base = (offset_base + self.count * 2 + 3) & ~3
+            at = name_base + name_count * 8
+            if at + 12 > len(self.b) or _be(self.b, at) != 0x00010000:
+                return
+            count = _be(self.b, at + 8)
+            off = at + 12
+            for _ in range(count):
+                if off + 4 > len(self.b):
+                    break
+                h = _be(self.b, off)
+                off += 4
+                end = self.b.index(b"\0", off)
+                self.strings[h] = self.b[off:end].decode("latin-1")
+                off = end + 1
+        except Exception:  # noqa: BLE001 — a file without a usable string pool just has none
+            self.strings = {}
+
+    def text(self, hash_value: int, default: str = None):
+        """The literal string for an interned hash (a type-4 field value, or a field NAME)."""
+        return self.strings.get(hash_value, default)
 
     def guid_for_name(self, name: str):
         """Record GUID for a NAME (the GDB.GetRecord path), or None."""
