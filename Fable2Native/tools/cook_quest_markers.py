@@ -86,6 +86,12 @@ def cook(level: str, game_dir: Path, out_path: Path, f2tool: Path, markerdump: P
     data = json.loads(dump.read_text(encoding="utf-8"))
     markers = data.get("markers", [])
 
+    # name -> GUID for the marker pass too, so every row can carry its record id.
+    import re as _re0
+    registry_guid = {mm.group(1): int(mm.group(2), 16) for mm in
+                     _re0.finditer(r'<Entity\s+name="([^"]*)"[^>]*>\s*(0x[0-9A-Fa-f]+)',
+                                   save_p.read_text(encoding="latin-1", errors="replace"))}
+
     records = []
     for m in markers:
         gx, gy, gz = m["pos"]
@@ -95,6 +101,7 @@ def cook(level: str, game_dir: Path, out_path: Path, f2tool: Path, markerdump: P
             "pos": [gx, gz, gy],        # game -> world {x,z,y}, matching cook_levels.py
             "yaw": rot[1] if len(rot) > 1 else 0.0,
             "kind": "marker",
+            "guid": registry_guid.get(m["name"], 0),
         })
 
     # DECLARED ENTITIES (no placement component). The level's .save is a name -> GUID registry;
@@ -169,7 +176,8 @@ def cook(level: str, game_dir: Path, out_path: Path, f2tool: Path, markerdump: P
                 r3 = _vec(owner, nav, ROT)
                 if r3:
                     yaw = r3["Y"]
-            records.append({"name": name, "pos": pos, "yaw": yaw, "kind": "entity"})
+            records.append({"name": name, "pos": pos, "yaw": yaw, "kind": "entity",
+                            "guid": guid})
             declared += 1
         log(f"  declared entities: {declared} ({placed_creatures} had an authored "
             f"navigator position)")
@@ -190,11 +198,14 @@ def cook(level: str, game_dir: Path, out_path: Path, f2tool: Path, markerdump: P
         "# kind=entity: DECLARED in the .save with a GDB record but NO position - script-placed",
         "#              (the quest teleports it). Seeded at the origin; position NOT data-backed.",
         "# registry entries with neither a transform nor a GDB record: %d" % skipped,
-        "# name\tx\ty\tz\tyaw\tkind",
+        "# name\tx\ty\tz\tyaw\tkind\tgdbGuid",
+        "# gdbGuid is the entity's record id, so the runtime can reach its AUTHORED data at",
+        "# runtime (e.g. AnimationManagerComponent.Animations for a cutscene PlayAnimation beat).",
     ]
     for r in records:
-        lines.append("%s\t%.4f\t%.4f\t%.4f\t%.4f\t%s"
-                     % (r["name"], r["pos"][0], r["pos"][1], r["pos"][2], r["yaw"], r["kind"]))
+        lines.append("%s\t%.4f\t%.4f\t%.4f\t%.4f\t%s\t0x%08X"
+                     % (r["name"], r["pos"][0], r["pos"][1], r["pos"][2], r["yaw"], r["kind"],
+                        r.get("guid", 0)))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     out = {"no_transform": data.get("miss", 0)}

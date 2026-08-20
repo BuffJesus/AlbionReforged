@@ -83,6 +83,10 @@ struct NativeGame {
     MessageBus messages;
     std::uint64_t hero_uid = 0;
     std::unordered_map<std::uint64_t, std::string> entity_names;
+    // entity uid -> its AUTHORED GDB record id (from the .f2names sidecar). That is how a runtime
+    // beat reaches an entity's own data, e.g. a cutscene PlayAnimation resolves its clip through
+    // the character's AnimationManagerComponent.Animations.
+    std::unordered_map<std::uint64_t, std::uint32_t> entity_gdb_guid;
     std::unordered_set<std::uint64_t> killed_entities;  // Entity:Kill() marks; IsAlive() reads
     // SearchTools state: one pending name-filter per open search handle (1-based). A quest's
     // GetAllEntitiesWithName = StartNewSearch -> FilterWithName -> GetSearchResults, so we
@@ -172,6 +176,16 @@ struct NativeGame {
         std::array<float, 3> cam_pos{};    // SetLookAtCamera: where the camera sits
         std::array<float, 3> cam_focus{};  // ...and what it looks at
         bool has_camera = false;
+        // MoveToMarker: where the character walks, how close counts as arrived, and whether the
+        // scene waits for it (all authored: MarkerToMoveTo / Range / WaitUntilComplete).
+        std::array<float, 3> move_to{};
+        float arrive_range = 0.0f;
+        bool has_move = false;
+        bool wait_until_complete = false;
+        // PlayAnimation: the authored clip NAME, plus the clip id resolved from the character's
+        // own AnimationManagerComponent when the entity's record is known.
+        std::string animation;
+        std::uint32_t animation_clip = 0;
     };
     struct PendingCutscene {
         std::uint64_t entity = 0;
@@ -208,6 +222,18 @@ struct NativeGame {
         std::string text;         // the resolved line (or the tag when the table lacks it)
     };
     std::vector<SpokenLine> spoken_lines;
+
+    // What a cutscene last asked each character to play/do — the record a renderer or the
+    // animation system consumes. ⚠ FLAGGED: the port stores and reports these; only the hero has
+    // cooked clips today, so an NPC's animation is recorded but not yet visible.
+    struct StagedAction {
+        std::string character;
+        std::string animation;      // authored AnimationName
+        std::uint32_t clip = 0;     // resolved bank clip id (0 = unresolved)
+        bool moving = false;        // a MoveToMarker is in flight
+        std::array<float, 3> target{};
+    };
+    std::vector<StagedAction> staged_actions;
 
     // Advance every running cutscene by `dt`, performing beats as their time comes and posting
     // the finish message when a cutscene runs out of beats. Called from tick().

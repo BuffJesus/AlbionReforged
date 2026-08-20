@@ -7,6 +7,7 @@
 #include <cmath>
 #include <fstream>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <string_view>
 
@@ -484,6 +485,21 @@ std::vector<NativeGame::CutsceneBeat> NativeGame::build_cutscene_beats(std::uint
             }
         } else if (beat.kind == "Wait") {
             if (const auto t = gdb.field_float(field.value, "TimeToWait")) beat.duration = *t;
+        } else if (beat.kind == "MoveToMarker") {
+            // MarkerToMoveTo is a marker RECORD (type 7); its PhysicsSimpleComponent.Position is
+            // the destination. Range is the authored arrival radius, WaitUntilComplete says
+            // whether the scene holds for the walk.
+            const auto marker = gdb.field_raw(field.value, "MarkerToMoveTo", 7);
+            if (marker && anchor_pos(*marker, beat.move_to)) beat.has_move = true;
+            beat.arrive_range = gdb.field_float(field.value, "Range").value_or(1.0f);
+            beat.wait_until_complete =
+                gdb.field_raw(field.value, "WaitUntilComplete", gdb::kTypeBool).value_or(0u) != 0;
+        } else if (beat.kind == "PlayAnimation") {
+            if (const char* anim = gdb.field_string(field.value, "AnimationName")) {
+                beat.animation = anim;
+                beat.wait_until_complete =
+                    gdb.field_raw(field.value, "PlayIntoAndOutof", gdb::kTypeBool).value_or(0u) != 0;
+            }
         } else if (beat.kind == "SetLookAtCamera") {
             const auto p = gdb.field_raw(field.value, "PositionEntity", 7);
             const auto fo = gdb.field_raw(field.value, "FocusEntity", 7);
@@ -509,6 +525,69 @@ void NativeGame::update_cutscenes(double dt) {
             if (!beat.tag.empty()) {
                 script_log.push_back("[say] " + beat.character + ": " + beat.text);
                 spoken_lines.push_back({beat.character, beat.listener, beat.tag, beat.text});
+            }
+            if (beat.has_move || !beat.animation.empty()) {
+                // Stage the action on the named character. Both are authored:
+                //   MoveToMarker  -> a destination + arrival Range
+                //   PlayAnimation -> a clip NAME, resolved to the bank clip id through the
+                //                    character's OWN AnimationManagerComponent.Animations
+                //                    (e.g. QC010_Rose has RoseWarmingUp, RoseTantrum, Idle, ...).
+                StagedAction act;
+                act.character = beat.character;
+                act.animation = beat.animation;
+                act.moving = beat.has_move;
+                act.target = beat.move_to;
+
+                std::uint64_t uid = 0;
+                for (const auto& [id, nm] : entity_names)
+                    if (nm == beat.character) { uid = id; break; }
+
+                if (!beat.animation.empty() && uid != 0) {
+                    const auto rec = entity_gdb_guid.find(uid);
+                    if (rec != entity_gdb_guid.end()) {
+                        if (const auto anims =
+                                gdb.field_raw(rec->second, "AnimationManagerComponent",
+                                              gdb::kTypeRecord)) {
+                            if (const auto list =
+                                    gdb.field_raw(*anims, "Animations", gdb::kTypeRecord)) {
+                                // An animation entry comes in TWO authored shapes, both seen on
+                                // QC010_Rose: either the clip key DIRECTLY (a type-4 field whose
+                                // RAW u32 value is the bank key — see tools/gdb_anim_slots.py,
+                                // which resolves the hero's Idle/Walk/Run the same way), or a
+                                // type-6 sub-record of named slots, e.g. RoseWarmingUp ->
+                                // { Pose, Idle }. Note the raw value is NOT a string-pool
+                                // reference; formatting it as "0x...." is just how the dump tool
+                                // prints an unpooled value.
+                                if (const auto direct =
+                                        gdb.field_raw(*list, beat.animation.c_str(),
+                                                      gdb::kTypeString)) {
+                                    act.clip = *direct;
+                                } else if (const auto sub =
+                                               gdb.field_raw(*list, beat.animation.c_str(),
+                                                             gdb::kTypeRecord)) {
+                                    for (const auto& slot : gdb.fields(*sub)) {
+                                        if (slot.type != gdb::kTypeString) continue;
+                                        act.clip = slot.value;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (beat.has_move && uid != 0) {
+                    // Walk the character to the authored marker. FLAGGED: this sets the transform
+                    // directly rather than pathing — the nav mesh is not consumed here — so the
+                    // move is a straight line at the locomotion speed the cooked clips measured.
+                    if (NativeEntity* e = world.entities.find(uid)) {
+                        if (auto* t = e->get<TransformComponent>(kTypeIdTransform))
+                            t->position = beat.move_to;
+                    }
+                }
+                script_log.push_back("[stage] " + act.character +
+                                     (act.moving ? " move" : "") +
+                                     (act.animation.empty() ? "" : " anim=" + act.animation));
+                staged_actions.push_back(std::move(act));
             }
             if (beat.has_camera) {
                 // The authored cutscene camera: sit at PositionEntity, look at FocusEntity.
@@ -595,6 +674,21 @@ int NativeGame::load_named_entities(const std::filesystem::path& path) {
         }
         if (!ok) continue;
         const std::size_t yaw_end = std::min(line.find('\t', tab[3] + 1), line.size());
+        // Optional trailing columns: `kind`, then the entity's authored GDB record id. The id is
+        // what lets a runtime beat reach the entity's own data (e.g. a cutscene PlayAnimation
+        // resolving its clip through AnimationManagerComponent.Animations).
+        std::uint32_t row_guid = 0;
+        if (yaw_end < line.size()) {
+            const std::size_t kind_end = std::min(line.find('\t', yaw_end + 1), line.size());
+            if (kind_end < line.size()) {
+                try {
+                    row_guid = static_cast<std::uint32_t>(
+                        std::stoul(line.substr(kind_end + 1), nullptr, 0));
+                } catch (const std::exception&) {
+                    row_guid = 0;
+                }
+            }
+        }
         const std::string name = line.substr(0, tab[0]);
         if (name.empty()) continue;
         float v[4];
@@ -624,6 +718,7 @@ int NativeGame::load_named_entities(const std::filesystem::path& path) {
                 tf->position = {v[0], v[1], v[2]};
                 tf->rotation = {0.0f, v[3], 0.0f};
             }
+            if (row_guid != 0) entity_gdb_guid[uid] = row_guid;
         } else {
             NativeEntity& e = world.entities.create_entity();
             auto tf = std::make_unique<TransformComponent>();
@@ -631,6 +726,9 @@ int NativeGame::load_named_entities(const std::filesystem::path& path) {
             tf->rotation = {0.0f, v[3], 0.0f};  // yaw about world up
             e.add_component(std::move(tf));
             entity_names[e.uid] = name;
+            // Remember the entity's AUTHORED record so a beat can reach its own data later
+            // (PlayAnimation resolves its clip through AnimationManagerComponent.Animations).
+            if (row_guid != 0) entity_gdb_guid[e.uid] = row_guid;
         }
         ++seeded;
     }

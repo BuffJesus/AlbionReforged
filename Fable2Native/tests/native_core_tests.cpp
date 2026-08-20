@@ -493,6 +493,21 @@ static void test_cutscene_timing_and_camera() {
         }
         F2_CHECK(saw_camera && saw_wait);
 
+        // MoveToMarker: the destination comes from the authored MarkerToMoveTo record (its
+        // PhysicsSimpleComponent.Position), with the authored arrival Range.
+        bool saw_move = false;
+        for (const auto& b : beats) {
+            if (b.kind != "MoveToMarker") continue;
+            saw_move = true;
+            F2_CHECK(b.has_move);
+            F2_CHECK(b.arrive_range > 0.0f);
+            const bool nonzero = b.move_to[0] != 0.0f || b.move_to[1] != 0.0f || b.move_to[2] != 0.0f;
+            F2_CHECK(nonzero);
+            std::cout << "[cutscene] MoveToMarker -> " << b.move_to[0] << "," << b.move_to[1]
+                      << "," << b.move_to[2] << " range=" << b.arrive_range << std::endl;
+        }
+        F2_CHECK(saw_move);
+
         // Run it: queue the cutscene and tick. The camera must take the authored pose and the
         // follow-cam must yield to it.
         f2::NativeGame::PendingCutscene pending;
@@ -510,6 +525,24 @@ static void test_cutscene_timing_and_camera() {
         // ...and it points AT the focus: yaw = atan2(dx, dz) of focus-minus-position.
         const float dx = 152.831f - 151.887f, dz = 153.059f - 154.677f;
         F2_CHECK(std::fabs(game.camera.yaw - std::atan2(dx, dz)) < 0.01f);
+    }
+
+    // PlayAnimation: the beat carries the authored AnimationName and the character it plays on.
+    // (Clip RESOLUTION needs the entity's GDB record id, which the .f2names sidecar supplies at
+    // runtime — exercised by the census, not by this data-only check.)
+    {
+        constexpr std::uint32_t kMurgoCutscene = 0x02E77E62u;   // has PlayAnimation beats
+        const auto beats = game.build_cutscene_beats(kMurgoCutscene);
+        bool saw_anim = false;
+        for (const auto& b : beats) {
+            if (b.kind != "PlayAnimation" || b.animation.empty()) continue;
+            saw_anim = true;
+            F2_CHECK(!b.character.empty());
+            std::cout << "[cutscene] PlayAnimation " << b.character << " -> " << b.animation
+                      << std::endl;
+            break;
+        }
+        if (!beats.empty()) F2_CHECK(saw_anim);
     }
 
     // PACING: a spoken beat holds the scene, so lines accumulate over time instead of all at once.
@@ -1196,6 +1229,24 @@ static void test_childhood_stub_census() {
             std::cout << "  " << n << "x  " << msg << std::endl;
             if (++shown >= 6) break;
         }
+    }
+
+    // STAGED ACTIONS: what cutscene beats asked characters to do (MoveToMarker / PlayAnimation).
+    // `clip=0` means the animation name did not resolve through that character's own record.
+    {
+        const char snl = '\n';
+        f << snl << "# STAGED ACTIONS (" << game.staged_actions.size() << "):" << snl;
+        int resolved = 0;
+        for (const auto& a : game.staged_actions) {
+            if (a.clip != 0) ++resolved;
+            f << "# " << a.character << (a.moving ? " move" : "")
+              << (a.animation.empty() ? "" : " anim=" + a.animation)
+              << " clip=" << a.clip << snl;
+        }
+        std::cout << "[census] entity gdb guids known: " << game.entity_gdb_guid.size()
+                  << std::endl;
+        std::cout << "[census] staged actions: " << game.staged_actions.size() << " ("
+                  << resolved << " with a resolved clip)" << std::endl;
     }
 
     // Entity threads: StartNewEntityThread spawns one per entity matching the name, so

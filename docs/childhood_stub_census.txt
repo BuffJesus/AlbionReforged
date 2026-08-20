@@ -169,7 +169,7 @@
 
 # ENTITY POSITIONS (cutscene in-range depends on these):
 # hero  201.102 52.857 91.8186
-# QC010_Rose  200.013 52.7308 91.4218   dist_to_hero=1.16553
+# QC010_Rose  201.568 54.5221 107.677   dist_to_hero=15.952
 # QC010_Theresa  172.981 49.4009 144.291   dist_to_hero=59.6324
 # QC010_ChildhoodStart  201.295 52.8238 91.705   dist_to_hero=0.226573
 # QC010_HeroInCrowdMarker  175.074 49.4009 144.723   dist_to_hero=59.0618
@@ -195,6 +195,12 @@
 # [gate] ShouldCutsceneTerminate=false
 # [gate] StartCutscene entity=true cutscene=QC010_JeevesGreet
 # [gate] StartCutscene entity=true cutscene=QC010_GuardMorning
+
+# STAGED ACTIONS (4):
+# QC055_Magpie anim=SitOnFloorIdleSleepInto clip=2334018310
+# QC010_Rose move clip=0
+# CreatureDogHero anim=AttackSnarlBark clip=0
+# CreatureDogHero anim=AttackSnarlLoop clip=0
 
 # ENTITY THREADS started (name matched=N). matched=0 => that branch NEVER runs:
 # GenericTriggerMarker matched=0
