@@ -1,5 +1,37 @@
 # Handoff — resume here
 
+## ▶▶▶ START HERE (2026-08-19 latest) — THE CHILDHOOD PLAYS ITS OPENING ✅
+Branch **`agent/native-gameplay-core`** (gameplay track; the water/renderer entry below is the
+ENVIRONMENT track and is still current for that work). USER DIRECTIVES: *"data-backed, no
+guessing"* + *"keep it modder-friendly"*.
+
+**Resume point:** `docs/CHILDHOOD_RECREATION_HANDOFF.md` ▶ RESUME HERE TOMORROW (repro commands,
+ranked next steps). 33 commits on 2026-08-19; tree clean; suite green with and without a world.
+
+The childhood quest now **runs, speaks, paces and stages**:
+- **`book.babel` CRACKED — the codec was plain zlib.** The game's dialogue/quest names/UI strings
+  are readable in the player's own language. `tools/babel_text.py` decodes / greps / cooks a runtime
+  package; `GetText(tag)` serves it. Memory `fable2-babel-text-cracked`.
+- **GDB is READABLE and addressable by name** — the per-file NAME TABLE (`fnv1(name) -> GUID`) and
+  the interned STRING TABLE (field names + type-4 values) are decoded, so cutscenes, dialogue and
+  archetypes are legible and editable. `tools/gdb_record_dump.py`, memory `fable2-gdb-name-table`.
+- **Cutscenes**: request/finish protocol (`ICFS`), authored TIMING (`Wait.TimeToWait`,
+  `DelayInSeconds`, `ElementDelayInSeconds`), authored CAMERA (`SetLookAtCamera` anchors), and the
+  `SayLine` / `PlayAnimation` / `MoveToMarker` beats. Measured live: real dialogue, paced.
+- **Mod / debug-jump menu** discovered from the game's OWN tables (72 entries incl. its skip
+  functions and every jumpable quest, with real quest names) — `ModMenu.Register` for mods.
+  Memory `fable2native-mod-menu`.
+- ⚠ **The cooked stage is the WRONG scenario**: the childhood is authored on
+  `bwsslums/defaultscenario`, not `chapter2slums` — `docs/CHILDHOOD_LEVEL_EVIDENCE.md`. Cooking it
+  is an ENV-session task with a fully specified input list.
+- ⚠ **Two port bugs worth remembering**: scripts call natives METHOD-style (self is arg 1), and
+  `lua_Number` here is **float32**, so a 32-bit id cannot round-trip through script — hand out
+  tokens. Both silently dropped work for a long time.
+
+Biggest remaining structural gap: **archetype instantiation** — anything SPAWNED at runtime
+(`Debug.CreateEntityAt`) has no authored record, so no mesh/AI and no resolvable animations
+(`ghidra_out/gdb_instantiation_re.txt`).
+
 ## ▶▶▶ START HERE (2026-08-16 latest) — WATER FIDELITY = RETAIL TECHNIQUE, BOTH BACKENDS ✅
 Branch **`agent/native-gameplay-core`**. USER DIRECTIVE: *"data-backed, no guessing."* The town/ocean
 water now implements retail **program 57 = shader-table entry 65 (`PSHADER_OCEAN_WATER`)** — reflection

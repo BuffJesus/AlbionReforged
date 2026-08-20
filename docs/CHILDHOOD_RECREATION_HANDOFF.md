@@ -1,38 +1,68 @@
-# ▶▶ CHILDHOOD LEVEL RECREATION — START HERE (handoff 2026-08-16)
+# ▶▶ CHILDHOOD LEVEL RECREATION — START HERE (resume point: 2026-08-19 end of day)
 
-Branch: **`agent/native-gameplay-core`** (Fable2Native gameplay track). Full decomp-backed gap
-analysis with phased plan: **`docs/childhood_assessment_2026-08-16.json`** (workflow w5ty3r992, 8
-agents, verified). Deep memory: `fable2native-stage2-control-camera-anim`,
-`fable2native-gameplay-track`. Constraint (non-negotiable): **decomp-backed, NO guessing; every
-stub FLAGGED**; both backends (D3D12+Vulkan) at parity; do NOT edit ENVIRONMENT-session files
-(renderer, `cook_levels.py`, `native_scene.h/.cpp` render fields) — coordinate instead.
+Branch: **`agent/native-gameplay-core`** · 33 commits on 2026-08-19, working tree clean, full suite
+green with AND without a world. Constraint (non-negotiable, user-restated): **data-backed, NO
+guessing; every stub FLAGGED**; do NOT edit ENVIRONMENT-session files (renderer, `cook_levels.py`,
+`native_scene.h/.cpp` render fields) — coordinate instead. Keep it **modder-friendly** (user
+directive): decoded formats get a tool + a doc entry, not just runtime code.
 
-## Where we are — UPDATED 2026-08-19 (read this before the older sections below)
-**The childhood quest RUNS.** Its coroutine is alive and it executes its real opening (fade → crowd
-setup → the `PooCam` bird-poo cold open → music → fade in), with 23 entity threads live and
-`PlayCutscene` now resolving its cutscene records. The 2026-08-16 verdict below ("~35%, the quest
-plays into black-hole stubs, the sequence advances while nothing shows") was written before the
-root cause was found: the quest was not sequencing silently, it was **dying on frame 0** every time
-(§ROOT CAUSE). Sections below this one are kept for their evidence and method, but where they
-conflict with this one, this one is current.
+## ▶ RESUME HERE TOMORROW
 
-⚠ **Two corrections that invalidate parts of the older text:**
-1. **The stage is the wrong scenario.** The childhood is authored on `bwsslums/defaultscenario`,
-   NOT `chapter2slums` — different heightfield, `.genv`, engine_level, models/textures and entity
-   gdb/save, per the game's own `.list` manifests. See `docs/CHILDHOOD_LEVEL_EVIDENCE.md`.
-   Cooking `defaultscenario` is an ENV-session task with a fully specified input list.
-2. **Named entities come in two kinds** (markers with a position, and declared entities with a GDB
-   record but none), and both are needed — see §DECLARED entities.
+**State:** the childhood quest runs, speaks its real dialogue, paces its beats, frames its authored
+camera, and moves/cues its characters. Repro (both are the standing verification):
 
-Still READY as described: hero control/camera/locomotion/nav, quest sequencing (msg bus +
-Quest→General→AI tick), scripted Physics/Navigation/Camera natives, hero anim clips resolved from
-`globals.gdb` (Idle=id_4B706EF5, Walk=id_49220AA3, Run=id_4AB9BC89 on record 0x576283C7 —
-`tools/gdb_anim_slots.py`). NPC locomotion is cook-ready but visible NPC animation is render-blocked
-(`docs/NPC_LOCOMOTION_PLAN.md`).
+```
+cmake --build Fable2Native/build --target f2native_core_tests --config RelWithDebInfo
+Fable2Native/build/RelWithDebInfo/f2native_core_tests.exe                    # EXIT=0
 
-**Current frontier:** PERFORMING the beats. Cutscenes now start, speak, hold their authored time
-and frame their authored camera (§CUTSCENES RUN) — what is still missing is the acting:
-`PlayAnimation` (219 beats) and `MoveToMarker` (81) are parsed in order but not staged.
+FABLE2NATIVE_CENSUS_SCENE=D:/Documents/Fable2RE/scratchpad/lvl/out_hero.f2scene FABLE2NATIVE_CENSUS_NAMES=D:/Documents/Fable2RE/scratchpad/lvl/bwsslums_default.f2names   Fable2Native/build/RelWithDebInfo/f2native_core_tests.exe                  # the live census
+# -> docs/childhood_stub_census.txt   (ranking, timeline, spin set, silent errors, waits,
+#    entity threads, DIALOGUE, STAGED ACTIONS, positions, the game's own Debug.Error calls)
+# extra knobs: FABLE2NATIVE_CENSUS_FRAMES=3000, FABLE2NATIVE_CENSUS_SKIP_CUTSCENES=1
+```
+
+Re-cook the sidecar if level data changes:
+```
+python Fable2Native/tools/cook_quest_markers.py   --level worlds/albion/bwsslums/defaultscenario/defaultscenario   -o scratchpad/lvl/bwsslums_default.f2names
+```
+
+**Pick one of these next (ranked):**
+1. **Make an NPC's staged animation VISIBLE.** `staged_actions` records character + resolved clip;
+   only the hero has cooked clips today. Needs the NPC character-mesh + clip cook — **ENV-owned**,
+   so coordinate. This is what turns "cued" into "acting".
+2. **Archetype instantiation** (`ghidra_out/gdb_instantiation_re.txt`). Anything SPAWNED at runtime
+   (`Debug.CreateEntityAt`, e.g. `CreatureDogHero`) has no authored record, so its animations can
+   never resolve and it has no mesh/AI. This is the biggest remaining structural gap.
+3. **Real pathing for `MoveToMarker`** through the existing nav agent (today it sets the transform
+   directly; the nav mesh is not consumed).
+4. **Cook `bwsslums/defaultscenario`** so the stage matches the quest — **ENV-owned**, input list
+   fully specified in `docs/CHILDHOOD_LEVEL_EVIDENCE.md`. Until then the census places the hero on
+   `QC010_ChildhoodStart` as harness setup.
+5. **Remaining silent errors** (4 in the live census): `DummyObjects` enum values (needs RE — the
+   VALUES matter), two natives that must return real numbers, one unattributed nil index.
+
+## What changed 2026-08-19 (newest first)
+- **PlayAnimation + MoveToMarker** staged; `.f2names` carries `gdbGuid` so a beat can reach an
+  entity's authored record.
+- **Cutscene timing + camera** from authored data (`Wait.TimeToWait`, `DelayInSeconds`,
+  `ElementDelayInSeconds`, `SetLookAtCamera{PositionEntity,FocusEntity}`).
+- **`book.babel` CRACKED** (plain zlib) → `GetText`, real quest names in the mod menu, and the
+  childhood speaking 37 lines. See `[[fable2-babel-text-cracked]]`.
+- **Mod / debug-jump menu** discovered from the game's own tables (72 entries).
+- **GDB name table + string table** decoded → records are readable and addressable by name.
+- **Creature placement** found on the navigator component; **declared entities** seeded.
+- **Root cause of the whole stall:** `Gameflow:Init()` ran on the INACTIVE branch.
+
+⚠ **Two standing corrections to older text below:**
+1. The cooked stage (`chapter2slums`) is the WRONG scenario — the childhood is authored on
+   `bwsslums/defaultscenario` (`docs/CHILDHOOD_LEVEL_EVIDENCE.md`).
+2. The 2026-08-16 verdict ("~35%, plays into black-hole stubs, sequence advances while nothing
+   shows") was written before the root cause was found. Sections below are kept for their evidence
+   and method; where they conflict with this header, this header is current.
+
+Still READY as previously described: hero control/camera/locomotion/nav, quest sequencing (msg bus
++ Quest→General→AI tick), scripted Physics/Navigation/Camera natives, hero anim clips from
+`globals.gdb` (Idle=id_4B706EF5, Walk=id_49220AA3, Run=id_4AB9BC89, record 0x576283C7).
 
 ## ▶▶ CUTSCENES RUN: dialogue, TIMING and CAMERA (2026-08-19)
 
