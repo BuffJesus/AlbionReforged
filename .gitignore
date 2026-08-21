@@ -134,3 +134,6 @@ scratch_gui_extract/
 /resources/
 # Local research binary
 Fable2Native/tools/decode_large_ring.exe
+# Native render screenshots and local cook scratch (large/derived — never commit)
+/native_shots/
+/scratchpad/

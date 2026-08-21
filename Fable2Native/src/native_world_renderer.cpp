@@ -1,4 +1,5 @@
 #include "f2/native_world_renderer.h"
+#include "f2/native_scene_color.h"
 #include "f2/native_texture.h"
 
 #include <d3dcompiler.h>
@@ -27,6 +28,20 @@ struct Constants {
     float sun_direction[4]{0.0f, -1.0f, 0.0f, 0.0f};  // xyz = normalised light dir (world), w unused
     float eye_time[4]{0.0f, 0.0f, 0.0f, 0.0f};         // xyz = camera eye (world), w = elapsed seconds
     float sun_color[4]{1.0f, 1.0f, 1.0f, 0.0f};        // rgb = directional sun colour (theme)
+    float fog_color[4]{0.0f, 0.0f, 0.0f, 0.0f};        // rgb + w = max density (0 = off)
+    float fog_range[4]{0.0f, 1.0f, 0.0f, 0.0f};        // x = start dist, y = end dist
+    float viewport_size[4]{0.0f, 0.0f, 0.0f, 0.0f};    // xy = render width/height
+    // Theme sky endpoints (zenith + horizon), so the water reflection tracks the ACTUAL rendered
+    // sky per time-of-day (night = dark) instead of a hardcoded daytime gradient. Defaults = the
+    // RE'd chapter2slums midday values so scenes without a theme are unchanged.
+    float sky_zenith[4]{0.6549f, 0.8157f, 1.0f, 1.0f};
+    float sky_horizon[4]{0.222f, 0.5789f, 1.11f, 1.0f};
+    // Sun shadow map (retail "Render ShadowBuffers" pass, rendering_pipeline.txt §A#3/§D.1): the
+    // ortho light view-projection the shadow depth was rendered with, so the PS can project each
+    // world_pos into the shadow map and compare depth. shadow_params: x=texel size (1/res),
+    // y=depth bias, z=enabled (1/0), w=strength (how dark the shadowed sun term goes).
+    float light_view_projection[4][4]{};
+    float shadow_params[4]{0.0f, 0.0f, 0.0f, 1.0f};
 };
 
 // b1 point-light cbuffer (level_lights_effects_re.txt §3.1). Mirrors the HLSL layout:
@@ -39,6 +54,12 @@ struct Lights {
     float color_intensity[64][4]{};
 };
 
+// b2 water material cbuffer. Ten float4s carry WaterFile::params[37], followed by the
+// WaterTheme opacity in params[9].y. Each material gets a 256-byte-aligned slice.
+struct WaterConstants {
+    float params[10][4]{};
+};
+
 struct Geometry {
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
@@ -47,6 +68,7 @@ struct Geometry {
         std::uint32_t index_count = 0;
         std::uint32_t material_index = 0;
         bool is_water = false;
+        bool is_character = false;
     };
     std::vector<DrawRange> draw_ranges;
 };
@@ -174,10 +196,11 @@ Geometry make_geometry(const NativeScene& scene) {
         for (const auto index : mesh.indices) geometry.indices.push_back(base + index);
         const bool is_water = mesh.material < scene.materials.size() &&
                               scene.materials[mesh.material].name == "water";
+        const bool is_character = mesh.name.rfind("hero", 0) == 0;
         geometry.draw_ranges.push_back({first_index,
                                         static_cast<std::uint32_t>(mesh.indices.size()),
-                                        std::min(mesh.material, NativeWorldRenderer::kMaxMaterialTextures / 2 - 1),
-                                        is_water});
+                                        std::min(mesh.material, NativeWorldRenderer::kMaxMaterialTextures / 3 - 1),
+                                        is_water, is_character});
     }
 
     if (!geometry.vertices.empty()) return geometry;
@@ -350,7 +373,12 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     }
     // Fit the camera to the baked world-space geometry (a cooked level spans hundreds
     // of units; the test pyramid spans a few) so render() frames whatever we loaded.
-    {
+    // A cooked `focus` (town bounds excluding horizon backdrop props) takes precedence so the
+    // ~1000wu Tattered Spire vista doesn't blow up the fit and shrink the town to a dot.
+    if (scene.has_focus) {
+        scene_center_ = scene.focus_center;
+        scene_radius_ = std::max(scene.focus_radius, 1.0f);
+    } else {
         std::array<float, 3> lo{geometry.vertices[0].position};
         std::array<float, 3> hi = lo;
         for (const auto& v : geometry.vertices) {
@@ -371,12 +399,13 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
         return false;
     }
 
-    // Two descriptor slots per material: albedo (t0) + normal (t1), interleaved.
+    // Three descriptor slots per material: albedo (t0) + normal (t1) + spec/"material" (t2),
+    // interleaved (world_shading_model_re.txt §7, ladder step 3).
     const auto material_count = std::max<std::size_t>(
-        1, std::min<std::size_t>(scene.materials.size(), kMaxMaterialTextures / 2));
+        1, std::min<std::size_t>(scene.materials.size(), kMaxMaterialTextures / 3));
     texture_descriptor_stride_ = device->GetDescriptorHandleIncrementSize(
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    textures_.resize(material_count * 2);
+    textures_.resize(material_count * 3);
     D3D12_SHADER_RESOURCE_VIEW_DESC texture_view{};
     texture_view.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     texture_view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -392,6 +421,8 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
         NativeTexture albedo{1, 1, {255, 255, 255, 255}};
         NativeTexture normal{1, 1, {128, 128, 255, 255}};  // flat tangent-space normal default
+        // Default spec/"material" mask = black → spec_mask 0 = no highlight (§3: default?0:sSamp.r).
+        NativeTexture spec{1, 1, {0, 0, 0, 255}};
         if (material_index < scene.materials.size()) {
             const auto& material = scene.materials[material_index];
             const auto albedo_path = resolve_texture(material, texture_root);
@@ -403,9 +434,16 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
                 const auto normal_path = resolve_texture(normal_ref, texture_root);
                 if (!normal_path.empty()) load_dds_rgba8(normal_path, normal, texture_error);
             }
+            if (!material.material.empty()) {
+                NativeMaterial spec_ref;
+                spec_ref.albedo = material.material;  // reuse resolve_texture for the spec path
+                const auto spec_path = resolve_texture(spec_ref, texture_root);
+                if (!spec_path.empty()) load_dds_rgba8(spec_path, spec, texture_error);
+            }
         }
-        if (!make_srv(material_index * 2, albedo, error)) return false;
-        if (!make_srv(material_index * 2 + 1, normal, error)) return false;
+        if (!make_srv(material_index * 3, albedo, error)) return false;
+        if (!make_srv(material_index * 3 + 1, normal, error)) return false;
+        if (!make_srv(material_index * 3 + 2, spec, error)) return false;
     }
     texture_gpu_handle_ = texture_gpu_handle;
     draw_ranges_.clear();
@@ -448,28 +486,88 @@ bool NativeWorldRenderer::initialise(ID3D12Device* device, ID3D12CommandQueue* q
     }
     light_address_ = light_buffer_->GetGPUVirtualAddress();
 
+    const std::size_t water_stride = 256;
+    const std::size_t water_size = std::max<std::size_t>(water_stride, material_count * water_stride);
+    std::vector<std::uint8_t> water_data(water_size, 0);
+    for (std::size_t material_index = 0; material_index < material_count; ++material_index) {
+        WaterConstants constants{};
+        if (material_index < scene.materials.size()) {
+            const auto& material = scene.materials[material_index];
+            for (std::size_t i = 0; i < material.water_params.size(); ++i)
+                constants.params[i / 4][i % 4] = material.water_params[i];
+            constants.params[9][1] = material.water_opacity;
+        }
+        std::memcpy(water_data.data() + material_index * water_stride, &constants,
+                    sizeof(constants));
+    }
+    if (!create_upload_buffer(device, water_data.data(), water_data.size(), water_buffer_, error)) {
+        return false;
+    }
+    water_address_ = water_buffer_->GetGPUVirtualAddress();
+
     Microsoft::WRL::ComPtr<ID3DBlob> vertex_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> pixel_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> water_pixel_shader;
     Microsoft::WRL::ComPtr<ID3DBlob> shader_errors;
     constexpr char shader_source[] = R"(
-cbuffer Camera : register(b0) { row_major float4x4 view_projection; float4 sun_direction; float4 eye_time; float4 sun_color; };
+cbuffer Camera : register(b0) {
+    row_major float4x4 view_projection;
+    float4 sun_direction;
+    float4 eye_time;
+    float4 sun_color;
+    float4 fog_color;   // rgb = fog colour, w = max density (0 = off)
+    float4 fog_range;   // x = start dist, y = end dist
+    float4 viewport_size;
+    float4 sky_zenith;   // theme sky gradient top (water reflection tracks the real sky)
+    float4 sky_horizon;  // theme sky gradient bottom
+    row_major float4x4 light_view_projection;  // sun ortho VP the shadow map was rendered with
+    float4 shadow_params;  // x=texel size, y=depth bias, z=enabled, w=strength
+};
 // Local point lights (level_lights_effects_re.txt §3.1): lamp posts, lanterns, braziers.
 cbuffer Lights : register(b1) {
     uint light_count; float3 _light_pad;
     float4 light_pos_range[64];        // xyz = render-space pos, w = range (wu)
     float4 light_color_intensity[64];  // rgb = colour (0..1), w = intensity
 };
+cbuffer Water : register(b2) { float4 water_params[10]; };
+cbuffer DrawFlags : register(b3) {
+    uint is_character;
+    float3 character_offset;
+    float4 character_motion;
+};
 Texture2D albedo : register(t0);
 Texture2D normalTex : register(t1);
+Texture2D specTex : register(t2);
+Texture2D<float> scene_depth : register(t3);
+Texture2D<float> shadow_map : register(t4);
 SamplerState albedo_sampler : register(s0);
+SamplerComparisonState shadow_sampler : register(s1);
+
+// Sun shadow factor at a world position: 1 = lit, 0 = fully shadowed. Projects world_pos into the
+// light's ortho clip space, then 3x3 PCF SampleCmp against the shadow depth (retail ShadowBuffers).
+float sun_shadow(float3 world_pos) {
+    if (shadow_params.z < 0.5) return 1.0;
+    float4 lp = mul(float4(world_pos, 1.0), light_view_projection);  // ortho -> w = 1
+    float2 uv = lp.xy * float2(0.5, -0.5) + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || lp.z < 0.0 || lp.z > 1.0) return 1.0;
+    float depth = lp.z - shadow_params.y;  // depth bias to kill acne
+    float t = shadow_params.x;
+    float sum = 0.0;
+    [unroll] for (int y = -1; y <= 1; ++y)
+        [unroll] for (int x = -1; x <= 1; ++x)
+            sum += shadow_map.SampleCmpLevelZero(shadow_sampler, uv + float2(x, y) * t, depth);
+    return sum / 9.0;
+}
 struct VSInput { float3 position : POSITION; float3 normal : NORMAL; float4 color : COLOR0; float2 uv : TEXCOORD0; float4 probe : COLOR1; };
 struct PSInput { float4 position : SV_POSITION; float3 normal : NORMAL; float3 world_pos : TEXCOORD1; float4 color : COLOR0; float2 uv : TEXCOORD0; float4 probe : COLOR1; };
 PSInput vs_main(VSInput input) {
     PSInput output;
-    output.position = mul(float4(input.position, 1.0), view_projection);
+    float3 motion = float3(0.0, sin(character_motion.x) * 0.045 * character_motion.y, 0.0);
+    float3 world_position = input.position +
+                            (is_character != 0 ? character_offset + motion : 0.0);
+    output.position = mul(float4(world_position, 1.0), view_projection);
     output.normal = input.normal;
-    output.world_pos = input.position;
+    output.world_pos = world_position;
     output.color = input.color;
     output.uv = input.uv;
     output.probe = input.probe;
@@ -497,6 +595,11 @@ float4 ps_main(PSInput input) : SV_TARGET {
     // Light model (§7): hemisphere ambient (cool sky above, dim ground bounce below by world-up
     // N.y) + N·L sun diffuse — replaces the flat 0.35 that read dark/flat.
     float ndl = saturate(dot(N, -sun_direction.xyz));
+    // Cast shadows: attenuate ONLY the sun (N·L + spec) term, never the ambient, so shadowed
+    // surfaces keep their baked/hemisphere fill (retail: the material PS multiplies the sun
+    // contribution by the sampled shadow buffer). strength (shadow_params.w) sets how dark.
+    float shadow = lerp(1.0, sun_shadow(input.world_pos), shadow_params.w);
+    ndl *= shadow;
     float hemi = 0.5 + 0.5 * N.y;
     float3 ambient = lerp(float3(0.18, 0.20, 0.24), float3(0.55, 0.58, 0.62), hemi);
     // Per-prop baked ambient (.lmp LightmapFile SH probe DC term, world_shading §lmp): when a
@@ -507,6 +610,14 @@ float4 ps_main(PSInput input) : SV_TARGET {
     // Warm directional sun (theme main_light_colour) tints the N.L term; ambient stays the
     // baked/hemisphere term. Cool ambient + warm sun = the retail daytime split.
     float3 lit = base.rgb * (ambient + ndl * sun_color.rgb);
+    // Specular highlight (world_shading_model_re.txt §7, ladder step 3): Blinn-Phong gated by the
+    // spec/"material" mask (t2). Grayscale mask.r modulates a pow(N·H, k) lobe using the sun as the
+    // key light and the camera eye (eye_time.xyz) for the view vector. Default mask=0 → no spec.
+    float specMask = specTex.Sample(albedo_sampler, input.uv).r;
+    float3 Vdir = normalize(eye_time.xyz - input.world_pos);
+    float3 Hdir = normalize(-sun_direction.xyz + Vdir);
+    float spec = pow(saturate(dot(N, Hdir)), 32.0) * specMask;
+    lit += spec * sun_color.rgb * shadow;  // sun specular is shadowed with the diffuse sun term
     // Additive local point lights (level_lights_effects_re.txt §3.1): diffuse N·L with a
     // soft linear-squared falloff clamped at each light's Range. Added AFTER the
     // hemisphere+sun term so lamps/braziers glow warm over the global lighting.
@@ -523,32 +634,91 @@ float4 ps_main(PSInput input) : SV_TARGET {
                    (ndl_p * atten * light_color_intensity[li].w);
         }
     }
+    // Distance fog toward the theme fog colour (fog_color.w = max density, 0 = off). Ties distant
+    // world geometry to the horizon/backdrop. Matches the Vulkan world PS.
+    if (fog_color.w > 0.0) {
+        float fd = length(eye_time.xyz - input.world_pos);
+        float f = saturate((fd - fog_range.x) / max(fog_range.y - fog_range.x, 1.0)) * fog_color.w;
+        lit = lerp(lit, fog_color.rgb, f);
+    }
     float3 color = lit;
     return float4(color, base.a);
 }
-// Animated translucent WATER (water_system_re.txt §5, retail params): a procedural dual-scrolled
-// ripple normal (no bump texture needed), fresnel deep↔surface colour, sky reflection, sun glitter.
+// Animated translucent WATER (water_system_re.txt §5): authored dual-scrolled bump normal,
+// Fresnel deep↔surface colour, sky reflection, and sun glitter. All level-specific values arrive
+// through WaterConstants (b2), never as chapter2slums shader literals.
 float4 ps_water(PSInput input) : SV_TARGET {
     float3 wp = input.world_pos;
     float t = eye_time.w;
     float2 p = wp.xz;
-    float2 uv0 = p * 0.188 + float2(0.052, 0.011) * t;   // NM_SCALE0 / NM_SPEED0 * time
-    float2 uv1 = p * 0.220 + float2(-0.019, 0.019) * t;  // NM_SCALE1 / NM_SPEED1
-    float2 n0 = float2(sin(uv0.x * 6.2831853), sin(uv0.y * 6.2831853));
-    float2 n1 = float2(sin(uv1.x * 6.2831853 + 1.7), sin(uv1.y * 6.2831853 + 1.7));
-    float2 nxy = (n0 + n1) * 0.12;                       // NORMAL_SCALE-ish ripple slope
+    float fresnel_bias = water_params[0].x;
+    float reflection_bias = water_params[0].y;
+    float2 uv0 = p * float2(water_params[1].z, water_params[1].w) +
+                 float2(water_params[0].z, water_params[0].w) * t;
+    float2 uv1 = p * float2(water_params[2].x, water_params[2].y) +
+                 float2(water_params[1].x, water_params[1].y) * t;
+    float2 n0 = normalTex.Sample(albedo_sampler, uv0).xy * 2.0 - 1.0;
+    float2 n1 = normalTex.Sample(albedo_sampler, uv1).xy * 2.0 - 1.0;
+    float2 nxy = (n0 + n1) * 0.35;                        // damped authored ripple slope
+    // Retail's reflection stand-in uses m_ReflectionScale (params[25]) as a scalar for
+    // both components; params[26] is retained for the dropped screen-space refraction tile.
     float3 N = normalize(float3(nxy.x, 1.0, nxy.y));
     float3 V = normalize(eye_time.xyz - wp);
-    float fres = 0.20 + 0.80 * pow(1.0 - saturate(dot(V, N)), 5.0);  // FRESNEL_BIAS 0.20
-    float3 DEEP = float3(0.370, 0.470, 0.750);           // c127
-    float3 SURFACE = float3(0.000, 0.1275, 0.1913);      // c126
+    // Retail's Fresnel normal is intentionally almost horizontal; its authored NORMAL_SCALE is
+    // WaterFile::params[24], not the upward reflection normal.
+    // Keep reflection and glitter on a broad upward normal; the high-frequency normal map
+    // produces white noise when applied directly to this term.
+    float3 Nf = normalize(float3(nxy.x, 1.0, nxy.y));
+    float fres = fresnel_bias +
+                 (1.0 - fresnel_bias) * pow(1.0 - saturate(dot(V, Nf)), 5.0);
+    float3 SURFACE = float3(water_params[4].z, water_params[4].w, water_params[5].x);
+    float3 DEEP = water_params[5].yzw;
     float3 watercol = lerp(DEEP, SURFACE, fres);
-    float3 sky = float3(0.6549, 0.8157, 1.0);            // zenith blue (env theme) as reflection
-    float3 col = lerp(watercol, sky, 0.75 * fres);       // REFLECTION_STRENGTH 0.75
-    float3 L = -normalize(sun_direction.xyz);            // toward the sun
-    float glit = pow(saturate(dot(V, reflect(-L, N))), 128.0) * 5.0;  // GLITTER_POWER 128 / STRENGTH 5
-    col += glit;
-    return float4(col, saturate(0.72 + 0.22 * fres));    // translucent, more opaque at grazing
+    float3 reflection_ray = reflect(-V, N);
+    reflection_ray.y = abs(reflection_ray.y);
+    float sky_t = saturate(reflection_ray.y * 0.5 + 0.5);
+    // The reflection stand-in follows the same resolved chapter2slums theme endpoints as the
+    // native sky pass: complementary horizon → sky_colour zenith (env_theme_colors_re §0).
+    // Reflect the ACTUAL theme sky (per time-of-day) so night water goes dark, matching the
+    // rendered sky gradient (horizon -> zenith) instead of a hardcoded daytime blue.
+    float3 sky = lerp(sky_horizon.rgb, sky_zenith.rgb, sky_t);
+    // Apply the SAME night fade the atmosphere sky pass applies, so the water reflects the real
+    // rendered night sky (sun_direction = light-travel dir; sun below horizon -> night).
+    float wnight = saturate((sun_direction.y + 0.05) / 0.45);
+    sky = lerp(sky, sky * 0.22 + float3(0.010, 0.018, 0.050), wnight);
+    float fres_reflect = saturate(fres + reflection_bias);
+    float distf = saturate(length(eye_time.xyz - wp) / 75.0);
+    float refl_strength = saturate(water_params[7].y);
+    float refl = refl_strength * lerp(fres_reflect, 1.0, distf);
+    float3 col = watercol * (1.0 - refl_strength) + sky * refl;
+    float3 L = normalize(sun_direction.xyz);             // authored light-travel direction
+    float3 Ng = Nf;
+    float glit = pow(saturate(dot(V, reflect(L, Ng))), water_params[9].x) *
+                 water_params[8].w;
+    // Keep the authored glitter power, but attenuate its brightness for the native HDR-less
+    // target; the retail compositor applies an exposure stage that is not present here.
+    col += glit * sun_color.rgb * 0.25;
+    // The authored PF40 normal map supplies the water ripple detail and glitter response.
+    // Retail emits the refraction coefficient as alpha; with ONE/SRC_ALPHA blending the
+    // framebuffer behind the surface supplies the scene/refraction term. The actual retail
+    // scene-depth edge factor is unavailable until the depth copy is exposed to this pass.
+    float refr_k = (1.0 - distf) * refl_strength * (1.0 - fres_reflect);
+    // Reversed-Z depth delta: a flat water surface has a larger depth value than the
+    // terrain beneath it. Near the authored shoreline the values converge, so soften the
+    // refraction alpha instead of leaving a hard polygon edge. The copied depth texture
+    // contains 0 for the sky/far clear, which intentionally leaves open water fully visible.
+    float2 screen_uv = saturate(input.position.xy / viewport_size.xy);
+    float scene_z = scene_depth.SampleLevel(albedo_sampler, screen_uv, 0);
+    float water_z = input.position.z;
+    float shoreline = lerp(0.05, 1.0, saturate((water_z - scene_z) * 256.0));
+    refr_k *= shoreline;
+    // Distance fog on the water surface too (coherent with opaque geometry).
+    if (fog_color.w > 0.0) {
+        float ffd = length(eye_time.xyz - wp);
+        float ff = saturate((ffd - fog_range.x) / max(fog_range.y - fog_range.x, 1.0)) * fog_color.w;
+        col = lerp(col, fog_color.rgb, ff);
+    }
+    return float4(col, saturate(refr_k));
 }
 )";
     const auto compile = [&](const char* entry, const char* target,
@@ -563,13 +733,13 @@ float4 ps_water(PSInput input) : SV_TARGET {
         return false;
     }
 
-    D3D12_ROOT_PARAMETER root_parameters[3]{};
+    D3D12_ROOT_PARAMETER root_parameters[7]{};
     root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     root_parameters[0].Descriptor.ShaderRegister = 0;
     root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;  // PS reads sun_direction too
     D3D12_DESCRIPTOR_RANGE texture_range{};
     texture_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    texture_range.NumDescriptors = 2;  // t0 albedo + t1 normal
+    texture_range.NumDescriptors = 3;  // t0 albedo + t1 normal + t2 spec
     texture_range.BaseShaderRegister = 0;
     root_parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     root_parameters[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -580,19 +750,52 @@ float4 ps_water(PSInput input) : SV_TARGET {
     root_parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     root_parameters[2].Descriptor.ShaderRegister = 1;
     root_parameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-    D3D12_STATIC_SAMPLER_DESC sampler{};
-    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.MaxLOD = D3D12_FLOAT32_MAX;
-    sampler.ShaderRegister = 0;
-    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    root_parameters[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    root_parameters[3].Descriptor.ShaderRegister = 2;
+    root_parameters[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_DESCRIPTOR_RANGE depth_range{};
+    depth_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    depth_range.NumDescriptors = 1;
+    depth_range.BaseShaderRegister = 3;
+    root_parameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    root_parameters[4].DescriptorTable.NumDescriptorRanges = 1;
+    root_parameters[4].DescriptorTable.pDescriptorRanges = &depth_range;
+    root_parameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    root_parameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    root_parameters[5].Constants.ShaderRegister = 3;
+    root_parameters[5].Constants.Num32BitValues = 8;
+    root_parameters[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    // t4 = sun shadow map (PS only), sampled with the s1 comparison sampler.
+    D3D12_DESCRIPTOR_RANGE shadow_range{};
+    shadow_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    shadow_range.NumDescriptors = 1;
+    shadow_range.BaseShaderRegister = 4;
+    root_parameters[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    root_parameters[6].DescriptorTable.NumDescriptorRanges = 1;
+    root_parameters[6].DescriptorTable.pDescriptorRanges = &shadow_range;
+    root_parameters[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC samplers[2]{};
+    samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[0].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[0].ShaderRegister = 0;
+    samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    // s1 = shadow comparison sampler (hardware PCF): LESS_EQUAL, clamp, border=1 (outside = lit).
+    samplers[1].Filter = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    samplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[1].ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    samplers[1].MaxLOD = D3D12_FLOAT32_MAX;
+    samplers[1].ShaderRegister = 1;
+    samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_ROOT_SIGNATURE_DESC root_description{};
-    root_description.NumParameters = 3;
+    root_description.NumParameters = 7;
     root_description.pParameters = root_parameters;
-    root_description.NumStaticSamplers = 1;
-    root_description.pStaticSamplers = &sampler;
+    root_description.NumStaticSamplers = 2;
+    root_description.pStaticSamplers = samplers;
     root_description.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
     Microsoft::WRL::ComPtr<ID3DBlob> root_blob;
     if (FAILED(D3D12SerializeRootSignature(&root_description,
@@ -624,14 +827,19 @@ float4 ps_water(PSInput input) : SV_TARGET {
     pipeline.InputLayout = {input_layout, static_cast<UINT>(std::size(input_layout))};
     pipeline.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     pipeline.NumRenderTargets = 1;
-    pipeline.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    pipeline.RTVFormats[0] = kSceneColorFormat;
     pipeline.SampleDesc.Count = 1;
     pipeline.SampleMask = 0xFFFFFFFFu;  // 0 (zero-init default) writes no samples -> nothing renders
     pipeline.RasterizerState = rasterizer_description();
     pipeline.BlendState = blend_description();
     pipeline.DepthStencilState.DepthEnable = TRUE;
     pipeline.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-    pipeline.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    // REVERSED-Z: near maps to 1, far to 0 (cleared to 0), so the huge near..far span of a
+    // town + horizon-vista scene keeps floating-point depth precision even under the free-fly
+    // camera's small near plane — kills the Z-fighting that showed as "light through seams" on
+    // terrain/castle when the camera rotated. Pairs with the reversed z-row in render() and the
+    // 0.0 depth clear in native_frontend_app.
+    pipeline.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
     pipeline.DepthStencilState.StencilEnable = FALSE;
     pipeline.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     if (FAILED(device->CreateGraphicsPipelineState(&pipeline, IID_PPV_ARGS(&pipeline_state_)))) {
@@ -639,14 +847,14 @@ float4 ps_water(PSInput input) : SV_TARGET {
         return false;
     }
 
-    // Water pipeline: same VS/layout, the animated water PS, alpha blend (SRC_ALPHA/INV_SRC_ALPHA),
+    // Water pipeline: same VS/layout, the animated water PS, retail ONE/SRC_ALPHA color blend,
     // depth-test on but depth-WRITE off (translucent surface over the terrain).
     D3D12_GRAPHICS_PIPELINE_STATE_DESC water = pipeline;
     water.PS = {water_pixel_shader->GetBufferPointer(), water_pixel_shader->GetBufferSize()};
     auto& wt = water.BlendState.RenderTarget[0];
     wt.BlendEnable = TRUE;
-    wt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
-    wt.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    wt.SrcBlend = D3D12_BLEND_ONE;
+    wt.DestBlend = D3D12_BLEND_SRC_ALPHA;
     wt.BlendOp = D3D12_BLEND_OP_ADD;
     wt.SrcBlendAlpha = D3D12_BLEND_ONE;
     wt.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
@@ -655,6 +863,69 @@ float4 ps_water(PSInput input) : SV_TARGET {
     water.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     if (FAILED(device->CreateGraphicsPipelineState(&water, IID_PPV_ARGS(&water_pipeline_)))) {
         error = "The native world water pipeline could not be created.";
+        return false;
+    }
+
+    // Sun shadow pass (retail "Render ShadowBuffers"): a depth-only replay of the opaque geometry
+    // from the sun's ortho POV. Reuses the Camera cbuffer (b0) for light_view_projection.
+    constexpr char shadow_source[] = R"(
+cbuffer Camera : register(b0) {
+    row_major float4x4 view_projection; float4 sun_direction; float4 eye_time; float4 sun_color;
+    float4 fog_color; float4 fog_range; float4 viewport_size; float4 sky_zenith; float4 sky_horizon;
+    row_major float4x4 light_view_projection; float4 shadow_params;
+};
+struct VSInput { float3 position : POSITION; float3 normal : NORMAL; float4 color : COLOR0;
+                 float2 uv : TEXCOORD0; float4 probe : COLOR1; };
+float4 vs_shadow(VSInput input) : SV_Position {
+    return mul(float4(input.position, 1.0), light_view_projection);
+}
+)";
+    Microsoft::WRL::ComPtr<ID3DBlob> shadow_vs;
+    if (FAILED(D3DCompile(shadow_source, sizeof(shadow_source) - 1, "native_world_shadow.hlsl",
+                          nullptr, nullptr, "vs_shadow", "vs_5_0", 0, 0, &shadow_vs,
+                          &shader_errors))) {
+        error = "The native world shadow shader could not be compiled.";
+        return false;
+    }
+    // Shadow root signature: just the Camera CBV (b0) for the light VP.
+    D3D12_ROOT_PARAMETER shadow_param{};
+    shadow_param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    shadow_param.Descriptor.ShaderRegister = 0;
+    shadow_param.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    D3D12_ROOT_SIGNATURE_DESC shadow_root_desc{};
+    shadow_root_desc.NumParameters = 1;
+    shadow_root_desc.pParameters = &shadow_param;
+    shadow_root_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+    Microsoft::WRL::ComPtr<ID3DBlob> shadow_root_blob;
+    if (FAILED(D3D12SerializeRootSignature(&shadow_root_desc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                           &shadow_root_blob, &shader_errors)) ||
+        FAILED(device->CreateRootSignature(0, shadow_root_blob->GetBufferPointer(),
+                                           shadow_root_blob->GetBufferSize(),
+                                           IID_PPV_ARGS(&shadow_root_signature_)))) {
+        error = "The native world shadow root signature could not be created.";
+        return false;
+    }
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC shadow_pso{};
+    shadow_pso.pRootSignature = shadow_root_signature_.Get();
+    shadow_pso.VS = {shadow_vs->GetBufferPointer(), shadow_vs->GetBufferSize()};
+    shadow_pso.InputLayout = {input_layout, static_cast<UINT>(std::size(input_layout))};
+    shadow_pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    shadow_pso.NumRenderTargets = 0;  // depth only
+    shadow_pso.SampleDesc.Count = 1;
+    shadow_pso.SampleMask = 0xFFFFFFFFu;
+    shadow_pso.RasterizerState = rasterizer_description();
+    // Depth bias reduces shadow acne on the low-slope terrain/roofs (standard-Z shadow map).
+    shadow_pso.RasterizerState.DepthBias = 5000;
+    shadow_pso.RasterizerState.SlopeScaledDepthBias = 2.0f;
+    shadow_pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;  // mixed winding in the cooked MDL
+    shadow_pso.BlendState = blend_description();
+    shadow_pso.DepthStencilState.DepthEnable = TRUE;
+    shadow_pso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    shadow_pso.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;  // standard Z
+    shadow_pso.DepthStencilState.StencilEnable = FALSE;
+    shadow_pso.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    if (FAILED(device->CreateGraphicsPipelineState(&shadow_pso, IID_PPV_ARGS(&shadow_pipeline_)))) {
+        error = "The native world shadow pipeline could not be created.";
         return false;
     }
 
@@ -672,12 +943,23 @@ SkyCamera NativeWorldRenderer::compute_camera(std::uint32_t width, std::uint32_t
                                               double elapsed_seconds) const {
     const float angle = static_cast<float>(elapsed_seconds * 0.25);
     const float dist = scene_radius_ * 2.4f;
-    const std::array<float, 3> eye{scene_center_[0] + std::sin(angle) * dist,
-                                   scene_center_[1] + dist * 0.55f,
-                                   scene_center_[2] + std::cos(angle) * dist};
-    const std::array<float, 3> target{scene_center_[0], scene_center_[1], scene_center_[2]};
+    // Free-fly override: eye + yaw/pitch look direction (level inspection). Otherwise the
+    // auto-orbit that frames the whole scene.
+    std::array<float, 3> eye;
+    std::array<float, 3> forward;
+    if (free_camera_) {
+        eye = free_eye_;
+        const float cp = std::cos(free_pitch_);
+        forward = normalise({cp * std::sin(free_yaw_), std::sin(free_pitch_),
+                             cp * std::cos(free_yaw_)});
+    } else {
+        eye = {scene_center_[0] + std::sin(angle) * dist,
+               scene_center_[1] + dist * 0.55f,
+               scene_center_[2] + std::cos(angle) * dist};
+        const std::array<float, 3> target{scene_center_[0], scene_center_[1], scene_center_[2]};
+        forward = normalise(subtract(target, eye));
+    }
     const std::array<float, 3> up{0.0f, 1.0f, 0.0f};
-    const auto forward = normalise(subtract(target, eye));
     const auto right = normalise(cross(up, forward));
     const auto camera_up = cross(forward, right);
     const float aspect =
@@ -693,6 +975,109 @@ SkyCamera NativeWorldRenderer::compute_camera(std::uint32_t width, std::uint32_t
     return cam;
 }
 
+std::array<float, 16> NativeWorldRenderer::compute_view_projection(std::uint32_t width,
+                                                                   std::uint32_t height,
+                                                                   double elapsed_seconds) const {
+    const auto camera = compute_camera(width, height, elapsed_seconds);
+    const auto eye = camera.position;
+    const auto forward = camera.forward;
+    const auto right = camera.right;
+    const auto camera_up = camera.up;
+    const float eye_dot_right = dot(eye, right);
+    const float eye_dot_up = dot(eye, camera_up);
+    const float eye_dot_forward = dot(eye, forward);
+    const float aspect =
+        height == 0 ? 1.0f : static_cast<float>(width) / static_cast<float>(height);
+    const float y_scale = 1.0f / std::tan(0.5f);
+    const float x_scale = y_scale / aspect;
+    // A small near plane when free-flying so close geometry doesn't clip; the orbit sits
+    // far enough out to afford a generous near for depth precision.
+    const float near_plane = free_camera_ ? 0.5f : std::max(0.1f, scene_radius_ * 0.05f);
+    const float far_plane = scene_radius_ * 8.0f + 10.0f;
+    // Reversed-Z depth row: clip.z = near/(far-near) * (far - view_depth); with clip.w =
+    // view_depth this gives z_ndc = near→1, far→0 (see DepthFunc GREATER_EQUAL + 0.0 clear).
+    const float rz = near_plane / (far_plane - near_plane);
+    std::array<float, 16> m{};
+    auto at = [&](int r, int c) -> float& { return m[r * 4 + c]; };
+    at(0, 0) = right[0] * x_scale;
+    at(1, 0) = right[1] * x_scale;
+    at(2, 0) = right[2] * x_scale;
+    at(3, 0) = -eye_dot_right * x_scale;
+    at(0, 1) = camera_up[0] * y_scale;
+    at(1, 1) = camera_up[1] * y_scale;
+    at(2, 1) = camera_up[2] * y_scale;
+    at(3, 1) = -eye_dot_up * y_scale;
+    at(0, 2) = -rz * forward[0];
+    at(1, 2) = -rz * forward[1];
+    at(2, 2) = -rz * forward[2];
+    at(3, 2) = rz * (eye_dot_forward + far_plane);
+    at(0, 3) = forward[0];
+    at(1, 3) = forward[1];
+    at(2, 3) = forward[2];
+    at(3, 3) = -eye_dot_forward;
+    return m;
+}
+
+// Sun ortho view-projection for the shadow map: fits a box around the scene, looking along the sun
+// travel direction, standard Z in [0,1]. Row-vector × row-major (matches the camera VP + world VS).
+std::array<float, 16> NativeWorldRenderer::compute_light_view_projection(
+    const std::array<float, 3>& sun) const {
+    const std::array<float, 3> up_ref =
+        std::abs(sun[1]) > 0.99f ? std::array<float, 3>{0.0f, 0.0f, 1.0f}
+                                 : std::array<float, 3>{0.0f, 1.0f, 0.0f};
+    const auto forward = normalise(sun);                 // light travels along +sun
+    const auto right = normalise(cross(up_ref, forward));
+    const auto up = cross(forward, right);
+    const float radius = std::max(scene_radius_, 1.0f);
+    const std::array<float, 3> eye = {scene_center_[0] - forward[0] * radius * 2.0f,
+                                      scene_center_[1] - forward[1] * radius * 2.0f,
+                                      scene_center_[2] - forward[2] * radius * 2.0f};
+    const float sx = 1.0f / radius;
+    const float sy = 1.0f / radius;
+    const float near_plane = radius * 0.05f;
+    const float far_plane = radius * 4.0f;
+    const float inv_depth = 1.0f / (far_plane - near_plane);
+    const float edr = dot(eye, right), edu = dot(eye, up), edf = dot(eye, forward);
+    std::array<float, 16> m{};
+    auto at = [&](int r, int c) -> float& { return m[r * 4 + c]; };
+    at(0, 0) = right[0] * sx;   at(1, 0) = right[1] * sx;   at(2, 0) = right[2] * sx;
+    at(3, 0) = -edr * sx;
+    at(0, 1) = up[0] * sy;      at(1, 1) = up[1] * sy;      at(2, 1) = up[2] * sy;
+    at(3, 1) = -edu * sy;
+    at(0, 2) = forward[0] * inv_depth; at(1, 2) = forward[1] * inv_depth;
+    at(2, 2) = forward[2] * inv_depth; at(3, 2) = (-edf - near_plane) * inv_depth;
+    at(3, 3) = 1.0f;  // ortho: w = 1
+    return m;
+}
+
+void NativeWorldRenderer::render_shadow(ID3D12GraphicsCommandList* command_list,
+                                        const NativeScene& scene, double elapsed_seconds) {
+    (void)elapsed_seconds;
+    if (!shadow_pipeline_ || shadow_size_ == 0) return;
+    const auto sun = normalise(scene.sun_direction);
+    if (sun[1] >= -0.05f) return;  // sun below horizon → no shadows (matches render()'s gate)
+    // The light VP lives in the shared Camera cbuffer, written by render() (recorded after this in
+    // the same single-buffered frame; the GPU reads the final value). Depth-only replay.
+    const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(shadow_size_),
+                                  static_cast<float>(shadow_size_), 0.0f, 1.0f};
+    const D3D12_RECT scissor{0, 0, static_cast<LONG>(shadow_size_),
+                             static_cast<LONG>(shadow_size_)};
+    command_list->RSSetViewports(1, &viewport);
+    command_list->RSSetScissorRects(1, &scissor);
+    command_list->OMSetRenderTargets(0, nullptr, FALSE, &shadow_dsv_);
+    command_list->ClearDepthStencilView(shadow_dsv_, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+    command_list->SetPipelineState(shadow_pipeline_.Get());
+    command_list->SetGraphicsRootSignature(shadow_root_signature_.Get());
+    command_list->SetGraphicsRootConstantBufferView(0, constant_address_);
+    command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    command_list->IASetVertexBuffers(0, 1, &vertex_view_);
+    command_list->IASetIndexBuffer(&index_view_);
+    for (const auto& range : draw_ranges_) {
+        if (range.is_water) continue;  // water doesn't cast shadows
+        command_list->DrawIndexedInstanced(range.index_count, 1, range.first_index, 0, 0);
+    }
+}
+
 void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
                                  const NativeScene& scene, std::uint32_t width,
                                  std::uint32_t height, double elapsed_seconds) {
@@ -700,36 +1085,9 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
 
     const auto camera = compute_camera(width, height, elapsed_seconds);
     const std::array<float, 3> eye = camera.position;
-    const std::array<float, 3> up{0.0f, 1.0f, 0.0f};
-    const auto forward = camera.forward;
-    const auto right = camera.right;
-    const auto camera_up = camera.up;
-    const float eye_dot_right = dot(eye, right);
-    const float eye_dot_up = dot(eye, camera_up);
-    const float eye_dot_forward = dot(eye, forward);
-    const float aspect = static_cast<float>(width) / static_cast<float>(height);
-    const float y_scale = 1.0f / std::tan(0.5f);
-    const float x_scale = y_scale / aspect;
-    const float near_plane = std::max(0.1f, scene_radius_ * 0.05f);
-    const float far_plane = scene_radius_ * 8.0f + 10.0f;
     Constants constants{};
-    constants.view_projection[0][0] = right[0] * x_scale;
-    constants.view_projection[1][0] = right[1] * x_scale;
-    constants.view_projection[2][0] = right[2] * x_scale;
-    constants.view_projection[3][0] = -eye_dot_right * x_scale;
-    constants.view_projection[0][1] = camera_up[0] * y_scale;
-    constants.view_projection[1][1] = camera_up[1] * y_scale;
-    constants.view_projection[2][1] = camera_up[2] * y_scale;
-    constants.view_projection[3][1] = -eye_dot_up * y_scale;
-    constants.view_projection[0][2] = forward[0] * far_plane / (far_plane - near_plane);
-    constants.view_projection[1][2] = forward[1] * far_plane / (far_plane - near_plane);
-    constants.view_projection[2][2] = forward[2] * far_plane / (far_plane - near_plane);
-    constants.view_projection[3][2] =
-        -(far_plane * (eye_dot_forward + near_plane)) / (far_plane - near_plane);
-    constants.view_projection[0][3] = forward[0];
-    constants.view_projection[1][3] = forward[1];
-    constants.view_projection[2][3] = forward[2];
-    constants.view_projection[3][3] = -eye_dot_forward;
+    const auto vp = compute_view_projection(width, height, elapsed_seconds);
+    std::memcpy(constants.view_projection, vp.data(), sizeof(constants.view_projection));
     const auto sun = normalise(scene.sun_direction);
     constants.sun_direction[0] = sun[0];
     constants.sun_direction[1] = sun[1];
@@ -739,10 +1097,32 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     constants.sun_color[1] = scene.sun_color[1];
     constants.sun_color[2] = scene.sun_color[2];
     constants.sun_color[3] = 0.0f;
+    constants.viewport_size[0] = static_cast<float>(width);
+    constants.viewport_size[1] = static_cast<float>(height);
     constants.eye_time[0] = eye[0];
     constants.eye_time[1] = eye[1];
     constants.eye_time[2] = eye[2];
     constants.eye_time[3] = static_cast<float>(elapsed_seconds);
+    constants.fog_color[0] = scene.fog_color[0];
+    constants.fog_color[1] = scene.fog_color[1];
+    constants.fog_color[2] = scene.fog_color[2];
+    constants.fog_color[3] = scene.fog_max;
+    constants.fog_range[0] = scene.fog_start;
+    constants.fog_range[1] = scene.fog_end;
+    for (int i = 0; i < 3; ++i) {
+        constants.sky_zenith[i] = scene.sky_color[i];
+        constants.sky_horizon[i] = scene.sky_horizon_color[i];
+    }
+    // Sun shadow map: enable only when a shadow target is bound AND the sun is above the horizon
+    // (travelling downward → sun.y < 0). At night the sun term is ~0 anyway, so shadows are off.
+    const bool shadows_on = shadow_size_ > 0 && sun[1] < -0.05f;
+    const auto light_vp = compute_light_view_projection(sun);
+    std::memcpy(constants.light_view_projection, light_vp.data(),
+                sizeof(constants.light_view_projection));
+    constants.shadow_params[0] = shadows_on ? 1.0f / static_cast<float>(shadow_size_) : 0.0f;
+    constants.shadow_params[1] = 0.0015f;                 // NDC-z depth bias
+    constants.shadow_params[2] = shadows_on ? 1.0f : 0.0f;  // enabled
+    constants.shadow_params[3] = 0.7f;                    // strength (how dark the sun term goes)
     std::memcpy(mapped_constants_, &constants, sizeof(constants));
 
     // The world render must set its OWN viewport/scissor — nothing else does before it,
@@ -757,6 +1137,13 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
     command_list->SetGraphicsRootConstantBufferView(0, constant_address_);
     command_list->SetGraphicsRootDescriptorTable(1, texture_gpu_handle_);
     command_list->SetGraphicsRootConstantBufferView(2, light_address_);  // b1 point lights
+    const bool depth_copy_ready = scene_depth_source_ && scene_depth_copy_;
+    if (depth_copy_ready) {
+        command_list->SetGraphicsRootDescriptorTable(4, scene_depth_gpu_handle_);
+    }
+    if (shadow_size_ > 0) {
+        command_list->SetGraphicsRootDescriptorTable(6, shadow_srv_gpu_);  // t4 shadow map
+    }
     command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     command_list->IASetVertexBuffers(0, 1, &vertex_view_);
     command_list->IASetIndexBuffer(&index_view_);
@@ -767,14 +1154,47 @@ void NativeWorldRenderer::render(ID3D12GraphicsCommandList* command_list,
         for (const auto& range : draw_ranges_) {
             if (range.is_water != water) continue;
             auto texture_handle = texture_gpu_handle_;
-            texture_handle.ptr += static_cast<std::size_t>(range.material_index) * 2 *
+            texture_handle.ptr += static_cast<std::size_t>(range.material_index) * 3 *
                                  texture_descriptor_stride_;
             command_list->SetGraphicsRootDescriptorTable(1, texture_handle);
+            command_list->SetGraphicsRootConstantBufferView(
+                3, water_address_ + static_cast<D3D12_GPU_VIRTUAL_ADDRESS>(range.material_index) * 256);
+            struct DrawConstants {
+                std::uint32_t is_character;
+                float character_offset[3];
+                float character_motion[4];
+            } draw_constants{range.is_character ? 1u : 0u,
+                             {character_offset_[0], character_offset_[1], character_offset_[2]},
+                             {character_motion_phase_, character_motion_strength_, 0.0f, 0.0f}};
+            command_list->SetGraphicsRoot32BitConstants(5, 8, &draw_constants, 0);
             command_list->DrawIndexedInstanced(range.index_count, 1, range.first_index, 0, 0);
         }
     };
     draw_pass(false, pipeline_state_.Get());
-    draw_pass(true, water_pipeline_.Get());
+    if (depth_copy_ready) {
+        D3D12_RESOURCE_BARRIER barriers[2]{};
+        barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[0].Transition.pResource = scene_depth_source_;
+        barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[1].Transition.pResource = scene_depth_copy_;
+        barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        command_list->ResourceBarrier(2, barriers);
+        command_list->CopyResource(scene_depth_copy_, scene_depth_source_);
+        barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+        barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        command_list->ResourceBarrier(2, barriers);
+    }
+    // The water shader samples the copied depth unconditionally. If depth resources could not
+    // be created (for example during a transient device/resize failure), keep the opaque scene
+    // valid and avoid issuing a draw with an unbound t3 descriptor.
+    if (depth_copy_ready) draw_pass(true, water_pipeline_.Get());
 }
 
 }  // namespace f2

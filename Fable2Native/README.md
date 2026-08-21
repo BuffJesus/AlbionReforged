@@ -75,9 +75,23 @@ build\RelWithDebInfo\f2native_frontend.exe --backend d3d12    # or: --backend vu
 
 If the build has no Vulkan support, the selection always resolves to D3D12. The Options page exposes
 the same choice (Video → Renderer); it persists and applies on the next launch. D3D12 and Vulkan
+builds install their generated SPIR-V under `vulkan_shaders/` next to the frontend executable.
 are presentation backends for the native runtime; neither runs the Xbox 360 renderer.
 The frontend state and gameplay clock use fixed 60 Hz simulation steps, so uncapped rendering does
 not accelerate menus, loading, or future game logic.
+
+When inspecting a cooked scene in `World`, the native camera supports free flight on both
+backends: `WASD` moves forward/back/left/right, `Q`/`E` move down/up, arrow keys look, and `Shift`
+boosts movement. The camera is framed automatically when entering World and resets when leaving it.
+Hero-enabled scenes also expose a lightweight inspection controller on both backends: `IJKL` moves
+hero draw ranges in the ground plane, `U`/`O` adjust height, and `Shift` boosts. The offset resets
+when leaving World or loading a scene without `hero*` meshes; this is a render/debug milestone, not
+runtime animation or collision physics.
+Hero-enabled scenes emit a `hero_start` directive, so World automatically frames the child at
+PlayerStart and shows the live offset/control overlay in the upper-left corner. Press `R` to reset
+the hero offset and `F` to reframe the inspection camera. While a movement key is held, the baked
+idle mesh receives a small synchronized locomotion bob and the overlay changes from `IDLE` to
+`WALK`; skeletal runtime animation remains future work.
 
 The frontend requires user-supplied game data. On first launch it opens a folder picker;
 choose the extracted Fable II game directory containing `data\dir.manifest`. The selected

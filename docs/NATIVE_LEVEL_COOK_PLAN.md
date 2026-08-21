@@ -262,6 +262,14 @@ backdrop/skybox horizon, NOT missing cookable geometry. (c)/(d) moot — the vis
 placement and the numbers above are from the real cooked scene.
 Add `--water-file <sea_vista.water>` to the recook. Older analysis below (kept):
 
+**WATER SHADING FOLLOW-UP (2026-08-12):** the cooker now preserves each `.water` body's normal-map path.
+`globals_texture_headers.bnk` supplies the PF40/256×256 metadata needed to decode the header-backed
+`waternormalmap01.tex` body as BC5. Both native backends sample the cooked normal map for the retail dual-scroll
+normal/Fresnel path. The cooker now emits one material per authored `.water` body and preserves all 37 BE params;
+the F2SCENE loader and both native backends bind those values per material, with the resolved 0.42 WaterTheme
+opacity carried separately. Both native water PSOs now use the retail ONE/SRC_ALPHA composite and
+`refr_k=(1-distf)*refl_str*(1-frefl)`; remaining approximation is the retail scene-depth edge factor.
+
 **OPEN ITEM 1 (original measurements) — the castle-approach VOID is only partly filled.**
 MEASURED world bounds (render space, `native_full_vista.f2scene`):
   - terrain: X[0,288] Z[0,288]   (from `slums.ghf`; the main render `.ehf` has the SAME extent: origin
@@ -329,7 +337,10 @@ resolved: the terrain cook now cooks the level's DOMINANT ground texture from th
     the reusable `shader_bank_extract` tool: `ghidra_out/prop_ambient_shader_re.txt`. The renderer un-swaps
     our stored `{x,z,y}` mesh normal to game axes and evaluates the exact formula. Effect is subtle (the baked
     probes for this level sit close to our synthetic hemisphere for wall orientations) but now byte-faithful
-    to the game. Vulkan world-renderer parity is TODO.
+    to the game. Vulkan now uses the same probe evaluation, complete-scene camera/culling policy, Phase-0
+    procedural sky gradient, and optional MSAA-safe reversed-Z depth resolve for the water shoreline;
+    the current AMD driver supports `MAX`, while devices without the resolve extensions—or with
+    optional resolve-image allocation failure—retain the shoreline-free fallback without aborting.
 
 **OPEN ITEM 2 — the scene reads DARK — ROOT-CAUSED this session (see `ghidra_out/dark_props_diagnosis.txt`
 + its SESSION VERIFICATION footer).** The props are NOT actually black: a raw-albedo PS diagnostic

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "native_scene.h"
+#include "sky_camera.h"
 
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -10,18 +11,6 @@
 #include <string>
 
 namespace f2 {
-
-// Camera basis the sky pass needs, in the SAME convention the world renderer uses
-// (Y-up render space). NativeWorldRenderer::compute_camera fills this so the sky's
-// fullscreen-triangle rays line up pixel-for-pixel with the world geometry.
-struct SkyCamera {
-    std::array<float, 3> position{};   // eye, world/render space
-    std::array<float, 3> right{};      // orthonormal camera basis
-    std::array<float, 3> up{};
-    std::array<float, 3> forward{};
-    float tan_half_fov_x = 1.0f;       // right.w
-    float tan_half_fov_y = 1.0f;       // up.w
-};
 
 // A self-contained procedural-sky pass: one fullscreen triangle drawn BEHIND the world
 // (no depth test/write) that runs the ported SkyDomeXex analytic atmosphere shader.

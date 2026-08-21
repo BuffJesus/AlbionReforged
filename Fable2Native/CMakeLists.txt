@@ -97,7 +97,11 @@ if(WIN32)
         src/native_frontend_app.cpp
         src/native_ui_renderer.cpp
         src/native_world_renderer.cpp
-        src/native_sky_renderer.cpp)
+        src/native_sky_renderer.cpp
+        src/native_cloud_renderer.cpp
+        src/native_sky_billboard_renderer.cpp
+        src/native_sky_stars_renderer.cpp
+        src/native_tonemap_renderer.cpp)
     target_link_libraries(f2native_frontend PRIVATE
         f2native_core
         f2native_video
@@ -119,8 +123,21 @@ if(WIN32)
         set(F2NATIVE_VULKAN_SHADER_OUTPUTS
             "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.vert.spv"
             "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.frag.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world_shadow.vert.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_sky.vert.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_sky.frag.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_cloud.vert.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_cloud.frag.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_billboard.vert.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_billboard.frag.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_stars.vert.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_stars.frag.spv"
             "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_ui.vert.spv"
-            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_ui.frag.spv")
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_ui.frag.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_tonemap.vert.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_tonemap_bright.frag.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_tonemap_blur.frag.spv"
+            "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_tonemap_composite.frag.spv")
         add_custom_command(
             OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world.vert.spv"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
@@ -138,6 +155,78 @@ if(WIN32)
             DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world.frag"
             VERBATIM)
         add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world_shadow.vert.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_world_shadow.vert.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world_shadow.vert"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_world_shadow.vert"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_sky.vert.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_sky.vert.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_sky.vert"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_sky.vert"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_sky.frag.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_sky.frag.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_sky.frag"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_sky.frag"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_cloud.vert.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_cloud.vert.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_cloud.vert"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_cloud.vert"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_cloud.frag.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_cloud.frag.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_cloud.frag"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_cloud.frag"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_billboard.vert.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_billboard.vert.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_billboard.vert"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_billboard.vert"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_billboard.frag.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_billboard.frag.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_billboard.frag"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_billboard.frag"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_stars.vert.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_stars.vert.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_stars.vert"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_stars.vert"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_stars.frag.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_stars.frag.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_stars.frag"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_stars.frag"
+            VERBATIM)
+        add_custom_command(
             OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_ui.vert.spv"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
             COMMAND ${F2NATIVE_GLSLC} -o
@@ -153,6 +242,38 @@ if(WIN32)
                     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_ui.frag"
             DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_ui.frag"
             VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_tonemap.vert.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_tonemap.vert.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_tonemap.vert"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_tonemap.vert"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_tonemap_bright.frag.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_tonemap_bright.frag.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_tonemap_bright.frag"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_tonemap_bright.frag"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_tonemap_blur.frag.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_tonemap_blur.frag.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_tonemap_blur.frag"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_tonemap_blur.frag"
+            VERBATIM)
+        add_custom_command(
+            OUTPUT "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_tonemap_composite.frag.spv"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
+            COMMAND ${F2NATIVE_GLSLC} -o
+                    "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}/native_tonemap_composite.frag.spv"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_tonemap_composite.frag"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/native_tonemap_composite.frag"
+            VERBATIM)
         add_custom_target(f2native_vulkan_shaders DEPENDS ${F2NATIVE_VULKAN_SHADER_OUTPUTS})
 
         file(TO_CMAKE_PATH "${F2NATIVE_VULKAN_SHADER_OUTPUT_DIR}"
@@ -162,12 +283,27 @@ if(WIN32)
             src/native_vulkan_ui_renderer.cpp
             src/native_vulkan_video_texture.cpp
             src/native_vulkan_world_renderer.cpp)
+        target_sources(f2native_frontend PRIVATE src/native_vulkan_sky_renderer.cpp)
+        target_sources(f2native_frontend PRIVATE src/native_vulkan_cloud_renderer.cpp)
+        target_sources(f2native_frontend PRIVATE src/native_vulkan_sky_billboard_renderer.cpp)
+        target_sources(f2native_frontend PRIVATE src/native_vulkan_sky_stars_renderer.cpp)
+        target_sources(f2native_frontend PRIVATE src/native_vulkan_tonemap_renderer.cpp)
         target_link_libraries(f2native_frontend PRIVATE Vulkan::Vulkan)
         target_compile_definitions(f2native_frontend PRIVATE
             F2NATIVE_HAS_VULKAN
             F2NATIVE_VULKAN_SHADER_DIR="${F2NATIVE_VULKAN_SHADER_DIR_DEFINE}")
         add_dependencies(f2native_frontend f2native_vulkan_shaders)
+
+        # The executable embeds the build-tree shader directory for local runs, but packaged
+        # builds must carry the generated SPIR-V beside the frontend as well. Keep this install
+        # rule tied to the generated output list so new backend shaders cannot be omitted silently.
+        install(FILES ${F2NATIVE_VULKAN_SHADER_OUTPUTS}
+                DESTINATION vulkan_shaders)
     endif()
+endif()
+
+if(WIN32)
+    install(TARGETS f2native_frontend RUNTIME DESTINATION .)
 endif()
 
 include(CTest)

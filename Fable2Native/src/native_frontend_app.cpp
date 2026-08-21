@@ -10,6 +10,11 @@
 #include "f2/native_video_decoder.h"
 #include "f2/render/texture_registry.h"
 #include "f2/render/ui_draw_list.h"
+#include "f2/native_cloud_renderer.h"
+#include "f2/native_sky_billboard_renderer.h"
+#include "f2/native_scene_color.h"
+#include "f2/native_sky_stars_renderer.h"
+#include "f2/native_tonemap_renderer.h"
 #include "f2/native_world_renderer.h"
 
 
@@ -41,6 +46,7 @@ namespace {
 
 constexpr UINT kFrameCount = 2;
 constexpr DXGI_FORMAT kBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+constexpr UINT kShadowSize = 2048;  // sun shadow-map resolution (square)
 constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
 constexpr UINT kUiTextureCount = 36;
 
@@ -289,12 +295,44 @@ public:
                         MB_OK | MB_ICONERROR);
             return false;
         }
+        world_renderer_.set_scene_depth_copy(depth_target_.Get(), depth_copy_.Get(),
+                                             depth_gpu_handle_);
+        if (shadow_map_) {
+            world_renderer_.set_shadow_map(shadow_dsv_, shadow_srv_gpu_, kShadowSize);
+        }
         // Procedural sky pass (self-contained: own root sig/PSO/LUT/descriptor heap). A
         // failure here is non-fatal — the World branch falls back to the flat sky_color clear.
         std::string sky_error;
         if (!sky_renderer_.initialise(device_.Get(), queue_.Get(), sky_error)) {
             OutputDebugStringA(("Fable2Native: sky renderer disabled: " + sky_error + "\n").c_str());
         }
+        // Cloud-layer pass (self-contained like the sky). Non-fatal on failure: the sky just
+        // renders without its scrolling cloud layers.
+        std::string cloud_error;
+        if (!cloud_renderer_.initialise(device_.Get(), queue_.Get(), cloud_error)) {
+            OutputDebugStringA(
+                ("Fable2Native: cloud renderer disabled: " + cloud_error + "\n").c_str());
+        }
+        std::string billboard_error;
+        if (!billboard_renderer_.initialise(device_.Get(), queue_.Get(), billboard_error)) {
+            OutputDebugStringA(
+                ("Fable2Native: billboard renderer disabled: " + billboard_error + "\n").c_str());
+        }
+        std::string stars_error;
+        if (!stars_renderer_.initialise(device_.Get(), stars_error)) {
+            OutputDebugStringA(
+                ("Fable2Native: stars renderer disabled: " + stars_error + "\n").c_str());
+        }
+        // HDR -> LDR compositor (tonemap/exposure). Non-fatal: if it fails, the World path falls
+        // back to rendering directly to the LDR back buffer (see render()).
+        std::string tonemap_error;
+        if (!tonemap_renderer_.initialise(device_.Get(), kBackBufferFormat, tonemap_error)) {
+            OutputDebugStringA(
+                ("Fable2Native: tonemap compositor disabled: " + tonemap_error + "\n").c_str());
+        } else if (hdr_scene_) {
+            tonemap_renderer_.ensure_targets(device_.Get(), hdr_scene_.Get(), width_, height_);
+        }
+        read_hdr_options();
         std::string ui_renderer_error;
         if (!native_ui_renderer_.initialise(device_.Get(), 1, ui_renderer_error)) {
             MessageBoxA(window_, ui_renderer_error.c_str(),
@@ -326,6 +364,8 @@ public:
             update_video();
             input_.poll();
             handle_input();
+            update_free_camera(delta);
+            update_character_controller(delta);
             apply_resolution_setting();
             apply_aa_setting();
             audio_.tick();
@@ -452,17 +492,23 @@ private:
         factory->MakeWindowAssociation(window_, DXGI_MWA_NO_ALT_ENTER);
 
         D3D12_DESCRIPTOR_HEAP_DESC rtv_desc{};
-        rtv_desc.NumDescriptors = kFrameCount + 1;  // +1 for the MSAA resolve target
+        rtv_desc.NumDescriptors = kFrameCount + 2;  // +1 MSAA resolve target, +1 HDR scene target
         rtv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         if (FAILED(device_->CreateDescriptorHeap(&rtv_desc, IID_PPV_ARGS(&rtv_heap_)))) return false;
         D3D12_DESCRIPTOR_HEAP_DESC dsv_desc{};
-        dsv_desc.NumDescriptors = 1;
+        dsv_desc.NumDescriptors = 2;  // [0] world depth, [1] sun shadow map depth
         dsv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
         if (FAILED(device_->CreateDescriptorHeap(&dsv_desc, IID_PPV_ARGS(&dsv_heap_)))) return false;
         dsv_handle_ = dsv_heap_->GetCPUDescriptorHandleForHeapStart();
+        {
+            const UINT dsv_stride =
+                device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+            shadow_dsv_ = dsv_handle_;
+            shadow_dsv_.ptr += dsv_stride;  // second DSV slot
+        }
         D3D12_DESCRIPTOR_HEAP_DESC srv_desc{};
         srv_desc.NumDescriptors =
-            f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 2;
+            f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount + 5;
         srv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         srv_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device_->CreateDescriptorHeap(&srv_desc, IID_PPV_ARGS(&descriptor_heap_)))) return false;
@@ -470,6 +516,9 @@ private:
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         video_descriptor_index_ = f2::NativeWorldRenderer::kMaxMaterialTextures + kUiTextureCount;
         font_descriptor_index_ = video_descriptor_index_ + 1;
+        depth_descriptor_index_ = font_descriptor_index_ + 1;
+        hdr_descriptor_index_ = depth_descriptor_index_ + 1;
+        shadow_descriptor_index_ = hdr_descriptor_index_ + 1;
 
         rtv_stride_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         auto handle = rtv_heap_->GetCPUDescriptorHandleForHeapStart();
@@ -482,7 +531,11 @@ private:
             device_->CreateRenderTargetView(frames_[i].render_target.Get(), nullptr, frames_[i].rtv);
         }
         msaa_rtv_ = handle;  // the extra RTV slot after the back buffers
+        handle.ptr += rtv_stride_;
+        hdr_rtv_ = handle;  // the RTV slot after MSAA, for the HDR scene target
         create_depth_target();
+        create_hdr_target();
+        create_shadow_map();
         if (FAILED(device_->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
                                                frames_[0].allocator.Get(), nullptr,
                                                IID_PPV_ARGS(&command_list_))) ||
@@ -508,6 +561,12 @@ private:
         }
         create_msaa_target();  // match the MSAA target to the new size
         create_depth_target();  // match the depth buffer to the new size
+        create_hdr_target();    // match the HDR scene target to the new size
+        if (tonemap_renderer_.ready() && hdr_scene_) {
+            tonemap_renderer_.ensure_targets(device_.Get(), hdr_scene_.Get(), width_, height_);
+        }
+        world_renderer_.set_scene_depth_copy(depth_target_.Get(), depth_copy_.Get(),
+                                             depth_gpu_handle_);
     }
 
     // Real backend owner for the Options "Resolution" setting: when the user changes it, resize the
@@ -561,6 +620,7 @@ private:
     // world renderer real occlusion (without it the level draws as a flat merged silhouette).
     void create_depth_target() {
         depth_target_.Reset();
+        depth_copy_.Reset();
         if (!device_ || width_ == 0 || height_ == 0) return;
         D3D12_RESOURCE_DESC description{};
         description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -568,14 +628,16 @@ private:
         description.Height = height_;
         description.DepthOrArraySize = 1;
         description.MipLevels = 1;
-        description.Format = kDepthFormat;
+        // Typeless storage permits both the D32 DSV and an R32_FLOAT copy/SRV view.
+        description.Format = DXGI_FORMAT_R32_TYPELESS;
         description.SampleDesc.Count = 1;
         description.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_CLEAR_VALUE clear{};
         clear.Format = kDepthFormat;
-        clear.DepthStencil.Depth = 1.0f;
+        // Reversed-Z world depth clears to the far value 0.0 (matching the per-frame clear).
+        clear.DepthStencil.Depth = 0.0f;
         if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &description,
                                                     D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear,
                                                     IID_PPV_ARGS(&depth_target_)))) {
@@ -586,6 +648,131 @@ private:
         view.Format = kDepthFormat;
         view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
         device_->CreateDepthStencilView(depth_target_.Get(), &view, dsv_handle_);
+
+        D3D12_RESOURCE_DESC copy_description = description;
+        copy_description.Flags = D3D12_RESOURCE_FLAG_NONE;
+        D3D12_HEAP_PROPERTIES copy_heap{};
+        copy_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        if (FAILED(device_->CreateCommittedResource(
+                &copy_heap, D3D12_HEAP_FLAG_NONE, &copy_description,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
+                IID_PPV_ARGS(&depth_copy_)))) {
+            depth_target_.Reset();
+            return;
+        }
+        D3D12_SHADER_RESOURCE_VIEW_DESC depth_srv{};
+        depth_srv.Format = DXGI_FORMAT_R32_FLOAT;
+        depth_srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        depth_srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        depth_srv.Texture2D.MipLevels = 1;
+        auto depth_cpu = descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
+        depth_cpu.ptr += static_cast<std::size_t>(depth_descriptor_index_) * descriptor_stride_;
+        device_->CreateShaderResourceView(depth_copy_.Get(), &depth_srv, depth_cpu);
+        depth_gpu_handle_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
+        depth_gpu_handle_.ptr += static_cast<std::size_t>(depth_descriptor_index_) * descriptor_stride_;
+    }
+
+    // Sun shadow map (retail "Render ShadowBuffers"): a fixed-size square depth target the world
+    // renderer replays opaque geometry into from the sun POV, then samples in the world PS. Created
+    // once (size is window-independent); starts in DEPTH_WRITE.
+    void create_shadow_map() {
+        shadow_map_.Reset();
+        if (!device_) return;
+        D3D12_RESOURCE_DESC description{};
+        description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        description.Width = kShadowSize;
+        description.Height = kShadowSize;
+        description.DepthOrArraySize = 1;
+        description.MipLevels = 1;
+        description.Format = DXGI_FORMAT_R32_TYPELESS;  // D32 DSV + R32_FLOAT SRV
+        description.SampleDesc.Count = 1;
+        description.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_CLEAR_VALUE clear{};
+        clear.Format = DXGI_FORMAT_D32_FLOAT;
+        clear.DepthStencil.Depth = 1.0f;  // standard-Z far
+        if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &description,
+                                                    D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear,
+                                                    IID_PPV_ARGS(&shadow_map_)))) {
+            shadow_map_.Reset();
+            return;
+        }
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+        dsv.Format = DXGI_FORMAT_D32_FLOAT;
+        dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        device_->CreateDepthStencilView(shadow_map_.Get(), &dsv, shadow_dsv_);
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Format = DXGI_FORMAT_R32_FLOAT;
+        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels = 1;
+        auto cpu = descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
+        cpu.ptr += static_cast<std::size_t>(shadow_descriptor_index_) * descriptor_stride_;
+        device_->CreateShaderResourceView(shadow_map_.Get(), &srv, cpu);
+        shadow_srv_gpu_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
+        shadow_srv_gpu_.ptr += static_cast<std::size_t>(shadow_descriptor_index_) * descriptor_stride_;
+    }
+
+    // Optional HDR-compositor tuning overrides (defaults give the retail glow):
+    //   FABLE2NATIVE_HDR_EXPOSURE, FABLE2NATIVE_BLOOM_THRESHOLD, FABLE2NATIVE_BLOOM_INTENSITY.
+    void read_hdr_options() {
+        const auto env_float = [](const char* name, float& out) {
+            char buf[64];
+            if (GetEnvironmentVariableA(name, buf, sizeof(buf)) > 0) {
+                try {
+                    out = std::stof(buf);
+                } catch (...) {
+                }
+            }
+        };
+        env_float("FABLE2NATIVE_HDR_EXPOSURE", hdr_exposure_);
+        env_float("FABLE2NATIVE_BLOOM_THRESHOLD", hdr_bloom_threshold_);
+        env_float("FABLE2NATIVE_BLOOM_INTENSITY", hdr_bloom_intensity_);
+    }
+
+    // (Re)create the HDR scene target the World passes render into (RGBA16F). The retail engine
+    // renders the world HDR then runs a compositor (tonemap/exposure + bloom) to the LDR back buffer
+    // (rendering_pipeline.txt §D.3); native mirrors that with this target + NativeTonemapRenderer.
+    void create_hdr_target() {
+        hdr_scene_.Reset();
+        if (!device_ || width_ == 0 || height_ == 0) return;
+        D3D12_RESOURCE_DESC description{};
+        description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        description.Width = width_;
+        description.Height = height_;
+        description.DepthOrArraySize = 1;
+        description.MipLevels = 1;
+        description.Format = f2::kSceneColorFormat;
+        description.SampleDesc.Count = 1;
+        description.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        // Clear to the scene sky_color, same as the old direct-to-back-buffer World clear.
+        D3D12_CLEAR_VALUE clear{};
+        clear.Format = f2::kSceneColorFormat;
+        for (int i = 0; i < 4; ++i) clear.Color[i] = game_.scene.sky_color[i];
+        if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &description,
+                                                    D3D12_RESOURCE_STATE_RENDER_TARGET, &clear,
+                                                    IID_PPV_ARGS(&hdr_scene_)))) {
+            hdr_scene_.Reset();
+            return;
+        }
+        D3D12_RENDER_TARGET_VIEW_DESC rtv{};
+        rtv.Format = f2::kSceneColorFormat;
+        rtv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        device_->CreateRenderTargetView(hdr_scene_.Get(), &rtv, hdr_rtv_);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Format = f2::kSceneColorFormat;
+        srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Texture2D.MipLevels = 1;
+        auto cpu = descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
+        cpu.ptr += static_cast<std::size_t>(hdr_descriptor_index_) * descriptor_stride_;
+        device_->CreateShaderResourceView(hdr_scene_.Get(), &srv, cpu);
+        hdr_gpu_handle_ = descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
+        hdr_gpu_handle_.ptr += static_cast<std::size_t>(hdr_descriptor_index_) * descriptor_stride_;
     }
 
     // (Re)create the multisampled resolve target at the current size + sample count. Released at 1x.
@@ -1283,6 +1470,109 @@ private:
         // erratic. Arrows/stick move the cursor; Enter/A activates; Esc/B backs out.
     }
 
+    // Free-fly camera for level inspection (World state only): WASD = move on the view plane,
+    // Q/E = down/up, arrow keys = look (yaw/pitch), Shift = boost. Reads the raw keyboard so it
+    // is independent of the frontend action bindings (which drive menu navigation). The camera is
+    // lazily framed to a 3/4 vantage of the cooked scene on the first World frame.
+    void update_free_camera(double delta) {
+        if (game_.frontend.state() != f2::FrontendState::World) {
+            world_cam_initialised_ = false;  // re-frame next time we enter the world
+            world_renderer_.clear_free_camera();
+            return;
+        }
+        auto center = world_renderer_.scene_center();
+        float radius = world_renderer_.scene_radius();
+        const bool hero_view = game_.scene.has_hero_start;
+        if (hero_view) {
+            center = game_.scene.hero_start;
+            center[1] += 0.8f;
+            radius = 8.0f;
+        }
+        if (!world_cam_initialised_) {
+            // Match the auto-orbit's default 3/4 framing so the first view is familiar, then hand
+            // control to the keys.
+            game_.camera.yaw = 0.6f;
+            game_.camera.pitch = -0.32f;
+            const float cp = std::cos(game_.camera.pitch);
+            const std::array<float, 3> fwd{cp * std::sin(game_.camera.yaw), std::sin(game_.camera.pitch),
+                                           cp * std::cos(game_.camera.yaw)};
+            const float dist = hero_view ? 8.0f : radius * 2.4f;
+            game_.camera.position = {center[0] - fwd[0] * dist, center[1] - fwd[1] * dist,
+                                     center[2] - fwd[2] * dist};
+            world_cam_initialised_ = true;
+        }
+        const bool focused = GetForegroundWindow() == window_;
+        const auto down = [&](int vk) { return focused && (GetAsyncKeyState(vk) & 0x8000) != 0; };
+        const float dt = static_cast<float>(delta);
+        const float look = 1.6f * dt;  // radians/sec
+        if (down(VK_LEFT)) game_.camera.yaw -= look;
+        if (down(VK_RIGHT)) game_.camera.yaw += look;
+        if (down(VK_UP)) game_.camera.pitch += look;
+        if (down(VK_DOWN)) game_.camera.pitch -= look;
+        const float pit_lim = 1.55f;  // avoid gimbal flip near straight up/down
+        game_.camera.pitch = std::clamp(game_.camera.pitch, -pit_lim, pit_lim);
+        const float cp = std::cos(game_.camera.pitch);
+        const std::array<float, 3> fwd{cp * std::sin(game_.camera.yaw), std::sin(game_.camera.pitch),
+                                       cp * std::cos(game_.camera.yaw)};
+        const std::array<float, 3> world_up{0.0f, 1.0f, 0.0f};
+        std::array<float, 3> rt{fwd[1] * world_up[2] - fwd[2] * world_up[1],
+                                fwd[2] * world_up[0] - fwd[0] * world_up[2],
+                                fwd[0] * world_up[1] - fwd[1] * world_up[0]};
+        const float rl = std::sqrt(rt[0] * rt[0] + rt[1] * rt[1] + rt[2] * rt[2]);
+        if (rl > 1e-4f) { rt[0] /= rl; rt[1] /= rl; rt[2] /= rl; }
+        const float boost = down(VK_SHIFT) ? 4.0f : 1.0f;
+        const float speed = std::max(radius * 0.35f, 2.0f) * boost * dt;
+        auto& p = game_.camera.position;
+        const auto move = [&](const std::array<float, 3>& d, float s) {
+            p[0] += d[0] * s; p[1] += d[1] * s; p[2] += d[2] * s;
+        };
+        if (down('W')) move(fwd, speed);
+        if (down('S')) move(fwd, -speed);
+        if (down('D')) move(rt, speed);
+        if (down('A')) move(rt, -speed);
+        if (down('E')) move(world_up, speed);
+        if (down('Q')) move(world_up, -speed);
+        world_renderer_.set_free_camera(p, game_.camera.yaw, game_.camera.pitch);
+    }
+
+    // Lightweight hero locomotion for cooked scenes: IJKL moves the hero draw ranges without
+    // rebuilding the static world buffers. It is intentionally separate from WASD free flight.
+    void update_character_controller(double delta) {
+        if (game_.frontend.state() != f2::FrontendState::World || !scene_has_hero()) {
+            character_offset_ = {0.0f, 0.0f, 0.0f};
+            character_motion_phase_ = 0.0f;
+            character_motion_strength_ = 0.0f;
+            world_renderer_.set_character_offset(character_offset_);
+            world_renderer_.set_character_motion(character_motion_phase_, character_motion_strength_);
+            return;
+        }
+        const bool focused = GetForegroundWindow() == window_;
+        const auto down = [&](int vk) {
+            return focused && (GetAsyncKeyState(vk) & 0x8000) != 0;
+        };
+        if (down('F') && game_.scene.has_hero_start) world_cam_initialised_ = false;
+        const float speed = (down(VK_SHIFT) ? 16.0f : 4.0f) * static_cast<float>(delta);
+        if (down('R')) character_offset_ = {0.0f, 0.0f, 0.0f};
+        const bool moving = down('I') || down('K') || down('J') || down('L') || down('U') || down('O');
+        if (moving) character_motion_phase_ += static_cast<float>(delta) * (down(VK_SHIFT) ? 10.0f : 6.0f);
+        character_motion_strength_ = moving ? 1.0f : 0.0f;
+        if (down('I')) character_offset_[2] += speed;
+        if (down('K')) character_offset_[2] -= speed;
+        if (down('L')) character_offset_[0] += speed;
+        if (down('J')) character_offset_[0] -= speed;
+        if (down('U')) character_offset_[1] += speed;
+        if (down('O')) character_offset_[1] -= speed;
+        world_renderer_.set_character_offset(character_offset_);
+        world_renderer_.set_character_motion(character_motion_phase_, character_motion_strength_);
+    }
+
+    bool scene_has_hero() const {
+        for (const auto& mesh : game_.scene.meshes) {
+            if (mesh.name.rfind("hero", 0) == 0) return true;
+        }
+        return false;
+    }
+
     void draw() {
         if ((game_.frontend.state() == f2::FrontendState::IntroVideo ||
              game_.frontend.state() == f2::FrontendState::AttractVideo) &&
@@ -1294,6 +1584,8 @@ private:
             game_.frontend.state() == f2::FrontendState::ChooseCard ||
             game_.frontend.state() == f2::FrontendState::Options) {
             ensure_ui_textures();
+        } else if (game_.frontend.state() == f2::FrontendState::World) {
+            ensure_font_texture();
         }
         const auto state = game_.frontend.state();
         const UINT frame_index = swap_chain_->GetCurrentBackBufferIndex();
@@ -1326,24 +1618,45 @@ private:
         // it into the back buffer. World renders directly (its pipeline is single-sample).
         const bool msaa =
             msaa_samples_ > 1 && msaa_target_ && state != f2::FrontendState::World;
+        // World renders into the HDR scene target (RGBA16F), then the tonemap compositor resolves it
+        // to the LDR back buffer (rendering_pipeline.txt §D.3). If the compositor is unavailable, the
+        // World branch falls back to rendering directly to the back buffer (old clamp path).
+        const bool use_hdr =
+            state == f2::FrontendState::World && tonemap_renderer_.ready() && hdr_scene_;
         if (!msaa) {
             const auto to_rt = transition(frame.render_target.Get(), D3D12_RESOURCE_STATE_PRESENT,
                                           D3D12_RESOURCE_STATE_RENDER_TARGET);
             command_list_->ResourceBarrier(1, &to_rt);
         }
         const D3D12_CPU_DESCRIPTOR_HANDLE target_rtv = msaa ? msaa_rtv_ : frame.rtv;
-        command_list_->OMSetRenderTargets(1, &target_rtv, FALSE, nullptr);
-        command_list_->ClearRenderTargetView(target_rtv, clear.data(), 0, nullptr);
+        // The World passes draw into scene_rtv (the HDR target when compositing, else the back
+        // buffer); the compositor and every non-World state target the back buffer directly.
+        const D3D12_CPU_DESCRIPTOR_HANDLE scene_rtv = use_hdr ? hdr_rtv_ : target_rtv;
+        command_list_->OMSetRenderTargets(1, &scene_rtv, FALSE, nullptr);
+        command_list_->ClearRenderTargetView(scene_rtv, clear.data(), 0, nullptr);
         // Bind the SRV heap BEFORE any draw: the world renderer sets a root descriptor
         // table (its material textures), which requires the heap already bound.
         ID3D12DescriptorHeap* heaps[] = {descriptor_heap_.Get()};
         command_list_->SetDescriptorHeaps(1, heaps);
+        const bool shadows = state == f2::FrontendState::World && shadow_map_;
         if (state == f2::FrontendState::World) {
+            // Sun shadow pass FIRST (retail Render ShadowBuffers): a depth-only replay of opaque
+            // geometry from the sun POV into the shadow map, then transitioned to a PS resource so
+            // the world PS can sample it. Runs before the sky/world colour passes.
+            if (shadows) {
+                world_renderer_.render_shadow(command_list_.Get(), game_.scene,
+                                              game_.elapsed_seconds);
+                const auto to_srv =
+                    transition(shadow_map_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                command_list_->ResourceBarrier(1, &to_srv);
+            }
             // Rebind the same color target WITH the depth buffer so the world renderer
             // gets real occlusion (frontend states render depthless above).
             if (depth_target_) {
-                command_list_->OMSetRenderTargets(1, &target_rtv, FALSE, &dsv_handle_);
-                command_list_->ClearDepthStencilView(dsv_handle_, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0,
+                command_list_->OMSetRenderTargets(1, &scene_rtv, FALSE, &dsv_handle_);
+                // Reversed-Z: clear to 0.0 (the far value); the world PSO tests GREATER_EQUAL.
+                command_list_->ClearDepthStencilView(dsv_handle_, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0,
                                                      0, nullptr);
             }
             // Procedural sky FIRST (fills every pixel behind the world; no depth test/write),
@@ -1356,8 +1669,57 @@ private:
                                      game_.elapsed_seconds);
                 command_list_->SetDescriptorHeaps(1, heaps);
             }
+            // Cloud layers over the sky, still behind the world (own descriptor heap like the sky;
+            // re-bind the app heap for the world material table afterwards).
+            if (cloud_renderer_.ready() && !game_.scene.clouds.empty()) {
+                const auto cam =
+                    world_renderer_.compute_camera(width_, height_, game_.elapsed_seconds);
+                const auto vp =
+                    world_renderer_.compute_view_projection(width_, height_, game_.elapsed_seconds);
+                cloud_renderer_.render(command_list_.Get(), game_.scene, vp, cam.position,
+                                       cam.forward, width_, height_, game_.elapsed_seconds);
+                command_list_->SetDescriptorHeaps(1, heaps);
+            }
+            // Celestial billboards (night moon + glare) over the clouds, behind the world.
+            if (billboard_renderer_.ready() && game_.scene.has_moon) {
+                const auto cam =
+                    world_renderer_.compute_camera(width_, height_, game_.elapsed_seconds);
+                billboard_renderer_.render(command_list_.Get(), game_.scene, cam, width_, height_);
+                command_list_->SetDescriptorHeaps(1, heaps);
+            }
+            // Procedural night stars (additive point sprites), drawn last of the sky passes
+            // (retail order), still behind the world.
+            if (stars_renderer_.ready() && game_.scene.star_brightness > 0.0f) {
+                const auto cam =
+                    world_renderer_.compute_camera(width_, height_, game_.elapsed_seconds);
+                stars_renderer_.render(command_list_.Get(), game_.scene, cam, width_, height_,
+                                       game_.elapsed_seconds);
+            }
             world_renderer_.render(command_list_.Get(), game_.scene, width_, height_,
                                    game_.elapsed_seconds);
+            // HDR -> LDR compositor: resolve the RGBA16F scene target to the LDR back buffer
+            // (tonemap/exposure). The UI overlay below then draws on the composited back buffer.
+            if (use_hdr) {
+                const auto to_srv =
+                    transition(hdr_scene_.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                command_list_->ResourceBarrier(1, &to_srv);
+                tonemap_renderer_.render(command_list_.Get(), target_rtv, width_, height_,
+                                         hdr_exposure_, hdr_bloom_threshold_, hdr_bloom_intensity_);
+                const auto to_rt =
+                    transition(hdr_scene_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                               D3D12_RESOURCE_STATE_RENDER_TARGET);
+                command_list_->ResourceBarrier(1, &to_rt);
+                // The compositor bound its own descriptor heap; restore the app heap for the UI.
+                command_list_->SetDescriptorHeaps(1, heaps);
+            }
+            // Restore the shadow map to DEPTH_WRITE for next frame's shadow pass.
+            if (shadows) {
+                const auto to_depth =
+                    transition(shadow_map_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                               D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                command_list_->ResourceBarrier(1, &to_depth);
+            }
         }
         if (state == f2::FrontendState::MainMenu || state == f2::FrontendState::ChooseCard ||
             state == f2::FrontendState::Options) {
@@ -1369,6 +1731,16 @@ private:
             render_native_video(command_list_.Get());
         } else if (state == f2::FrontendState::Loading) {
             render_native_loading(command_list_.Get());
+        }
+        if (state == f2::FrontendState::World && native_ui_renderer_.ready()) {
+            f2::render::UiDrawList scene;
+            scene_builder().build_world_overlay(scene, static_cast<float>(width_),
+                                                static_cast<float>(height_), scene_has_hero(),
+                                                character_offset_, character_motion_strength_ > 0.5f);
+            native_ui_renderer_.render(command_list_.Get(), width_, height_, scene.quads(),
+                                       [this](f2::render::TextureId id) {
+                                           return resolve_ui_texture(id);
+                                       });
         }
         // Optional on-screen FPS counter (Video options toggle). Drawn over the frontend UI states,
         // where the font atlas is guaranteed uploaded.
@@ -1452,14 +1824,31 @@ private:
     UINT width_ = 1280;
     UINT height_ = 720;
     double current_fps_ = 0.0;  // smoothed FPS for the optional on-screen counter
+    bool world_cam_initialised_ = false;  // free-fly camera lazily framed on first World frame
+    std::array<float, 3> character_offset_{0.0f, 0.0f, 0.0f};
+    float character_motion_phase_ = 0.0f;
+    float character_motion_strength_ = 0.0f;
     int last_resolution_index_ = -1;  // tracks the applied Options "Resolution" value
     int last_aa_index_ = -1;  // tracks the applied Options "Anti-Aliasing" value
     UINT msaa_samples_ = 1;  // current MSAA sample count (1 = off)
     ComPtr<ID3D12Resource> msaa_target_;  // multisampled color target resolved into the back buffer
     D3D12_CPU_DESCRIPTOR_HANDLE msaa_rtv_{};
+    ComPtr<ID3D12Resource> hdr_scene_;  // RGBA16F HDR scene target the World passes render into
+    D3D12_CPU_DESCRIPTOR_HANDLE hdr_rtv_{};
+    D3D12_GPU_DESCRIPTOR_HANDLE hdr_gpu_handle_{};  // SRV for the tonemap compositor
+    UINT hdr_descriptor_index_ = 0;
+    ComPtr<ID3D12Resource> shadow_map_;  // sun shadow-map depth (retail Render ShadowBuffers)
+    D3D12_CPU_DESCRIPTOR_HANDLE shadow_dsv_{};
+    D3D12_GPU_DESCRIPTOR_HANDLE shadow_srv_gpu_{};
+    UINT shadow_descriptor_index_ = 0;
+    float hdr_exposure_ = 1.0f;  // compositor exposure (1.0 == the old direct-to-LDR clamp)
+    float hdr_bloom_threshold_ = 0.62f;  // HDR level above which bloom is extracted
+    float hdr_bloom_intensity_ = 0.90f;  // bloom add strength (0 == no bloom = byte-identical)
     ComPtr<ID3D12Resource> depth_target_;  // D32 depth buffer for the World state (occlusion)
+    ComPtr<ID3D12Resource> depth_copy_;    // shader-readable copy for water shoreline depth
     ComPtr<ID3D12DescriptorHeap> dsv_heap_;
     D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle_{};
+    D3D12_GPU_DESCRIPTOR_HANDLE depth_gpu_handle_{};
     UINT rtv_stride_ = 0;
     UINT descriptor_stride_ = 0;
     UINT video_descriptor_index_ = 0;
@@ -1477,6 +1866,7 @@ private:
     f2::NativeFont native_font_;
     UiGpuTexture font_texture_;
     UINT font_descriptor_index_ = 0;
+    UINT depth_descriptor_index_ = 0;
     f2::NativeFrontendAudio audio_;
     std::filesystem::path active_video_path_;
     f2::NativeVideoDecoder video_decoder_;
@@ -1497,6 +1887,10 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE video_gpu_handle_{};
     f2::NativeWorldRenderer world_renderer_;
     f2::NativeSkyRenderer sky_renderer_;  // procedural atmosphere drawn behind the world
+    f2::NativeCloudRenderer cloud_renderer_;  // scrolling cloud layers over the sky, behind world
+    f2::NativeSkyBillboardRenderer billboard_renderer_;  // night moon + glare over the clouds
+    f2::NativeSkyStarsRenderer stars_renderer_;  // procedural night star field
+    f2::NativeTonemapRenderer tonemap_renderer_;  // HDR->LDR compositor (tonemap/exposure)
     f2::NativeUiRenderer native_ui_renderer_;
     f2::render::TextureRegistry texture_registry_;  // maps ui slots -> stable TextureIds (neutral scene)
     std::optional<f2::FrontendSceneBuilder> scene_builder_;  // shared backend-neutral scene builder

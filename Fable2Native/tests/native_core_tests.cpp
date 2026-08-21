@@ -3,6 +3,7 @@
 #include "f2/native_frontend_config.h"
 #include "f2/native_game.h"
 #include "f2/native_install.h"
+#include "f2/native_scene.h"
 #include "f2/native_texture.h"
 #include "f2/native_ui.h"
 #include "f2/render/null_render_backend.h"
@@ -379,14 +380,43 @@ int main() {
     }
 
     {
+        // Legacy F2SCENE water materials omit water_params=. They must still use the retail
+        // defaults instead of uploading an all-zero constant block to either backend.
+        const auto legacy_path = std::filesystem::temp_directory_path() /
+                                 "f2native_legacy_water.f2scene";
+        {
+            std::ofstream output(legacy_path);
+            output << "F2SCENE 1\n"
+                   << "material water 0.14 0.34 0.52 1\n";
+        }
+        f2::NativeScene legacy;
+        std::string legacy_error;
+        assert(f2::load_native_scene(legacy_path, legacy, legacy_error));
+        assert(legacy.materials.size() == 1);
+        assert(!legacy.materials[0].has_water_params);
+        assert(std::abs(legacy.materials[0].water_params[0] - 0.20f) < 1e-5f);
+        assert(std::abs(legacy.materials[0].water_params[6] - 0.188f) < 1e-5f);
+        assert(std::abs(legacy.materials[0].water_params[29] - 0.75f) < 1e-5f);
+        assert(std::abs(legacy.materials[0].water_params[36] - 128.0f) < 1e-5f);
+        std::filesystem::remove(legacy_path);
+    }
+
+    {
         // F2SCENE writer round-trip: the level cooker's output stage must reload identically.
         f2::NativeScene written;
         written.sun_direction = {0.1f, -0.9f, 0.4f};
         written.sky_color = {0.2f, 0.3f, 0.4f, 1.0f};
+        written.has_hero_start = true;
+        written.hero_start = {12.5f, 1.25f, -8.25f};
+        written.hero_yaw = -0.75f;
         f2::NativeMaterial mat;
         mat.name = "wall_stone";
         mat.base_color = {0.8f, 0.7f, 0.6f, 1.0f};
         mat.albedo = "worlds/albion/bwsslums/wall.dds";
+        mat.has_water_params = true;
+        for (std::size_t i = 0; i < mat.water_params.size(); ++i)
+            mat.water_params[i] = static_cast<float>(i) * 0.125f - 1.0f;
+        mat.water_opacity = 0.42f;
         written.materials.push_back(mat);
         f2::NativeMesh mesh;
         mesh.name = "house_01";
@@ -397,6 +427,36 @@ int main() {
         mesh.indices = {0, 1, 2};
         written.meshes.push_back(mesh);
         written.instances.push_back({0, {12.5f, 0.0f, -8.25f}, {0.0f, 1.5708f, 0.0f}, 2.0f});
+        // Cloud layers (theme Clouds) must round-trip through the F2SCENE writer/reader too.
+        written.cloud_global_brightness = 1.0f;
+        written.cloud_alpha_ref = 0.019608f;
+        f2::NativeCloudLayer cloud;
+        cloud.density_map = "clouds/cloud_03.dds";
+        cloud.height = 500.0f;
+        cloud.size_x = 3000.0f;
+        cloud.size_y = 3000.0f;
+        cloud.texture_scale_x = 3.0f;
+        cloud.texture_scale_y = 5.0f;
+        cloud.velocity_x = 10.0f;
+        cloud.velocity_y = 20.0f;
+        cloud.transparency = 0.5f;
+        cloud.brightness = 0.25f;
+        cloud.ambient = 0.9f;
+        cloud.normal_strength = 0.5f;
+        written.clouds.push_back(cloud);
+        // Celestial moon billboard must round-trip too.
+        written.has_moon = true;
+        written.moon.texture = "sky/moonphases.dds";
+        written.moon.glare_texture = "sky/sunglare.dds";
+        written.moon.direction = {0.566f, 0.766f, -0.305f};
+        written.moon.intensity = 1.0f;
+        written.moon.size = 1.7f;
+        written.moon.transparency = 3.0f;
+        written.moon.glare_intensity = 50.0f;
+        written.moon.glare_size = 1.4f;
+        written.moon.exposure = 10.0f;
+        written.moon.phase = 4;
+        written.star_brightness = 1.0f;
 
         const auto scene_path = std::filesystem::temp_directory_path() / "f2native_scene_roundtrip.f2scene";
         std::string scene_error;
@@ -406,6 +466,16 @@ int main() {
         assert(reloaded.materials.size() == 1);
         assert(reloaded.materials[0].name == "wall_stone");
         assert(reloaded.materials[0].albedo == "worlds/albion/bwsslums/wall.dds");
+        assert(reloaded.materials[0].has_water_params);
+        assert(reloaded.has_hero_start);
+        assert(std::abs(reloaded.hero_start[0] - 12.5f) < 1e-5f);
+        assert(std::abs(reloaded.hero_start[1] - 1.25f) < 1e-5f);
+        assert(std::abs(reloaded.hero_start[2] + 8.25f) < 1e-5f);
+        assert(std::abs(reloaded.hero_yaw + 0.75f) < 1e-5f);
+        for (std::size_t i = 0; i < reloaded.materials[0].water_params.size(); ++i)
+            assert(approx(reloaded.materials[0].water_params[i],
+                          static_cast<float>(i) * 0.125f - 1.0f));
+        assert(approx(reloaded.materials[0].water_opacity, 0.42f));
         assert(reloaded.meshes.size() == 1);
         assert(reloaded.meshes[0].name == "house_01");
         assert(reloaded.meshes[0].vertices.size() == 3);
@@ -419,6 +489,24 @@ int main() {
         assert(approx(reloaded.instances[0].scale, 2.0f));
         assert(approx(reloaded.sun_direction[1], -0.9f));
         assert(approx(reloaded.sky_color[2], 0.4f));
+        assert(reloaded.clouds.size() == 1);
+        assert(reloaded.clouds[0].density_map == "clouds/cloud_03.dds");
+        assert(approx(reloaded.clouds[0].height, 500.0f));
+        assert(approx(reloaded.clouds[0].size_x, 3000.0f));
+        assert(approx(reloaded.clouds[0].texture_scale_y, 5.0f));
+        assert(approx(reloaded.clouds[0].velocity_y, 20.0f));
+        assert(approx(reloaded.clouds[0].transparency, 0.5f));
+        assert(approx(reloaded.clouds[0].ambient, 0.9f));
+        assert(approx(reloaded.clouds[0].normal_strength, 0.5f));
+        assert(approx(reloaded.cloud_alpha_ref, 0.019608f));
+        assert(reloaded.has_moon);
+        assert(reloaded.moon.texture == "sky/moonphases.dds");
+        assert(reloaded.moon.glare_texture == "sky/sunglare.dds");
+        assert(approx(reloaded.moon.direction[1], 0.766f));
+        assert(approx(reloaded.moon.intensity, 1.0f));
+        assert(approx(reloaded.moon.glare_intensity, 50.0f));
+        assert(reloaded.moon.phase == 4);
+        assert(approx(reloaded.star_brightness, 1.0f));
         std::filesystem::remove(scene_path);
     }
 

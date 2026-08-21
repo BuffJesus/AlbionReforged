@@ -1,6 +1,337 @@
 # Handoff — resume here
 
-## ▶▶ CURRENT STATE (2026-08-11) — NATIVE LEVEL RENDER FEATURE-COMPLETE ON BOTH BACKENDS ★ START HERE
+## ▶▶▶ START HERE (2026-08-15) — CAST SHADOW MAPPING ✅ DONE (BOTH BACKENDS)
+Branch **`agent/native-spec-maps-and-char`** (PR #3), commits `0bc0a22` (D3D12), `31fa3a0` (Vulkan parity). USER CHOSE **cast
+shadow mapping** (the faithful, high-fidelity path) after a measure-first pass: the AssetBrowser oracle renders the
+town **moody/dark with heavy self-shadowing** (`native_shots/oracle_chapter2slums.png`) while native was **flat/bright**
+— because native had **no cast shadows** (retail has a dedicated "Render ShadowBuffers" sun-depth pass sampled by the
+material PS, `rendering_pipeline.txt` §A#3/§D.1). ⚠ The exact retail shadow params (cascades/res/bias) are an un-pinned
+RE gap (R2), so this is a standard single sun-view shadow map + PCF — grounded that retail does this; params are
+reasonable choices.
+- **D3D12** (`native_world_renderer.cpp` + `native_frontend_app.cpp`): `compute_light_view_projection(sun)` fits an
+  ortho box around `scene_center_/scene_radius_` along the sun travel dir (standard Z, row-vector × row-major). A
+  depth-only shadow PSO/root-sig replays the opaque draw ranges into a fixed **2048²** sun-POV depth target
+  (`render_shadow`); the world PS projects `world_pos` into it and 3×3-PCF `SampleCmp` (t4 + s1 comparison sampler)
+  to attenuate **only** the sun N·L + specular term (ambient/baked GI untouched → shadowed faces keep their fill).
+  The World frame runs the shadow pass FIRST (DEPTH_WRITE→PIXEL_SHADER_RESOURCE), then sky/world sample it, then it's
+  restored to DEPTH_WRITE. Enabled only when the sun is above the horizon (`sun.y < -0.05`); night = no shadows. Params:
+  bias 0.0015 + rasterizer slope bias, strength 0.7. Screenshot-verified: town/castle gain real cast-shadow contrast
+  (moodier, toward the oracle); D3D12 validation clean.
+- **Vulkan parity** (`31fa3a0`): `native_world.frag` samples a `sampler2DShadow` (binding 7) via the ported
+  `sun_shadow()`; `native_world_shadow.vert` (new) is the depth-only shadow VS; `native_vulkan_world_renderer` owns a
+  2048² shadow depth image + comparison sampler + depth-only render pass (subpass deps for read→write and
+  write→world-sample sync) + `render_shadow()` with a **negative-height viewport** so the stored orientation matches
+  D3D12's `(0.5,-0.5)` uv. Screenshot-verified D3D12==Vulkan; build + Vulkan validation clean of shadow errors.
+- ⚠ The Vulkan agent surfaced **two PRE-EXISTING VUIDs** (confirmed present on HEAD before this work, left untouched):
+  (1) `VUID-vkCmdDrawIndexed-None-08114` — the world renderer's binding-6 `sceneDepth` descriptor isn't refreshed after
+  `recreate_swapchain()`/`refresh_hdr_targets()`; (2) `VUID-vkQueueSubmit-pSignalSemaphores-00067` — the swapchain
+  reuses a present semaphore. Both fire only on a forced swapchain resize. Worth fixing in a separate pass.
+- **★ NEXT:** tune shadow strength/bias vs the oracle if needed; then sun disc/beams/glare (needs a level that authors
+  them); HDR-range lighting. The shadow-map frustum currently uses the whole scene bounds (incl. the far spire/backdrop),
+  so town-only shadow resolution could be tightened (fit the `focus` region) if shadows look coarse up close.
+
+## ▶▶ (history) START HERE (2026-08-15) — HDR TONEMAP/EXPOSURE + BLOOM COMPOSITOR ✅ DONE (BOTH BACKENDS)
+Branch **`agent/native-spec-maps-and-char`** (PR #3), commits `6eeb61d` (D3D12 HDR scene target + tonemap),
+`af9509c` (D3D12 bloom + exposure tuning), `719724d` (**Vulkan HDR+bloom parity**). USER CHOSE the **full retail
+global HDR compositor** (not the lighter in-shader bound). Implemented the retail HDR pipeline on **BOTH D3D12 +
+Vulkan** (ghidra_out/rendering_pipeline.txt §D.3: `result = mul_sat(exposure*scene) + bloom`), screenshot-verified
+in parity on `out_genv.f2scene` (same town/castle/terrain/hazy sky + soft sun-glow bloom; Vulkan validation clean):
+- **Verification first (per the ⚠ in the prior handoff):** retail DOES tonemap the whole world (HDR RGBA16F
+  scene → compositor `saturate(exposure*scene)+bloom` w/ auto-exposure LUT). BUT the **AssetBrowser oracle does
+  NOT** — its world FBO is plain `GL_RGBA8` (`ModelPreview.cpp:4283`), exposure stand-ins all `1.0`; only its
+  sky/water shaders Reinhard-bound in-shader. So there is **no AB oracle for the exact exposure/bloom amount** —
+  the compositor is implemented per the retail *doc*, tuned to taste. (The old "AB town darker = its exposure"
+  note was imprecise; any daytime brightness gap is lighting, not tonemap.)
+- **Shared HDR format** `f2::kSceneColorFormat = R16G16B16A16_FLOAT` (`include/f2/native_scene_color.h`); all 5
+  D3D12 World-pass PSOs (sky/clouds/billboards/stars/world+water) now declare it as their RTV.
+- **App** (`native_frontend_app.cpp`): `create_hdr_target()` (RGBA16F scene RT, RTV + SRV, recreated on resize);
+  the World branch renders every pass into it (gated `use_hdr`), then the compositor resolves to the LDR back
+  buffer, then the UI overlay draws on the LDR back buffer. Falls back to the old direct-LDR path if the
+  compositor fails to init.
+- **`NativeTonemapRenderer`** (`native_tonemap_renderer.{h,cpp}`): self-contained compositor owning half-res
+  bright + 2 ping-pong blur targets + private SRV/RTV heaps. bright-pass (threshold) → separable 9-tap Gaussian
+  (H,V) → composite `saturate(exposure*scene)+intensity*bloom`. Defaults exposure **1.0** / threshold **0.62** /
+  intensity **0.90** = gentle retail sun-glow bloom (screenshot-verified on `out_genv.f2scene`; strong settings
+  bloom the whole sky+sun, default halos the sun corner only). All 3 env-overridable
+  (`FABLE2NATIVE_HDR_EXPOSURE` / `_BLOOM_THRESHOLD` / `_BLOOM_INTENSITY`); intensity 0 = byte-identical to the old
+  clamp. NOTE our scene sits in LDR-ish light range [0,~1.2] (not retail's HDR hundreds), so bloom is subtle by
+  design on overcast midday — it will read stronger on genuinely bright content (sun disc, night lights, spec).
+
+- **Vulkan parity** (`719724d`): `NativeVulkanTonemapRenderer` + `native_tonemap.{vert,_bright,_blur,_composite}`
+  mirror the D3D12 compositor (same Gaussian weights + `saturate(exposure*scene)+intensity*bloom`). An offscreen
+  HDR render pass structurally identical to the World swap-chain pass (same MSAA subpass/water/depth-resolve
+  layout) but HDR color/resolve formats; World/sky/cloud/billboard/stars bake against it; `render_pass_` keeps the
+  composite + UI. `draw()` World branch: HDR pass → sky/clouds/billboards/stars/world(+water) → bloom → swap-chain
+  pass → composite → UI overlay. Resize rebuilds targets; HDR-init failure falls back to the old direct path. Also
+  fixed a pre-existing Vulkan validation error (depth-resolve input-attachment needs `aspectMask=DEPTH`); Vulkan
+  validation now clean. Env overrides + defaults identical to D3D12.
+- ⚠ Shot tool note: `scratchpad/shot_world.ps1 -Backend d3d12|vulkan -Tag <t>` (my copy) works; the native
+  flip-model window sometimes doesn't set `MainWindowHandle`, so an EnumWindows-by-PID variant
+  (`scratchpad/shot_world2.ps1`) is the robust fallback.
+
+**★ NEXT — retail-fidelity remaining:** (1) sun disc/beams/glare (only on a level/theme that authors them —
+chapter2slums authors none); (2) sunlight balance (`main_light*sun_intensity`); (3) HDR-range lighting so
+bloom/exposure have real HDR to work on (our scene currently sits in LDR-ish [0,~1.2], so bloom is subtle by
+design on overcast midday). Full list = frontier §3(e).
+
+## ▶▶ (history) START HERE (2026-08-14 late night) — CLOUDS+MOON+STARS+WATER-NIGHT DONE; NEXT was HDR TONEMAP
+Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `8b5ddc8`. Fixed the **water night-lighting** bug
+(the canal/sea rendered a bright day-blue even at night, next to the new moon+stars). The water reflection
+hardcoded the chapter2slums *daytime* sky gradient. Per the water RE (`water_system_re.txt` §5: the water
+reflects the SKY model along the perturbed normal), it now feeds the ACTUAL cooked theme sky endpoints
+(`sky_color` zenith + `sky_horizon`) into the water reflection on both backends, plus the SAME night fade the
+atmosphere sky pass applies (sun below horizon → `sky*0.22 + night tint`). Result: night water = dark moody navy
+that blends with the night scene; midday water = the hazy-autumn theme sky (coherent with the rendered sky
+above it). Base water colour (deep/surface) left unlit (faithful to retail program 57). Added
+`sky_zenith`/`sky_horizon` to the world camera cbuffer/UBO both backends (defaults = RE'd midday, so untheme d
+scenes unchanged). Verified D3D12 == Vulkan; tests pass.
+
+⚠ **SUN DISC/BEAMS/GLARE = SKIP for chapter2slums** — confirmed (probed all TODs 5/6/7/12/17/18/19 + midnight):
+this level authors NONE at any time (disc/sunbeams/glare params all None, texture GUIDs 0). The daytime sun is
+purely the atmosphere glow. Implementing sun billboards would be UNVERIFIABLE on our test level — needs a
+different level/theme that authors them. The cook resolver already reads element[6..15] if a future level needs it.
+
+**★ NEXT — RETAIL-FIDELITY REMAINING:** (1) **HDR TONEMAP/EXPOSURE** — retail HDR-tonemaps; we clamp (the AB town
+renders darker = its exposure). The one universally-visible DAYTIME gap. ⚠ Verify the claim first (does the AB/
+retail tonemap the WORLD, or is it just lit darker?) before implementing — a global post-process is easy to get
+wrong. The retail dome exposure = dome_misc.z=10 + Reinhard (already in the sky/billboard paths). (2) sunlight
+balance (`main_light*sun_intensity`). (3) sun disc/beams/glare only if a level that authors them is cooked.
+Full list = frontier §3(e).
+
+## ▶▶ (history) START HERE (2026-08-14 night) — CLOUDS + MOON + STARS DONE; WATER-NIGHT (now DONE, see above)
+Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `94a8f9b`. Added the **procedural night star
+field** on BOTH backends — a faithful port of the retail Xenos star ucode (`SkyDomeXex` kStars*Shader): 512
+additive point-sprite quads generated entirely from `SV_VertexID`/`gl_VertexIndex` (no VB/texture), each a
+hashed hemisphere direction with a time-scaled twinkle, projected through the shared SkyCamera. Gated by the
+already-cooked `sky_stars` (star_brightness>0 → night); drawn last of the sky passes (retail order), behind the
+world. Exactness note: the retail shader projects in engine space (x,z,y); the math is byte-identical and the
+direction's always-positive up-component (r2.z) is remapped to render-space Y — algebraically the same
+projection. Point size = retail kStarPointSize (1.5)/viewport. `NativeSkyStarsRenderer` (D3D12) +
+`NativeVulkanSkyStarsRenderer` (+ `native_stars.vert/.frag`), self-contained. Verified: scattered twinkling
+stars across the upper night sky, D3D12 == Vulkan (`native_shots`-style `night_stars_{d3d12,vulkan}`); tests pass.
+
+**★ NEXT — RETAIL-FIDELITY REMAINING:** (1) **SUN DISC/BEAMS/GLARE** — for levels/themes that author them
+(chapter2slums authors none at any time; the cook resolver already reads the element params/textures — just not
+emitted). Same billboard pattern as the moon (add sun-element opcodes + draw them in the billboard pass; the
+disc/sunbeams/glare are element[6..15], gated by sky_params.x). (2) **HDR TONEMAP/EXPOSURE** — retail
+HDR-tonemaps; we clamp (the AB town renders darker = its exposure) — a post-process pass, the one universally-
+visible DAYTIME gap. (3) water night-lighting; (4) sunlight balance. Full list = frontier §3(e).
+
+## ▶▶ (history) START HERE (2026-08-14 late) — CLOUDS + NIGHT MOON DONE; STARS (now DONE, see above)
+Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `960152b`. Continuing the sky-fidelity work,
+this session added **celestial moon + glare billboards** (night) on BOTH backends, after the cloud layers.
+- **Data finding (grounded):** at MIDDAY chapter2slums authors NO celestial billboards (moon_intensity=0,
+  star_brightness=0, no sun disc/beams/glare) — the daytime sun is purely the atmosphere glow, so billboards
+  are a NIGHT feature. At `--tod 0` it authors a real moon (MoonPhases.tex, intensity 1, size 1.7, glare 50)
+  + stars (brightness 1). The sun disc/beams/glare are read by the cook but chapter2slums authors none (other
+  levels/themes may). The moon/disc/glare/sunbeams texture GUIDs all resolve via `_resolve_env_texture_hash`.
+- **Tex-cook fix (reusable):** `cook_lh_tex.cpp` gained a **pf39 (DXT5/BC3) header-backed** branch (mirror of
+  the existing pf40 BC5 case) — the shared sky textures ship as a BE mip0-size prefix + Xbox360-tiled DXT5
+  mip0, which the LhTex parser mis-read as a definition header. MoonPhases (1024×128, an 8-phase strip) +
+  sunglare (256×256) now cook. ⚠ needs the Release `f2native_cook_lh_tex.exe` rebuilt (done).
+- **Cook**: `resolve_genv_theme` reads the Sky record moon params + axis, computes the render-space moon
+  direction (EvaluateFrame axis+tod math), and `cook_level` cooks the moon/glare DDS + emits `sky_moon`
+  (+ `sky_stars`). Phase is runtime lunar state (not in the theme) → baked static **full moon (cell 4)**.
+- **Renderers**: `NativeSkyBillboardRenderer` (D3D12) + `NativeVulkanSkyBillboardRenderer` (+
+  `native_billboard.vert/.frag`) draw the moon disc (alpha) + glare halo (additive) as camera-facing quads,
+  sharing the retail `draw_billboard` geometry via a backend-neutral `sky_billboard.h build_billboard()`.
+  Drawn after the clouds, behind the world. NativeScene gained `NativeMoon`/`has_moon`/`star_brightness` +
+  F2SCENE parse/save + round-trip test.
+- **Verified**: full moon + glare render on D3D12 == Vulkan (`native_shots`-style `moon_final_{d3d12,vulkan}`).
+  ⚠ The auto-orbit town camera looks DOWN, so the 50°-elevation moon is ABOVE the default frame (correct — the
+  moon is high in the sky); an azimuth-swept debug shot (`moon_az0`) confirmed the projection + disc + glare.
+  Repro: `scratchpad/make_night_scene.py` (cooks moon/glare + appends `sky_moon`/clouds to a `--tod 0` scene).
+
+**★ NEXT — RETAIL-FIDELITY REMAINING:** (1) **STARS** — a 512-point procedural star field at night
+(star_brightness already cooked to `sky_stars`); it's a separate GPU point-sprite shader (SkyDomeXex
+kStarsVertex/PixelShader, kStarCount 512), not a textured billboard. (2) **SUN DISC/BEAMS/GLARE** — for
+levels/themes that author them (chapter2slums does not); same billboard pattern (the element pass already has
+the params/textures wired in the cook resolver — just not emitted yet). (3) **HDR TONEMAP/EXPOSURE** — retail
+HDR-tonemaps; we clamp (the AB town renders darker = its exposure) — a post-process pass, universally visible.
+(4) water night-lighting; (5) sunlight balance. Full list = frontier §3(e).
+
+## ▶▶ (history) START HERE (2026-08-14) — CLOUD LAYERS DONE; NIGHT MOON (now DONE, see above)
+Branch **`agent/native-spec-maps-and-char`** (PR #3), commit `91af4f2`. This session shipped the
+**scrolling cloud layers** (the biggest remaining sky-fidelity gap — the dark band across the top of the
+AB oracle), on BOTH D3D12 + Vulkan, screenshot-verified in parity and against the oracle. Port source =
+AssetBrowser `SkyboxRenderer.cpp` kCloud*Shader + `CloudRuntime` (`sky_system_re.txt` §Phase-2).
+- **Cook** (`cook_levels.py`): `resolve_genv_theme` reads the theme **Clouds** record (`0x7439046F`) → up to 4
+  **Layer** records (density GUID `0x13821B7F` + scroll/shape/lighting params); `cook_level` resolves the
+  density GUID → its `.tex` via the retail `EnvironmentTextureHash` FNV-1 (`_resolve_env_texture_hash`, over
+  the texture-bnk names — validated against the moon/disc/sunbeams textures that also resolve), cooks it to
+  DDS, and emits `cloud_globals` + one `cloud_layer` per layer. chapter2slums midday = **3 layers** (cloud_03
+  ×2 at h=500/250, cloud_02 at h=200; L4 has no density → skipped). Automatic whenever `--genv` is passed.
+- **Scene**: `NativeCloudLayer` + cloud globals in `NativeScene`; F2SCENE parse/save + round-trip unit test.
+- **Renderers**: `NativeCloudRenderer` (D3D12) + `NativeVulkanCloudRenderer` (+ `native_cloud.vert/.frag`),
+  self-contained (own PSO/pipeline, per-layer density texture, dynamic quad, alpha-blend/no-depth). Drawn
+  AFTER the sky, BEFORE the world, high→low; share the world renderer's exact VP via a new
+  `compute_view_projection` on both backends. Cloud quad = flat, centred at world origin, at Y=height, ±size.
+- **Verified**: `native_shots/`-style shots `clouds_{d3d12,vulkan}.png` show the dark cloud band == the AB
+  oracle's (`oracle_midday_sky.png`); `f2native_core_tests` pass (incl. the new cloud round-trip).
+- ⚠ Repro: my `scratchpad/make_cloud_scene.py` appends cloud opcodes to `out_genv.f2scene` → `out_clouds.f2scene`
+  for a fast render test WITHOUT a full recook; the canonical recook (below, with `--genv`) now emits clouds
+  inline (same code path, unit-tested). A full recook was NOT re-run this session (clouds validated via the
+  append scene + the isolated resolve/cook tests).
+
+**★ NEXT — RETAIL-FIDELITY REMAINING (frontier §3(e), pick the biggest visible gap):** (1) **CELESTIAL
+BILLBOARDS** — sun disc / sun beams / glare / moon (phase) / stars; the theme already resolves these texture
+GUIDs (disc/moon/moonglare/sunbeams/glare all resolve via `_resolve_env_texture_hash`), so this mirrors the
+cloud port: cook the billboard textures + element params (`SkyElementCB`), add a billboard sub-pass after the
+clouds (SkyboxRenderer.cpp `draw_billboard` @1558-1734 + `SkyXex::k*Distance/SizeScale`). (2) **HDR TONEMAP/
+EXPOSURE** — retail HDR-tonemaps; we clamp (the AB town renders darker = its exposure) — a post-process pass.
+(3) water night-lighting; (4) sunlight balance. Full list = frontier §3(e) below.
+
+## ▶▶ (history) START HERE (2026-08-13 night) — ATMOSPHERE DONE; CLOUD LAYERS (now DONE, see above)
+Branch **`agent/native-spec-maps-and-char`** (off `main` @ `ece53de`), **pushed → PR #3**. USER DIRECTIVE: *"match
+the retail game as closely as possible."* This session completed the whole per-level **atmosphere pipeline** (all
+theme-driven, both D3D12 + Vulkan, screenshot-verified in parity, backward-compatible/opt-in):
+`.genv` theme resolver → `sun`/`sunlight`/`sky` → `sky_horizon` → `sky_sunset` → `sky_bias` → distance `fog` →
+**analytic single-scattering atmosphere sky** (`sky_atmos`, ported from the retail-reference AssetBrowser
+`SkyboxRenderer.cpp` PS; replaced the flat gradient). Commits `4d22d3e`→`8c236d8`. World-gaps question was
+investigated and CLOSED: **the gaps are BY-DESIGN backdrop void** (bounded [0,288]² slab + castle/sea are backdrop);
+do NOT fabricate terrain (see the WORLD-GAPS VERDICT block in frontier §3 below). Added AssetBrowser headless camera
+control (`--autoyaw/--autodist/--autoheight`) for oracle A/B; the AssetBrowser is the retail-fidelity oracle.
+
+**★ NEXT TASK — CLOUD LAYERS (queued, not started; user going to bed 2026-08-13).** Retail draws up to 4 scrolling
+cloud layers (the dark band across the top of the AB oracle) — the most visible remaining sky-fidelity gap. This is
+BIGGER than the atmosphere port: it needs cloud GEOMETRY (flat layer quads at cloud heights) + a cloud DENSITY TEXTURE
+cook + a new cloud pass, on both backends. Concrete plan (mirror the `sky_atmos` port pattern + add geometry/texture):
+1. **Resolve** (cook_levels.py `resolve_genv_theme`): read the theme `Clouds` sub-record (hash `0x7439046F`) → up to 4
+   `Layer` records (`0x6A570941..44`; `finaliseCloudTheme` counts non-empty). Each layer has a **density-map texture
+   hash** (`kHashDensityMap 0x13821B7F` → cook to DDS via the existing `_cook_textures` path) + per-layer params
+   (height, scroll speed, tint, density/alpha) + global cloud brightness/alpha-ref. Field hashes + reader:
+   `EnvironmentThemeParser.cpp` `applyCloudThemeRecord` @1381 + the per-layer reader ~1300-1360 + `kHash*` @39-44.
+2. **Cook**: emit each layer as F2SCENE (e.g. `cloud_layer <density_dds> <height> <scrollU> <scrollV> <tintRGB>
+   <density> ...`) + a global `cloud_globals`. Cook the density DDS alongside the other textures.
+3. **Render** (both backends, new cloud sub-pass drawn AFTER the sky atmosphere, alpha-blended, BEHIND world; distant):
+   draw a flat quad per layer at its cloud height; PS = `SkyboxRenderer.cpp:287-358` (sample `cloud_density.a`,
+   distance-fade beyond 1000u, gradient-normal lighting from 4 neighbour taps, `alpha = density*layer.x*fade`,
+   alpha-test discard). CloudCB (b5) fields: view_projection, viewer_pos/dir, light_pos/colour,
+   `layer_params{x=alpha mult, y=ambient, z=colour mult, w=normal-up}`, `uv_scale_offset` (= cloud_motion × elapsed
+   time, the scroll), `cloud_globals{x=brightness, z=alpha ref}`. The SkyCB cloud fields are `SkyboxRenderer.cpp`
+   105-121 (`cloud_layer/shape/motion/light[4]`, `cloud_global`, `cloud_density_flags`); the per-frame blend is
+   `SkyboxRenderer.cpp:653-660`. Reference: `sky_system_re.txt` §Phase-2.
+4. **Verify** vs the AB oracle at a matched angle (`scratchpad/ab_shot.ps1 -Yaw/-Dist/-Height`), both backends.
+RETAIL-FIDELITY REMAINING AFTER CLOUDS: celestial billboards (sun disc/moon/stars, need textures); HDR tonemap/exposure
+(AB town renders darker = its exposure); water night-lighting (water stays bright at night). Full list in frontier §3(e).
+
+**Repro helpers (this session, in scratchpad/):** `recook_genv.sh` (full recook WITH `--genv` → out_genv.f2scene, now
+emits all sky opcodes incl. `sky_atmos`/`fog`); `shot_world.ps1 -Backend d3d12|vulkan -Scene <f2scene> -Tag <t>`
+(launch+PrintWindow both backends); `make_tod.py <hours> <tag>` (patch a TOD variant scene — carries all opcodes);
+`ab_shot.ps1 -Tag <t> -Yaw -Dist -Height -Pitch -Time` (AssetBrowser oracle capture with the new camera control).
+Shots in `native_shots/` (gitignored): `world_atmos_{midday,night}_{d3d12,vulkan}.png`, `oracle_*.png`.
+
+## ▶▶ CURRENT STATE (2026-08-11 night) — LEVEL FIDELITY PASS; OPEN = castle↔terrain WATER JUNCTION ★ START HERE
+Branch **`agent/native-spec-maps-and-char`** (off `main` @ `ece53de`; ~13 commits, NOT yet merged). This session
+did a big "why does chapter2slums still look wrong" pass, diffing our native render against the **AssetBrowser oracle**
+(3 decomp subagents + direct data). Shipped, both backends, screenshot-verified:
+- **hero inspection controller** — `--hero` cooker output now renders the child hero meshes on both
+  D3D12 and Vulkan; `IJKL` moves hero ranges, `U/O` adjusts height, and `Shift` boosts. The offset is
+  backend-neutral and applied in the vertex path without rebuilding static world buffers. This is a
+  first character milestone: the cooker supplies an idle pose, while runtime animation, collision,
+  and a third-person camera remain future work. The F2SCENE now carries `hero_start`; hero scenes
+  auto-frame PlayerStart and display the shared live offset/control overlay on both backends. `R`
+  resets the offset and `F` reframes the inspection camera. The latest milestone adds a small
+  hero-only locomotion bob driven by held movement input, with `IDLE`/`WALK` state in the overlay;
+  the mesh remains the cooker-baked idle pose until skeletal runtime animation is implemented;
+- **spec/gloss maps (t2)** Blinn-Phong; **free-fly camera** (WASD/QE/arrows, D3D12 World state);
+- **GDB props** — THE big miss: the recook never passed `--props`, so ~1073 GDB/save entities (the town's real density)
+  were uncooked → 88→**617 meshes / 6573 instances**. THE RECOOK MUST INCLUDE `--props --propdump propdump.exe`.
+- **the missing spire** = childhood Tattered Spire `TS_Vista_HalfBuilt_V1` (chapter2slums.save Layer_Spire_HalfBuilt @
+  game 591,-797), was dropped by cook_levels.py `_is_backdrop()`; now cooked near-unlit (bright vista probe), deduped to
+  one story-variant, + a new `focus <cx cy cz r>` scene directive frames the TOWN only (excludes backdrop) so the
+  ~1000wu spire doesn't blow up the auto-fit (both renderers honor `focus`).
+- **castle lit** (unprobed structures use the level-mean baked ambient); **reversed-Z** both backends (fixes "light
+  through seams when rotating" = depth Z-fight across town→horizon span); **terrain AO** baked into the splat
+  (terrain_splat_bake decodes the .ehf body atlas pf24, `ao*0.55+0.45`).
+- **water normal map** — the real `.water` material path is now carried into F2SCENE; the PF40
+  `waternormalmap01.tex` header-backed global texture cooks as 256×256 BC5 and is sampled by both water shaders.
+
+**✓ OPEN TASK RESOLVED (2026-08-12) — castle-approach SEA JUNCTION:**
+The extracted water files were parsed directly. `slums.water` contains the town/canal bodies and ponds; the real
+`sea_vista.water` is one body at height 36.613 covering game X[0,66], Y[-128,2]. The castle-side remainder is
+backdrop/skybox geometry, not a missing shipped water body. The widened `sea_vista.ehf` plane was an invented
+extension and sat at height 35.304 beneath the real water, causing the overlapping-plane artifact. The cooker now
+keeps vista geometry at its authored footprint/material and never widens or relabels it as water. A verified
+real-water-only recook (`scratchpad/lvl/out_realwater.f2scene`) renders the authored sea strip with no duplicate
+surface. The subsequent water-material pass now emits one F2SCENE material per authored body, carries all 37
+big-endian `.water` params plus the resolved chapter2slums WaterTheme opacity, and binds them per material in both
+D3D12 and Vulkan. The native pixel paths now also match the retail `ONE/SRC_ALPHA` refraction composite,
+`refr_k=(1-distf)*refl_str*(1-frefl)`, scalar reflection scale, light direction, and reflected-ray hemisphere.
+The D3D12 pass now copies opaque reversed-Z depth to an R32 SRV before water and applies a
+conservative shoreline alpha factor; the resource clear value and debug-layer validation are clean.
+Vulkan still uses the authored water alpha without the depth-copy shoreline term; a first input-
+attachment/subpass implementation was reverted after a clear-only runtime capture, so do not
+resume from that experiment. The combined
+frontend build was reconfigured with Vulkan enabled and clean-built: generated SPIR-V plus both
+native frontend backends compile. Vulkan world parity fixes in this continuation are: match the
+D3D12 `CULL_NONE` policy (the cooked MDL winding is mixed) and use the same orbit camera basis;
+the Vulkan world now renders the complete terrain/castle scene instead of losing large faces. The
+Vulkan water PSO also now matches D3D12's depth policy: it tests against opaque depth but does not
+write depth. D3D12 shoreline UVs are clamped at the render-target edge before sampling the copied
+R32 depth texture. Vulkan also now enforces the same opaque-first, water-second draw ordering as
+D3D12 instead of relying on the current cooker append order. The D3D12 material-index clamp was
+also updated from the old two-texture bound to the current three-slot albedo/normal/spec bound.
+The D3D12 water draw now requires both depth resources to be live before binding the water PSO;
+an allocation/resize failure therefore leaves the opaque scene valid instead of sampling an
+unbound t3 descriptor. The known-good `out_waterparams.f2scene` still produces a complete native
+runtime capture after these changes.
+Legacy water materials without `water_params=` now receive the retail parameter defaults,
+including the slums surface/deep colours, reflection, and glitter values, so older F2SCENE
+packages no longer render their water plane black. The capture helper now waits up to 30 seconds
+for a window, covering the roughly 15-second startup of the large `out_realwater.f2scene` package.
+Vulkan now also has the D3D12 Phase-0 procedural sky gradient as a dedicated pre-world pass,
+using the authored zenith color and the RE'd blue complementary horizon tint; both backend smoke
+captures show the gradient behind the complete world. The Vulkan sky renderer now cleans up all
+partially-created resources on initialization failure. Vulkan scene-depth shoreline remains
+deferred: the default frontend uses 4x MSAA, so a correct implementation needs a supported depth
+resolve/copy phase and a second water pass rather than the reverted input-attachment experiment.
+Legacy-water regression coverage now asserts that an F2SCENE material without `water_params=`
+loads the retail defaults, including reflection strength and glitter power.
+The Vulkan install manifest was tightened to the six supported generated SPIR-V files only
+(sky, UI, and world vertex/fragment pairs), excluding stale experimental shader binaries from
+older build directories. A staged `cmake --install` check reported exactly six shaders, and
+post-install Vulkan and D3D12 smoke captures both showed the complete scene with the expected
+sky pass.
+The Vulkan MSAA render pass now has an explicit opaque subpass followed by a water subpass;
+MSAA color remains live for the translucent composite and resolves only after water. This was
+compiled and runtime-captured on the real-water scene for Vulkan and D3D12. The render-pass2/
+depth-resolve step is now implemented: devices exposing
+`VK_KHR_create_renderpass2` and
+`VK_KHR_depth_stencil_resolve` resolve opaque depth with `MAX` (correct for reversed-Z), transition
+it to shader-read layout in the water subpass, and apply the shoreline factor in Vulkan water.
+Devices without those extensions retain the validated subpass path with the shoreline term off.
+The resolved-depth Vulkan real-water capture and the D3D12 regression capture both completed
+successfully after the change. The current AMD Radeon RX 9060 XT driver advertises both required
+extensions and all four depth resolve modes, including `MAX`; the Vulkan window title now marks
+whether the MSAA depth-resolve path or the legacy fallback was selected. Optional resolve-image
+allocation failure also rebuilds the legacy render pass instead of aborting frontend startup.
+The free-flight inspection camera is now wired on Vulkan as well as D3D12: `WASD` moves on the
+view plane, `Q`/`E` move vertically, arrows look, and `Shift` boosts. It lazily frames the cooked
+scene on World entry and clears on exit, making close-range material, water, and shoreline
+inspection consistent across both backends.
+
+**Recook command of record (chapter2slums, staged inputs in scratchpad/lvl/):**
+```
+python Fable2Native/tools/cook_levels.py <chapter2slums.engine_level> --cook out.f2scene \
+  --f2tool f2tool.exe --tex-cook f2native_cook_lh_tex.exe \
+  --header-bnk Globals/globals_model_headers.bnk --body-bnk chapter2slums_models.bnk --types 2,21 \
+  --terrain-ghf slums.ghf --terrain-ehf slums.ehf --terrain-stride 2 --splat-bake terrain_splat_bake.exe \
+  --level-lmp chapter2slums.lmp --water-file slums.water --water-file sea_vista.water \
+  --genv slums.genv --env-gdb Globals/../environmentthemes/environmentthemes.gdb --tod 12 \
+  --props --propdump propdump.exe \
+  --lights --lightdump lightdump.exe --level-save chapter2slums.save --level-gdb chapter2slums.gdb --globals-gdb Globals/globals.gdb \
+  --textures-bnk shared_6281.bnk --textures-bnk shared_2445.bnk --textures-bnk level_textures.bnk \
+  --textures-bnk Globals/1024mip0_textures.bnk --textures-bnk Globals/globals_textures.bnk \
+  --texture-headers-bnk Globals/globals_texture_headers.bnk
+```
+**AssetBrowser oracle (parity):** `Fable_2_Asset_Browser.exe --autoroot=<...\assets\game\data> --autoload=chapter2slums
+--autoshot=<png> --autotime=12.0 --cleanshot --autowait=120 --autoexit` — `=`-form args REQUIRED; FOREGROUND the window
+(PowerShell SetForegroundWindow) or it hangs; `--cleanshot` = no UI. ⚠ terrain_splat_bake + the *dump tools live in the
+gitignored Fable2AssetBrowser/source/build — rebuild via vcvars64+ninja (bash `cmake --build` fails: d3d11.h not on
+INCLUDE). Everything below is the older feature-complete history.
+
+## ▶▶ (history) CURRENT STATE (2026-08-11) — NATIVE LEVEL RENDER FEATURE-COMPLETE ON BOTH BACKENDS
 **Merged to `main` (origin/main @ `ece53de`).** The `agent/native-first-level-render` branch (89 commits)
 is integrated; start the next session on a **new branch off `main`**. The cooked childhood level
 (`chapter2slums`) now renders the full world on **both D3D12 and Vulkan**, screenshot-verified:
@@ -34,11 +365,76 @@ New tools this line: `f2tool ehf` (EHF LOD/splat dump), `terrain_splat_bake` (of
 `Fable2AssetBrowser` (untracked like npc_markerdump/lightdump/propdump; rebuild via cmake in the VS dev shell).
 
 **NEXT FRONTIER (grounded, needs fresh RE — nothing else is a quick incremental win):**
-1. **SPEC maps (t2)** — the cooker already emits `material=` (spec) tokens but no renderer samples t2. Needs
-   a small RE pass on the spec/gloss lighting model, then a t2 sampler + spec term in both world PS/frag.
-2. **Per-level day/night theme** — the sky/sun theme is currently the hardcoded chapter2slums midday keyframe.
-   Generalizing needs reversing the `.genv` container (level→theme-GUID TOD map) — a Ghidra-only gap
-   (`ghidra_out/env_theme_colors_re.txt` §4). Until then the midday bake is the spec-recommended default.
+1. ~~**SPEC maps (t2)**~~ ✅ DONE 2026-08-11 (`c2e800c`, branch `agent/native-spec-maps-and-char`). Grounded in
+   `world_shading_model_re.txt` §3/§7: grayscale spec/"material" mask (MDL material[1]) → Blinn-Phong
+   `pow(N·H,32)·mask` added to the sun term, on BOTH backends. Cooker now cooks+repoints the `material=` token
+   (was dropped); 37 chapter2slums materials gain a spec DDS. D3D12 = 3 SRVs/material (t0/t1/t2), root range 2→3,
+   kMaxMaterialTextures 4096→6144; Vulkan = spec image set + binding 4. Both screenshot-verified, no regression.
+   Also this session: `--vista-ehf sea_vista.ehf` added to the recook so the seaward strip bridges toward the
+   castle (the "void" is otherwise by-design — castle is at negative game-Y outside the slums `.ghf`;
+   `terrain_mesh_re.txt:166-180`). ⚠ `--splat-bake` takes the terrain_splat_bake.exe path, NOT a pre-baked dds.
+   NEXT sub-item: spec is subtle at the fixed world camera; a free/close camera (see §CHAR below) would show it.
+2. **CONTROLLABLE CHARACTER (asked 2026-08-11) — data 100% RE'd, runtime 0% built.** We HAVE: child-hero MDL
+   in-scene (static bind pose, `cook_levels.py` hero block), PlayerStart XYZ from GDB, terrain collision mesh,
+   full idle-clip decode (`anim_pose_re.txt`), Havok char-controller spec (`physics_collision_system.txt`),
+   camera spec (`camera_system.txt`). We LACK (no native code yet): per-frame anim playback + CPU skinning,
+   Havok/collide-and-slide ground queries, WASD/stick→move input, locomotion state machine. Effort: baked idle
+   pose ~2-4h; basic walk-with-input ~3-4d; retail-parity locomotion ~2wk. Cheapest first win = a FREE CAMERA
+   (NativeCamera struct exists in native_game.h; just needs input wiring in native_frontend_app handle_input) —
+   no physics/anim needed, and it lets you fly the level + actually see the new spec highlights.
+3. ~~**Per-level day/night theme**~~ ✅ `.genv` CONTAINER SOLVED 2026-08-13 (branch `agent/native-spec-maps-and-char`).
+   The `.genv` is a 72×72 per-cell BE-u32 grid (header: stride 0x120 @0x0C/0x10, dim 72 @0x14/0x18, cell-scale
+   4.0f @0x1C; 0xFFFFFFFF = no zone); each cell = an `environmentthemes.gdb` EnvironmentThemeDaySet GUID (the old
+   "coincidental floats" §4 note was WRONG — corrected in-file). DaySet → per-hour {TimeOfDay(hours), Theme} entries
+   → theme Sky/Lighting (64-deep Parent walk). `cook_levels.py resolve_genv_theme` + `--genv/--env-gdb/--tod` emit
+   the resolved per-level sun/sunlight/sky (opt-in; default cook unchanged). Town midday = theme 0x72d66d23, sky
+   (0.765,0.765,0.467) — the real hazy autumn-slums look, NOT the hardcoded blue. Verified: 2 blind re-derivations
+   + AssetBrowser-oracle parity + code review (3 bugs fixed: failure-safety wrap, isfinite guard, sun_int-0 clobber).
+   ⚠ NOT engine parity: retail blends ONE level-wide DaySet (LevelData→EnvironmentThemeGlobal→DaySet) by the game
+   clock; whether the engine spatially indexes .genv is still a Ghidra gap. NEXT sub-items to actually SHIP this in
+   the render: (a) ✅ DONE — recooked chapter2slums with `--genv` and screenshot-verified the hazy midday + moonlit
+   `--tod 0` night on BOTH backends in parity (`native_shots/world_genv2_*`); (b) ✅ sky-gradient HORIZON now
+   data-driven — new opt-in `sky_horizon` opcode carries the resolved theme complementary (Reinhard-mapped at cook
+   time), fed into both sky renderers' gradient bottom; default = old hardcoded value so old scenes are byte-identical
+   (commit `89a7b96`; two-agent review confirmed backward-compat + parity).
+   (c) ✅ `sky_sunset` opcode DONE (commit `bcce87e`) — dawn/dusk Mie-forward-lobe sun-halo (AssetBrowser
+   SkyboxRenderer.cpp:170-174) on BOTH backends, gated to a low sun + strength flag (no midday regression). Needed
+   plumbing the view ray + sun dir into the Vulkan sky pass: the Vulkan world renderer now has compute_camera()
+   mirroring D3D12; SkyCamera moved to backend-neutral sky_camera.h. Verified: red-test warms the same sun-facing side
+   on D3D12 == Vulkan (no mirror); real muted slums sunset = subtle warm shift at `--tod 6` dawn.
+   (d) ✅ `sky_bias` + distance `fog` DONE (commit `ea8434f`) — bias reshapes the sky gradient ramp
+   (pow(v,1+2*bias), packed in horizon.w, both backends); fog resolves the theme Fogging record (CloseFogColour +
+   start/end/max) and applies linear distance fog toward the fog colour on opaque geom AND water on both backends.
+   Default off (fog_max=0 / bias=0) → old scenes byte-identical. chapter2slums midday = the authored hazy overcast
+   fog (near-black, end 130, max 0.48) → cohesive moody haze; screenshot-verified parity. ⚠ fog is authored for a
+   CLOSE gameplay camera, so at the far inspection orbit it reads as a uniform haze (fine once a gameplay camera exists).
+   The ATMOSPHERE PIPELINE (theme → sun/sunlight/sky/horizon/sunset/bias/fog) is now COMPLETE on both backends.
+   (e) ✅ ANALYTIC ATMOSPHERE SKY (commit `8c236d8`) — USER DIRECTIVE "match retail as closely as possible". The flat
+   gradient was a Phase-0 stand-in; retail (= the AssetBrowser, a faithful port of the retail Xenos sky ucode) uses an
+   analytic single-scattering atmosphere. Ported the AssetBrowser `SkyboxRenderer.cpp` PS (Hoffman-Preetham Rayleigh+Mie
+   in-scatter + theme colour ramp + sunset lobe + night fade) into BOTH native sky renderers, driven by the resolved
+   theme params. New `sky_atmos <sun_intensity> <rayleigh> <mie>` opcode (resolve_genv_theme reads BetaRayleigh/BetaMie)
+   + a `theme_params` cbuffer/UBO float4; presence of the opcode (rayleigh>0) switches gradient→atmosphere, so non-themed
+   scenes are unchanged. chapter2slums midday = pale hazy overcast sky with a real atmospheric sun-glow (matches the AB
+   oracle's muted slums sky, verified with the new `--autoyaw/--autodist` camera control); night = dark night-fade sky.
+   Screenshot-verified both backends + both TODs. **★ RETAIL-FIDELITY REMAINING (to fully match the retail sky/scene):**
+   (1) CLOUD LAYERS — up to 4 scrolling layers (the dark band in the AB oracle); port the cloud shader + theme cloud
+   params from `SkyboxRenderer.cpp`. (2) CELESTIAL BILLBOARDS — sun disc / sun beams / glare / moon (phase) / stars;
+   need the shipped textures (SkyboxRenderer draws them; `sky_system_re.txt` §Phase-2). (3) HDR TONEMAP/EXPOSURE — retail
+   HDR-tonemaps; we clamp (the AB town renders darker = its exposure). (4) water night-lighting (water plane stays bright
+   at night — reflection/refraction doesn't night-darken). (5) sunlight balance pass (`main_light*sun_intensity`).
+
+**★ WORLD-GAPS VERDICT (2026-08-13, ultracode investigation w1orc8fp5):** the "gaps between castle/water/terrain"
+are **BY-DESIGN backdrop/skybox void, NOT missing geometry and NOT a cook bug** (high confidence). The AssetBrowser
+oracle (loading only chapter2slums) renders the SAME single bounded terrain slab with NO castle/water-strip/hills —
+those are backdrop elements we layer. slums.ghf/.ehf = exactly [0,288]² @ origin(0,0,0); the castle (game (174,-93),
+`bs_market_fairfaxcastle`, fc_stone_ext) + market props are at NEGATIVE game-Y OUTSIDE the terrain chunk, on their own
+cliff/plinth props. The void = game X[66,288]×Y[-128,0], covered by NO shipped .ghf/.ehf/.water/prop — it is skybox
+space the game ships empty. Sibling heightfields (posh, new9) are alternate SCENARIO variants of the same [0,288]²
+square, not extra land. The cook already consumes every shipped surface. **Fix = render a proper .genv sky/fog backdrop
+(the atmosphere work above), NOT fabricate terrain/sea** — a prior invented widened sea plane was correctly reverted
+(2026-08-12). ⚠ DO NOT add a connecting cliff/bridge mesh or widen the terrain — none is shipped. The AssetBrowser now
+has headless camera control (`--autoyaw`/`--autodist`/`--autoheight`, in AutoPilot.cpp) for matched oracle comparisons.
 3. Foliage LOD/wind; exact hero PlayerStart refinement; frontend fidelity drifts
    (`frontend_visual_fidelity_re.txt` P3-5).
 

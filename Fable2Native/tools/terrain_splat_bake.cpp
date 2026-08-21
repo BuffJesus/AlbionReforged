@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "../../Fable2AssetBrowser/source/src/Level/EhfChunkParser.h"
+#include "../../Fable2AssetBrowser/source/src/Level/TextureAtlasDecoder.h"
 
 // ============================================================================
 // DDS decode (ported verbatim from Fable2Native/src/native_texture.cpp
@@ -297,6 +298,26 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Terrain AO/lightmap from the .ehf body atlas (pixel_format 24). The game/AB multiplies the
+    // ground albedo by ao*0.55+0.45 (ModelPreview g_terrain_ps :1363-1365) to add the crevice /
+    // large-scale baked shading the flat splat composite lacks — the "muddy/flat ground" fix.
+    // Same decode + header offset the AB uses (LevelLoader ~10929; body offset at ehf+0x37 BE).
+    std::vector<uint8_t> lm_rgba; int lm_w = 0, lm_h = 0; bool ao_ok = false;
+    if (ehf.size() > 0x3b) {
+        const uint32_t body_off = (uint32_t(ehf[0x37]) << 24) | (uint32_t(ehf[0x38]) << 16)
+                                | (uint32_t(ehf[0x39]) << 8) | uint32_t(ehf[0x3a]);
+        if (body_off < ehf.size()) {
+            std::vector<uint8_t> body_slice(ehf.begin() + body_off, ehf.end());
+            auto dec = TextureAtlas::DecodeAtlas(body_slice);
+            if (dec.ok && dec.pixel_format == 24u && dec.width > 0 && dec.height > 0) {
+                lm_rgba = std::move(dec.rgba); lm_w = dec.width; lm_h = dec.height; ao_ok = true;
+                std::printf("terrain AO atlas: %dx%d (pf24)\n", lm_w, lm_h);
+            } else {
+                std::fprintf(stderr, "warn: terrain AO skipped (%s)\n", dec.error.c_str());
+            }
+        }
+    }
+
     // ---- build mats[] (one per parsed.lods) from --lod DDS ----------------
     struct Mat {
         bool                 decoded = false;
@@ -567,6 +588,15 @@ int main(int argc, char** argv) {
                 }
             }
 
+            // Bake the terrain AO in (ao*0.55+0.45), sampled across the whole terrain by the
+            // normalized output UV — matches the AB's lm_uv = chunk_co/(CW,CH).
+            if (ao_ok) {
+                const int ax = std::clamp(int(u_norm * float(lm_w)), 0, lm_w - 1);
+                const int ay = std::clamp(int(v_norm * float(lm_h)), 0, lm_h - 1);
+                const float ao = float(lm_rgba[(size_t(ay) * size_t(lm_w) + size_t(ax)) * 4]) / 255.0f;
+                const float k = ao * 0.55f + 0.45f;
+                accum_r *= k; accum_g *= k; accum_b *= k;
+            }
             uint8_t* dst = out_rgba.data() + (size_t(y) * out_w + x) * 4;
             dst[0] = uint8_t(std::clamp(accum_r, 0.f, 255.f));
             dst[1] = uint8_t(std::clamp(accum_g, 0.f, 255.f));
