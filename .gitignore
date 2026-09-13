@@ -130,7 +130,18 @@ scratch_gui_extract/
 /_research_skate3recomp/
 /third_party/
 
-# Retail reference screenshots (copyrighted — never commit)
+# Retail reference screenshots (copyrighted â€” never commit)
 /resources/
 # Local research binary
 Fable2Native/tools/decode_large_ring.exe
+
+# Reviewed active-service reader/reference tools. Other local tools remain private.
+!/tools/
+/tools/*
+!/tools/README.md
+!/tools/read_tu1_table_capture.py
+!/tools/read_tu1_manifest_capture.py
+!/tools/lua_mod/
+/tools/lua_mod/*
+!/tools/lua_mod/bnk_repack.py
+!/tools/lua_mod/script_index.py
