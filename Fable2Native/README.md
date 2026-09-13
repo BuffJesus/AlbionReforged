@@ -1,3 +1,5 @@
+> **Discontinued standalone reconstruction.** Retained for reusable code and research. Active work is in [native/](../native/README.md); see [current status](../docs/CURRENT_STATUS.md). The historical description below is not the active product plan.
+
 # Fable2Native
 
 This is the standalone PC-native runtime. It intentionally does not link ReXGlue,
@@ -64,7 +66,7 @@ The D3D12 frontend's title and main-menu image layers use the native UI quad ren
 remains temporarily for glyphs and input hit regions while the native text atlas is completed.
 
 There is now a **single** frontend executable that hosts both presentation backends. The active
-backend is selected at launch (restart-applied) — most robustly by a `--backend` flag, otherwise by
+backend is selected at launch (restart-applied) â€” most robustly by a `--backend` flag, otherwise by
 the persisted Options setting (`%LOCALAPPDATA%\Fable2Native\renderer.txt`), falling back to D3D12:
 
 ```powershell
@@ -74,7 +76,7 @@ build\RelWithDebInfo\f2native_frontend.exe --backend d3d12    # or: --backend vu
 ```
 
 If the build has no Vulkan support, the selection always resolves to D3D12. The Options page exposes
-the same choice (Video → Renderer); it persists and applies on the next launch. D3D12 and Vulkan
+the same choice (Video â†’ Renderer); it persists and applies on the next launch. D3D12 and Vulkan
 are presentation backends for the native runtime; neither runs the Xbox 360 renderer.
 The frontend state and gameplay clock use fixed 60 Hz simulation steps, so uncapped rendering does
 not accelerate menus, loading, or future game logic.

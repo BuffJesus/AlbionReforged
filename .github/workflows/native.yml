@@ -1,4 +1,4 @@
-name: Native runtime
+name: Native services
 
 on:
   push:
@@ -10,12 +10,9 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
-
       - name: Configure
-        run: cmake -S Fable2Native -B Fable2Native/build -DBUILD_TESTING=ON
-
+        run: cmake -S native -B build/native -DBUILD_TESTING=ON
       - name: Build
-        run: cmake --build Fable2Native/build --config RelWithDebInfo
-
+        run: cmake --build build/native --config Release --parallel 4
       - name: Test
-        run: ctest --test-dir Fable2Native/build -C RelWithDebInfo --output-on-failure
+        run: ctest --test-dir build/native -C Release --output-on-failure
